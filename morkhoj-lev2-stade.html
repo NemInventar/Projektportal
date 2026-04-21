@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mørkhøj Leverance 2 – Stade</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --surface: #1e293b;
+    --surface2: #273348;
+    --border: #334155;
+    --text: #f1f5f9;
+    --text2: #94a3b8;
+    --blue: #3b82f6;
+    --green: #22c55e;
+    --red: #ef4444;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; min-height: 100vh; }
+  
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+  header h1 { font-size: 18px; font-weight: 700; color: var(--text); }
+  header .subtitle { font-size: 12px; color: var(--text2); margin-top: 2px; }
+  .header-actions { display: flex; gap: 10px; align-items: center; }
+  
+  .btn { padding: 7px 14px; border-radius: 7px; border: none; cursor: pointer; font-size: 13px; font-weight: 500; transition: all .15s; }
+  .btn-ghost { background: transparent; color: var(--text2); border: 1px solid var(--border); }
+  .btn-ghost:hover { background: var(--surface2); color: var(--text); }
+  .btn-danger { background: rgba(239,68,68,0.1); color: var(--red); border: 1px solid rgba(239,68,68,0.3); }
+  .btn-danger:hover { background: rgba(239,68,68,0.2); }
+  .btn-export { background: rgba(34,197,94,0.1); color: var(--green); border: 1px solid rgba(34,197,94,0.3); }
+  .btn-export:hover { background: rgba(34,197,94,0.2); }
+  
+  .main { max-width: 1400px; margin: 0 auto; padding: 24px; }
+  
+  /* Total progress */
+  .total-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px; margin-bottom: 20px; display: flex; align-items: center; gap: 24px; }
+  .total-nums { min-width: 120px; }
+  .total-nums .big { font-size: 36px; font-weight: 700; color: var(--green); line-height: 1; }
+  .total-nums .label { font-size: 12px; color: var(--text2); margin-top: 4px; }
+  .total-bar-wrap { flex: 1; }
+  .total-pct { font-size: 20px; font-weight: 700; color: var(--text); margin-bottom: 8px; }
+  .progress-bar { height: 12px; background: var(--surface2); border-radius: 6px; overflow: hidden; }
+  .progress-fill { height: 100%; background: linear-gradient(90deg, #22c55e, #16a34a); border-radius: 6px; transition: width .4s ease; }
+  
+  /* Category summary strip */
+  .cat-strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin-bottom: 20px; }
+  .cat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; cursor: pointer; transition: all .15s; }
+  .cat-card:hover, .cat-card.active { border-color: var(--cat-color); background: var(--surface2); }
+  .cat-card .cat-name { font-size: 12px; font-weight: 600; color: var(--cat-color); margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cat-card .cat-progress { font-size: 11px; color: var(--text2); margin-bottom: 5px; }
+  .mini-bar { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+  .mini-fill { height: 100%; border-radius: 2px; transition: width .4s; }
+
+  /* Filters */
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; align-items: center; }
+  .filters-label { font-size: 12px; color: var(--text2); font-weight: 500; margin-right: 4px; }
+  .filter-btn { padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text2); cursor: pointer; font-size: 12px; font-weight: 500; transition: all .15s; }
+  .filter-btn:hover { background: var(--surface2); color: var(--text); }
+  .filter-btn.active { background: var(--blue); border-color: var(--blue); color: white; }
+  
+  /* Search */
+  .search-row { display: flex; gap: 10px; margin-bottom: 16px; align-items: center; }
+  .search-input { flex: 1; max-width: 300px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 13px; outline: none; }
+  .search-input:focus { border-color: var(--blue); }
+  .search-input::placeholder { color: var(--text2); }
+  
+  .show-done-toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; color: var(--text2); }
+  .show-done-toggle input { accent-color: var(--blue); width: 15px; height: 15px; cursor: pointer; }
+
+  /* Items table */
+  .items-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .items-header { display: grid; grid-template-columns: 36px 1fr 130px 70px 70px 60px 90px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--border); font-size: 11px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .5px; gap: 8px; }
+  .item-row { display: grid; grid-template-columns: 36px 1fr 130px 70px 70px 60px 90px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--border); gap: 8px; transition: background .1s; cursor: pointer; }
+  .item-row:last-child { border-bottom: none; }
+  .item-row:hover { background: var(--surface2); }
+  .item-row.done { opacity: .4; }
+  .item-row.done .item-nummer { text-decoration: line-through; }
+  
+  .item-check { width: 20px; height: 20px; border-radius: 5px; border: 2px solid var(--border); display: flex; align-items: center; justify-content: center; transition: all .15s; flex-shrink: 0; }
+  .item-row:hover .item-check { border-color: var(--blue); }
+  .item-row.done .item-check { background: var(--green); border-color: var(--green); }
+  .checkmark { display: none; color: white; font-size: 12px; font-weight: 700; }
+  .item-row.done .checkmark { display: block; }
+  
+  .item-nummer { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item-type { font-size: 12px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  
+  .badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .badge-blaa { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid rgba(59,130,246,0.3); }
+  .badge-roed { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
+  .badge-ingen { background: rgba(148,163,184,0.15); color: #94a3b8; border: 1px solid rgba(148,163,184,0.3); }
+  .badge-cat { font-size: 10px; padding: 2px 7px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  
+  .item-rum { font-size: 12px; font-weight: 600; color: var(--text); }
+  .item-antal { font-size: 13px; font-weight: 600; color: var(--text); text-align: center; }
+  
+  .empty-state { padding: 48px; text-align: center; color: var(--text2); }
+  .empty-state .icon { font-size: 32px; margin-bottom: 12px; }
+
+  /* Count badge */
+  .count-badge { background: var(--surface2); border: 1px solid var(--border); border-radius: 20px; padding: 3px 10px; font-size: 12px; color: var(--text2); }
+
+  @media (max-width: 768px) {
+    .items-header { display: none; }
+    .item-row { grid-template-columns: 36px 1fr 70px; }
+    .item-type, .item-cat, .item-rum { display: none; }
+    .total-card { flex-direction: column; gap: 12px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Mørkhøj Leverance 2</h1>
+    <div class="subtitle">Stade-dashboard · Resterende produkter</div>
+  </div>
+  <div class="header-actions">
+    <span id="last-saved" style="font-size:11px;color:var(--text2);"></span>
+    <button class="btn btn-export" onclick="exportStatus()">↓ Eksporter</button>
+    <button class="btn btn-danger" onclick="resetAll()">Nulstil</button>
+  </div>
+</header>
+
+<div class="main">
+
+  <!-- Total progress -->
+  <div class="total-card">
+    <div class="total-nums">
+      <div class="big" id="done-count">0</div>
+      <div class="label">af <strong id="total-count">0</strong> leveret</div>
+    </div>
+    <div class="total-bar-wrap">
+      <div class="total-pct" id="total-pct">0%</div>
+      <div class="progress-bar"><div class="progress-fill" id="total-fill" style="width:0%"></div></div>
+    </div>
+  </div>
+
+  <!-- Category cards -->
+  <div class="cat-strip" id="cat-strip"></div>
+
+  <!-- Filters: Rooms -->
+  <div class="filters">
+    <span class="filters-label">RUM:</span>
+    <button class="filter-btn active" data-room="alle" onclick="setRoom(this)">Alle</button>
+    <button class="filter-btn" data-room="R2.01" onclick="setRoom(this)">R2.01</button> <button class="filter-btn" data-room="R2.03" onclick="setRoom(this)">R2.03</button> <button class="filter-btn" data-room="R2.05" onclick="setRoom(this)">R2.05</button> <button class="filter-btn" data-room="R2.07" onclick="setRoom(this)">R2.07</button> <button class="filter-btn" data-room="R2.08" onclick="setRoom(this)">R2.08</button> <button class="filter-btn" data-room="R2.09" onclick="setRoom(this)">R2.09</button> <button class="filter-btn" data-room="R2.11" onclick="setRoom(this)">R2.11</button> <button class="filter-btn" data-room="R2.12" onclick="setRoom(this)">R2.12</button> <button class="filter-btn" data-room="R2.13" onclick="setRoom(this)">R2.13</button> <button class="filter-btn" data-room="R2.14" onclick="setRoom(this)">R2.14</button> <button class="filter-btn" data-room="R2.15" onclick="setRoom(this)">R2.15</button> <button class="filter-btn" data-room="R2.18" onclick="setRoom(this)">R2.18</button> <button class="filter-btn" data-room="R2.19" onclick="setRoom(this)">R2.19</button> <button class="filter-btn" data-room="R2.20" onclick="setRoom(this)">R2.20</button> <button class="filter-btn" data-room="R2.22" onclick="setRoom(this)">R2.22</button> <button class="filter-btn" data-room="R2.25" onclick="setRoom(this)">R2.25</button> <button class="filter-btn" data-room="R2.26" onclick="setRoom(this)">R2.26</button> <button class="filter-btn" data-room="R2.30" onclick="setRoom(this)">R2.30</button>
+  </div>
+
+  <!-- Search + show done -->
+  <div class="search-row">
+    <input type="text" class="search-input" placeholder="Søg nummer, type..." id="search-input" oninput="render()">
+    <label class="show-done-toggle">
+      <input type="checkbox" id="show-done" checked onchange="render()">
+      Vis leverede
+    </label>
+    <span class="count-badge" id="visible-count"></span>
+  </div>
+
+  <!-- Items list -->
+  <div class="items-wrap">
+    <div class="items-header">
+      <div></div>
+      <div>Nummer</div>
+      <div>Kategori</div>
+      <div>Farve</div>
+      <div>Rum</div>
+      <div>Antal</div>
+      <div>Type</div>
+    </div>
+    <div id="items-list"></div>
+  </div>
+
+</div>
+
+<script>
+const ITEMS = [{"id": "Bænke|001.001.000_2|Blå|R2.03", "kategori": "Bænke", "nummer": "001.001.000_2", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.03", "antal": 1}, {"id": "Bænke|001.001.000_4|Blå|R2.07", "kategori": "Bænke", "nummer": "001.001.000_4", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.07", "antal": 1}, {"id": "Bænke|001.001.000_5|Blå|R2.01", "kategori": "Bænke", "nummer": "001.001.000_5", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.01", "antal": 1}, {"id": "Bænke|001.001.000_7|Blå|R2.11", "kategori": "Bænke", "nummer": "001.001.000_7", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.11", "antal": 1}, {"id": "Bænke|001.001.000_8|Blå|R2.07", "kategori": "Bænke", "nummer": "001.001.000_8", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.07", "antal": 1}, {"id": "Bænke|001.001.000_8|Blå|R2.08", "kategori": "Bænke", "nummer": "001.001.000_8", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.08", "antal": 1}, {"id": "Bænke|001.001.000_8|Blå|R2.09", "kategori": "Bænke", "nummer": "001.001.000_8", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.09", "antal": 1}, {"id": "Bænke|001.001.000_15|Blå|R2.07", "kategori": "Bænke", "nummer": "001.001.000_15", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.07", "antal": 2}, {"id": "Bænke|001.001.000_17|Blå|R2.18", "kategori": "Bænke", "nummer": "001.001.000_17", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.18", "antal": 1}, {"id": "Bænke|001.001.000_10|Rød|R2.19", "kategori": "Bænke", "nummer": "001.001.000_10", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Bænke|001.001.000_10|Rød|R2.22", "kategori": "Bænke", "nummer": "001.001.000_10", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Bænke|001.001.000_11|Rød|R2.19", "kategori": "Bænke", "nummer": "001.001.000_11", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Bænke|001.001.000_11|Rød|R2.22", "kategori": "Bænke", "nummer": "001.001.000_11", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Bænke|001.001.000_12|Rød|R2.22", "kategori": "Bænke", "nummer": "001.001.000_12", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Bænke|001.001.000_13|Rød|R2.19", "kategori": "Bænke", "nummer": "001.001.000_13", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Bænke|004.001.000_1|Blå|R2.11", "kategori": "Bænke", "nummer": "004.001.000_1", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.11", "antal": 1}, {"id": "Bænke|005.001.000_1|Rød|R2.19", "kategori": "Bænke", "nummer": "005.001.000_1", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Bænke|005.001.000_1|Rød|R2.22", "kategori": "Bænke", "nummer": "005.001.000_1", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Bænke|005.001.000_2|Rød|R2.19", "kategori": "Bænke", "nummer": "005.001.000_2", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Bænke|005.001.000_2|Rød|R2.22", "kategori": "Bænke", "nummer": "005.001.000_2", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Bænke|009.001.000_1|Blå|R2.03", "kategori": "Bænke", "nummer": "009.001.000_1", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.03", "antal": 1}, {"id": "Bænke|009.001.000_2|Blå|R2.05", "kategori": "Bænke", "nummer": "009.001.000_2", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.05", "antal": 1}, {"id": "Bænke|009.001.000_2|Rød|R2.19", "kategori": "Bænke", "nummer": "009.001.000_2", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Bænke|009.001.000_2|Rød|R2.22", "kategori": "Bænke", "nummer": "009.001.000_2", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Bænke|009.001.000_3|Rød|R2.19", "kategori": "Bænke", "nummer": "009.001.000_3", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Bænke|009.001.000_3|Rød|R2.22", "kategori": "Bænke", "nummer": "009.001.000_3", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Topplader|001.002.001_2|Blå|R2.07", "kategori": "Topplader", "nummer": "001.002.001_2", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.07", "antal": 1}, {"id": "Topplader|001.002.001_3|Blå|R2.07", "kategori": "Topplader", "nummer": "001.002.001_3", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.07", "antal": 1}, {"id": "Topplader|001.002.001_4|Blå|R2.07", "kategori": "Topplader", "nummer": "001.002.001_4", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.07", "antal": 1}, {"id": "Topplader|001.002.001_5|Blå|R2.07", "kategori": "Topplader", "nummer": "001.002.001_5", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.07", "antal": 1}, {"id": "Topplader|001.002.001_7|Blå|R2.03", "kategori": "Topplader", "nummer": "001.002.001_7", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.03", "antal": 1}, {"id": "Topplader|001.002.001_9|Blå|R2.07", "kategori": "Topplader", "nummer": "001.002.001_9", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.07", "antal": 1}, {"id": "Topplader|001.002.001_9|Blå|R2.08", "kategori": "Topplader", "nummer": "001.002.001_9", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.08", "antal": 1}, {"id": "Topplader|001.002.001_10|Blå|R2.09", "kategori": "Topplader", "nummer": "001.002.001_10", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.09", "antal": 1}, {"id": "Topplader|001.002.001_11|Blå|R2.01", "kategori": "Topplader", "nummer": "001.002.001_11", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.01", "antal": 1}, {"id": "Topplader|001.002.001_12|Blå|R2.11", "kategori": "Topplader", "nummer": "001.002.001_12", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.11", "antal": 1}, {"id": "Topplader|001.002.001_16|Blå|R2.18", "kategori": "Topplader", "nummer": "001.002.001_16", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.18", "antal": 1}, {"id": "Topplader|001.002.001_17|Rød|R2.19", "kategori": "Topplader", "nummer": "001.002.001_17", "type": "21 mm krydsfiner", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Topplader|001.002.001_17|Rød|R2.22", "kategori": "Topplader", "nummer": "001.002.001_17", "type": "21 mm krydsfiner", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Topplader|001.002.001_18|Rød|R2.19", "kategori": "Topplader", "nummer": "001.002.001_18", "type": "21 mm krydsfiner", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Topplader|001.002.001_18|Rød|R2.22", "kategori": "Topplader", "nummer": "001.002.001_18", "type": "21 mm krydsfiner", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Topplader|001.002.001_19|Rød|R2.22", "kategori": "Topplader", "nummer": "001.002.001_19", "type": "21 mm krydsfiner", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Topplader|001.002.001_20|Rød|R2.19", "kategori": "Topplader", "nummer": "001.002.001_20", "type": "21 mm krydsfiner", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Topplader|004.002.001_1|Blå|R2.11", "kategori": "Topplader", "nummer": "004.002.001_1", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.11", "antal": 1}, {"id": "Topplader|005.002.001_1|Rød|R2.19", "kategori": "Topplader", "nummer": "005.002.001_1", "type": "21 mm krydsfiner", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Topplader|005.002.001_1|Rød|R2.22", "kategori": "Topplader", "nummer": "005.002.001_1", "type": "21 mm krydsfiner", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Topplader|005.002.001_2|Rød|R2.19", "kategori": "Topplader", "nummer": "005.002.001_2", "type": "21 mm krydsfiner", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Topplader|005.002.001_2|Rød|R2.22", "kategori": "Topplader", "nummer": "005.002.001_2", "type": "21 mm krydsfiner", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Topplader|009.002.001_1|Blå|R2.05", "kategori": "Topplader", "nummer": "009.002.001_1", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.05", "antal": 1}, {"id": "Topplader|009.002.001_2|Blå|R2.03", "kategori": "Topplader", "nummer": "009.002.001_2", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.03", "antal": 1}, {"id": "Topplader|009.002.001_2|Rød|R2.19", "kategori": "Topplader", "nummer": "009.002.001_2", "type": "21 mm krydsfiner", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Topplader|009.002.001_2|Rød|R2.22", "kategori": "Topplader", "nummer": "009.002.001_2", "type": "21 mm krydsfiner", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Topplader|009.002.001_3|Rød|R2.19", "kategori": "Topplader", "nummer": "009.002.001_3", "type": "21 mm krydsfiner", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Topplader|009.002.001_3|Rød|R2.22", "kategori": "Topplader", "nummer": "009.002.001_3", "type": "21 mm krydsfiner", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Siddehynder|001.003.000_1|Blå|R2.07", "kategori": "Siddehynder", "nummer": "001.003.000_1", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.07", "antal": 2}, {"id": "Siddehynder|001.003.000_3|Blå|R2.07", "kategori": "Siddehynder", "nummer": "001.003.000_3", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.07", "antal": 2}, {"id": "Siddehynder|001.003.000_5|Blå|R2.18", "kategori": "Siddehynder", "nummer": "001.003.000_5", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.18", "antal": 1}, {"id": "Siddehynder|001.003.000_11|Blå|R2.03", "kategori": "Siddehynder", "nummer": "001.003.000_11", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.03", "antal": 1}, {"id": "Siddehynder|001.003.000_15|Blå|R2.11", "kategori": "Siddehynder", "nummer": "001.003.000_15", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.11", "antal": 1}, {"id": "Siddehynder|001.003.000_18|Blå|R2.07", "kategori": "Siddehynder", "nummer": "001.003.000_18", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.07", "antal": 1}, {"id": "Siddehynder|001.003.000_18|Blå|R2.08", "kategori": "Siddehynder", "nummer": "001.003.000_18", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.08", "antal": 1}, {"id": "Siddehynder|001.003.000_19|Blå|R2.09", "kategori": "Siddehynder", "nummer": "001.003.000_19", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.09", "antal": 1}, {"id": "Siddehynder|001.003.000_20|Blå|R2.01", "kategori": "Siddehynder", "nummer": "001.003.000_20", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.01", "antal": 1}, {"id": "Siddehynder|001.003.000_8|Rød|R2.19", "kategori": "Siddehynder", "nummer": "001.003.000_8", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Siddehynder|001.003.000_8|Rød|R2.22", "kategori": "Siddehynder", "nummer": "001.003.000_8", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Siddehynder|001.003.000_9|Rød|R2.19", "kategori": "Siddehynder", "nummer": "001.003.000_9", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Siddehynder|001.003.000_9|Rød|R2.22", "kategori": "Siddehynder", "nummer": "001.003.000_9", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Siddehynder|001.003.000_12|Rød|R2.22", "kategori": "Siddehynder", "nummer": "001.003.000_12", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Siddehynder|001.003.000_13|Rød|R2.19", "kategori": "Siddehynder", "nummer": "001.003.000_13", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Siddehynder|004.003.000_1|Blå|R2.11", "kategori": "Siddehynder", "nummer": "004.003.000_1", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.11", "antal": 1}, {"id": "Siddehynder|005.003.000_1|Rød|R2.19", "kategori": "Siddehynder", "nummer": "005.003.000_1", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Siddehynder|005.003.000_1|Rød|R2.22", "kategori": "Siddehynder", "nummer": "005.003.000_1", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Siddehynder|005.003.000_2|Rød|R2.19", "kategori": "Siddehynder", "nummer": "005.003.000_2", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Siddehynder|005.003.000_2|Rød|R2.22", "kategori": "Siddehynder", "nummer": "005.003.000_2", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Siddehynder|009.003.000_1|Blå|R2.05", "kategori": "Siddehynder", "nummer": "009.003.000_1", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.05", "antal": 1}, {"id": "Siddehynder|009.003.000_2|Blå|R2.03", "kategori": "Siddehynder", "nummer": "009.003.000_2", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.03", "antal": 1}, {"id": "Siddehynder|009.003.000_3|Rød|R2.19", "kategori": "Siddehynder", "nummer": "009.003.000_3", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Siddehynder|009.003.000_3|Rød|R2.22", "kategori": "Siddehynder", "nummer": "009.003.000_3", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Siddehynder|009.003.000_4|Rød|R2.19", "kategori": "Siddehynder", "nummer": "009.003.000_4", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Siddehynder|009.003.000_4|Rød|R2.22", "kategori": "Siddehynder", "nummer": "009.003.000_4", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Ryglæn|001.004.000_1|Blå|R2.11", "kategori": "Ryglæn", "nummer": "001.004.000_1", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.11", "antal": 2}, {"id": "Ryglæn|001.004.000_2|Blå|R2.11", "kategori": "Ryglæn", "nummer": "001.004.000_2", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.11", "antal": 1}, {"id": "Ryglæn|001.004.000_3|Blå|R2.01", "kategori": "Ryglæn", "nummer": "001.004.000_3", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.01", "antal": 1}, {"id": "Ryglæn|001.004.000_3|Blå|R2.03", "kategori": "Ryglæn", "nummer": "001.004.000_3", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.03", "antal": 1}, {"id": "Ryglæn|001.004.000_3|Blå|R2.07", "kategori": "Ryglæn", "nummer": "001.004.000_3", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.07", "antal": 1}, {"id": "Ryglæn|001.004.000_3|Blå|R2.08", "kategori": "Ryglæn", "nummer": "001.004.000_3", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.08", "antal": 1}, {"id": "Ryglæn|001.004.000_4|Blå|R2.09", "kategori": "Ryglæn", "nummer": "001.004.000_4", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.09", "antal": 1}, {"id": "Ryglæn|001.004.000_5|Blå|R2.18", "kategori": "Ryglæn", "nummer": "001.004.000_5", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.18", "antal": 1}, {"id": "Ryglæn|001.004.000_6|Blå|R2.18", "kategori": "Ryglæn", "nummer": "001.004.000_6", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.18", "antal": 1}, {"id": "Ryglæn|001.004.000_7|Rød|R2.19", "kategori": "Ryglæn", "nummer": "001.004.000_7", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Ryglæn|001.004.000_7|Rød|R2.22", "kategori": "Ryglæn", "nummer": "001.004.000_7", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Ryglæn|001.004.000_8|Rød|R2.19", "kategori": "Ryglæn", "nummer": "001.004.000_8", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Ryglæn|001.004.000_9|Rød|R2.22", "kategori": "Ryglæn", "nummer": "001.004.000_9", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Ryglæn|005.004.000_1|Rød|R2.19", "kategori": "Ryglæn", "nummer": "005.004.000_1", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Ryglæn|005.004.000_1|Rød|R2.22", "kategori": "Ryglæn", "nummer": "005.004.000_1", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Ryglæn|005.004.000_2|Rød|R2.19", "kategori": "Ryglæn", "nummer": "005.004.000_2", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Ryglæn|005.004.000_2|Rød|R2.22", "kategori": "Ryglæn", "nummer": "005.004.000_2", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Ryglæn|005.004.000_3|Rød|R2.19", "kategori": "Ryglæn", "nummer": "005.004.000_3", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Ryglæn|005.004.000_3|Rød|R2.22", "kategori": "Ryglæn", "nummer": "005.004.000_3", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Ryglæn|005.004.000_4|Rød|R2.19", "kategori": "Ryglæn", "nummer": "005.004.000_4", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Ryglæn|005.004.000_4|Rød|R2.22", "kategori": "Ryglæn", "nummer": "005.004.000_4", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Ryglæn|009.004.000_1|Rød|R2.19", "kategori": "Ryglæn", "nummer": "009.004.000_1", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Ryglæn|009.004.000_1|Rød|R2.22", "kategori": "Ryglæn", "nummer": "009.004.000_1", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Ryglæn|009.004.000_3|Rød|R2.19", "kategori": "Ryglæn", "nummer": "009.004.000_3", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 1}, {"id": "Ryglæn|009.004.000_3|Rød|R2.22", "kategori": "Ryglæn", "nummer": "009.004.000_3", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 1}, {"id": "Skillevægge|002.001.001|Blå|R2.07", "kategori": "Skillevægge", "nummer": "002.001.001", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.07", "antal": 2}, {"id": "Skillevægge|002.001.001|Blå|R2.08", "kategori": "Skillevægge", "nummer": "002.001.001", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.08", "antal": 2}, {"id": "Skillevægge|002.001.001|Blå|R2.09", "kategori": "Skillevægge", "nummer": "002.001.001", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.09", "antal": 2}, {"id": "Skillevægge|002.001.001|Blå|R2.12", "kategori": "Skillevægge", "nummer": "002.001.001", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.12", "antal": 1}, {"id": "Skillevægge|002.001.001|Rød|R2.19", "kategori": "Skillevægge", "nummer": "002.001.001", "type": "21 mm krydsfiner", "farve": "Rød", "rum": "R2.19", "antal": 6}, {"id": "Skillevægge|002.001.001|Rød|R2.22", "kategori": "Skillevægge", "nummer": "002.001.001", "type": "21 mm krydsfiner", "farve": "Rød", "rum": "R2.22", "antal": 6}, {"id": "Skillevægge|002.001.001|Rød|R2.25", "kategori": "Skillevægge", "nummer": "002.001.001", "type": "21 mm krydsfiner", "farve": "Rød", "rum": "R2.25", "antal": 6}, {"id": "Skillevægge|002.002.001_1|Blå|R2.11", "kategori": "Skillevægge", "nummer": "002.002.001_1", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.11", "antal": 2}, {"id": "Skillevægge|002.002.001_1|Blå|R2.13", "kategori": "Skillevægge", "nummer": "002.002.001_1", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.13", "antal": 2}, {"id": "Skillevægge|002.002.001_2|Blå|R2.12", "kategori": "Skillevægge", "nummer": "002.002.001_2", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.12", "antal": 2}, {"id": "Skillevægge|002.003.000_1|Blå|R2.01", "kategori": "Skillevægge", "nummer": "002.003.000_1", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.01", "antal": 2}, {"id": "Skillevægge|002.003.000_1|Blå|R2.07", "kategori": "Skillevægge", "nummer": "002.003.000_1", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.07", "antal": 3}, {"id": "Skillevægge|002.003.000_1|Blå|R2.08", "kategori": "Skillevægge", "nummer": "002.003.000_1", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.08", "antal": 3}, {"id": "Skillevægge|002.003.000_1|Blå|R2.09", "kategori": "Skillevægge", "nummer": "002.003.000_1", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.09", "antal": 3}, {"id": "Skillevægge|002.003.000_2|Blå|R2.01", "kategori": "Skillevægge", "nummer": "002.003.000_2", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.01", "antal": 1}, {"id": "Skillevægge|002.003.000_2|Blå|R2.03", "kategori": "Skillevægge", "nummer": "002.003.000_2", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.03", "antal": 3}, {"id": "Skillevægge|002.003.000_2|Blå|R2.07", "kategori": "Skillevægge", "nummer": "002.003.000_2", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.07", "antal": 1}, {"id": "Skillevægge|002.003.000_2|Blå|R2.08", "kategori": "Skillevægge", "nummer": "002.003.000_2", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.08", "antal": 1}, {"id": "Skillevægge|002.003.000_2|Blå|R2.09", "kategori": "Skillevægge", "nummer": "002.003.000_2", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.09", "antal": 1}, {"id": "Skillevægge|002.003.003_1|Blå|R2.05", "kategori": "Skillevægge", "nummer": "002.003.003_1", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.05", "antal": 1}, {"id": "Skillevægge|002.003.003_2|Blå|R2.01", "kategori": "Skillevægge", "nummer": "002.003.003_2", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.01", "antal": 1}, {"id": "Skillevægge|002.003.003_2|Blå|R2.03", "kategori": "Skillevægge", "nummer": "002.003.003_2", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.03", "antal": 1}, {"id": "Skillevægge|002.003.003_3|Blå|R2.01", "kategori": "Skillevægge", "nummer": "002.003.003_3", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.01", "antal": 1}, {"id": "Skillevægge|002.003.003_3|Blå|R2.03", "kategori": "Skillevægge", "nummer": "002.003.003_3", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.03", "antal": 1}, {"id": "Skillevægge|002.003.003_5|Blå|R2.18", "kategori": "Skillevægge", "nummer": "002.003.003_5", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.18", "antal": 3}, {"id": "Skillevægge|002.003.003_5|Blå|R2.20", "kategori": "Skillevægge", "nummer": "002.003.003_5", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.20", "antal": 3}, {"id": "Skillevægge|002.003.003_5|Blå|R2.26", "kategori": "Skillevægge", "nummer": "002.003.003_5", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.26", "antal": 3}, {"id": "Skillevægge|002.003.003_6|Blå|R2.01", "kategori": "Skillevægge", "nummer": "002.003.003_6", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.01", "antal": 1}, {"id": "Skillevægge|002.003.003_6|Blå|R2.07", "kategori": "Skillevægge", "nummer": "002.003.003_6", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.07", "antal": 2}, {"id": "Skillevægge|002.003.003_6|Blå|R2.08", "kategori": "Skillevægge", "nummer": "002.003.003_6", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.08", "antal": 2}, {"id": "Skillevægge|002.003.003_6|Blå|R2.09", "kategori": "Skillevægge", "nummer": "002.003.003_6", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.09", "antal": 2}, {"id": "Skillevægge|002.003.003_7|Blå|R2.01", "kategori": "Skillevægge", "nummer": "002.003.003_7", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.01", "antal": 1}, {"id": "Skillevægge|002.003.003_7|Blå|R2.07", "kategori": "Skillevægge", "nummer": "002.003.003_7", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.07", "antal": 2}, {"id": "Skillevægge|002.003.003_7|Blå|R2.08", "kategori": "Skillevægge", "nummer": "002.003.003_7", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.08", "antal": 2}, {"id": "Skillevægge|002.003.003_7|Blå|R2.09", "kategori": "Skillevægge", "nummer": "002.003.003_7", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.09", "antal": 2}, {"id": "Skillevægge|002.003.003_8|Blå|R2.03", "kategori": "Skillevægge", "nummer": "002.003.003_8", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.03", "antal": 2}, {"id": "Skillevægge|002.003.003_9|Blå|R2.05", "kategori": "Skillevægge", "nummer": "002.003.003_9", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.05", "antal": 1}, {"id": "Skillevægge|002.003.003_10|Blå|R2.05", "kategori": "Skillevægge", "nummer": "002.003.003_10", "type": "21 mm krydsfiner", "farve": "Blå", "rum": "R2.05", "antal": 1}, {"id": "Lockers og bænke|006.000.000_1|Rød|R2.14", "kategori": "Lockers og bænke", "nummer": "006.000.000_1", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.14", "antal": 27}, {"id": "Lockers og bænke|006.000.000_1|Rød|R2.30", "kategori": "Lockers og bænke", "nummer": "006.000.000_1", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.30", "antal": 15}, {"id": "Lockers og bænke|006.000.000_2|Rød|R2.14", "kategori": "Lockers og bænke", "nummer": "006.000.000_2", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.14", "antal": 27}, {"id": "Lockers og bænke|006.000.000_2|Rød|R2.30", "kategori": "Lockers og bænke", "nummer": "006.000.000_2", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.30", "antal": 15}, {"id": "Lockers og bænke|007.000.000|Rød|R2.14", "kategori": "Lockers og bænke", "nummer": "007.000.000", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.14", "antal": 27}, {"id": "Lockers og bænke|007.000.000|Rød|R2.30", "kategori": "Lockers og bænke", "nummer": "007.000.000", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.30", "antal": 7}, {"id": "Lockers og bænke|008.001.001_1|Rød|R2.14", "kategori": "Lockers og bænke", "nummer": "008.001.001_1", "type": "21mm krydsfiner", "farve": "Rød", "rum": "R2.14", "antal": 2}, {"id": "Lockers og bænke|008.001.001_1|Rød|R2.15", "kategori": "Lockers og bænke", "nummer": "008.001.001_1", "type": "21mm krydsfiner", "farve": "Rød", "rum": "R2.15", "antal": 2}, {"id": "Lockers og bænke|008.001.001_2|Rød|R2.14", "kategori": "Lockers og bænke", "nummer": "008.001.001_2", "type": "21mm krydsfiner", "farve": "Rød", "rum": "R2.14", "antal": 4}, {"id": "Lockers og bænke|008.001.001_2|Rød|R2.15", "kategori": "Lockers og bænke", "nummer": "008.001.001_2", "type": "21mm krydsfiner", "farve": "Rød", "rum": "R2.15", "antal": 4}, {"id": "Lockers og bænke|008.001.001_2|Rød|R2.30", "kategori": "Lockers og bænke", "nummer": "008.001.001_2", "type": "21mm krydsfiner", "farve": "Rød", "rum": "R2.30", "antal": 2}, {"id": "Lockers og bænke|008.001.001_3|Rød|R2.30", "kategori": "Lockers og bænke", "nummer": "008.001.001_3", "type": "21mm krydsfiner", "farve": "Rød", "rum": "R2.30", "antal": 2}, {"id": "Lockers og bænke|008.002.001_1|Rød|R2.14", "kategori": "Lockers og bænke", "nummer": "008.002.001_1", "type": "21mm krydsfiner", "farve": "Rød", "rum": "R2.14", "antal": 2}, {"id": "Lockers og bænke|008.002.001_1|Rød|R2.15", "kategori": "Lockers og bænke", "nummer": "008.002.001_1", "type": "21mm krydsfiner", "farve": "Rød", "rum": "R2.15", "antal": 2}, {"id": "Lockers og bænke|008.002.001_2|Rød|R2.30", "kategori": "Lockers og bænke", "nummer": "008.002.001_2", "type": "21mm krydsfiner", "farve": "Rød", "rum": "R2.30", "antal": 4}, {"id": "Lockers og bænke|008.003.000_1|Rød|R2.14", "kategori": "Lockers og bænke", "nummer": "008.003.000_1", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.14", "antal": 4}, {"id": "Lockers og bænke|008.003.000_1|Rød|R2.15", "kategori": "Lockers og bænke", "nummer": "008.003.000_1", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.15", "antal": 4}, {"id": "Lockers og bænke|008.003.000_1|Rød|R2.30", "kategori": "Lockers og bænke", "nummer": "008.003.000_1", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.30", "antal": 2}, {"id": "Lockers og bænke|008.003.000_2|Rød|R2.14", "kategori": "Lockers og bænke", "nummer": "008.003.000_2", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.14", "antal": 4}, {"id": "Lockers og bænke|008.003.000_2|Rød|R2.15", "kategori": "Lockers og bænke", "nummer": "008.003.000_2", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.15", "antal": 4}, {"id": "Lockers og bænke|008.003.000_2|Rød|R2.30", "kategori": "Lockers og bænke", "nummer": "008.003.000_2", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.30", "antal": 2}, {"id": "Lockers og bænke|008.004.000_1|Ingen|R2.14", "kategori": "Lockers og bænke", "nummer": "008.004.000_1", "type": "Samlingstegning", "farve": "Ingen", "rum": "R2.14", "antal": 1}, {"id": "Lockers og bænke|008.004.000_1|Ingen|R2.15", "kategori": "Lockers og bænke", "nummer": "008.004.000_1", "type": "Samlingstegning", "farve": "Ingen", "rum": "R2.15", "antal": 1}, {"id": "Lockers og bænke|008.004.000_2|Ingen|R2.14", "kategori": "Lockers og bænke", "nummer": "008.004.000_2", "type": "Samlingstegning", "farve": "Ingen", "rum": "R2.14", "antal": 2}, {"id": "Lockers og bænke|008.004.000_2|Ingen|R2.15", "kategori": "Lockers og bænke", "nummer": "008.004.000_2", "type": "Samlingstegning", "farve": "Ingen", "rum": "R2.15", "antal": 2}, {"id": "Lockers og bænke|008.004.000_2|Ingen|R2.30", "kategori": "Lockers og bænke", "nummer": "008.004.000_2", "type": "Samlingstegning", "farve": "Ingen", "rum": "R2.30", "antal": 3}, {"id": "Lockers og bænke|008.004.000_3|Ingen|R2.30", "kategori": "Lockers og bænke", "nummer": "008.004.000_3", "type": "Samlingstegning", "farve": "Ingen", "rum": "R2.30", "antal": 2}, {"id": "Lockers og bænke|008.004.002_1|Rød|R2.14", "kategori": "Lockers og bænke", "nummer": "008.004.002_1", "type": "21mm krydsfiner", "farve": "Rød", "rum": "R2.14", "antal": 1}, {"id": "Lockers og bænke|008.004.002_1|Rød|R2.15", "kategori": "Lockers og bænke", "nummer": "008.004.002_1", "type": "21mm krydsfiner", "farve": "Rød", "rum": "R2.15", "antal": 1}, {"id": "Lockers og bænke|008.004.002_2|Rød|R2.14", "kategori": "Lockers og bænke", "nummer": "008.004.002_2", "type": "21mm krydsfiner", "farve": "Rød", "rum": "R2.14", "antal": 2}, {"id": "Lockers og bænke|008.004.002_2|Rød|R2.15", "kategori": "Lockers og bænke", "nummer": "008.004.002_2", "type": "21mm krydsfiner", "farve": "Rød", "rum": "R2.15", "antal": 2}, {"id": "Lockers og bænke|008.004.002_2|Rød|R2.30", "kategori": "Lockers og bænke", "nummer": "008.004.002_2", "type": "21mm krydsfiner", "farve": "Rød", "rum": "R2.30", "antal": 3}, {"id": "Lockers og bænke|008.004.002_3|Rød|R2.30", "kategori": "Lockers og bænke", "nummer": "008.004.002_3", "type": "21mm krydsfiner", "farve": "Rød", "rum": "R2.30", "antal": 2}, {"id": "Akustik paneler|010.001.000_2|Rød|R2.19", "kategori": "Akustik paneler", "nummer": "010.001.000_2", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 2}, {"id": "Akustik paneler|010.001.000_2|Rød|R2.22", "kategori": "Akustik paneler", "nummer": "010.001.000_2", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 2}, {"id": "Akustik paneler|010.001.000_2|Rød|R2.25", "kategori": "Akustik paneler", "nummer": "010.001.000_2", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.25", "antal": 2}, {"id": "Akustik paneler|010.001.000_3|Rød|R2.19", "kategori": "Akustik paneler", "nummer": "010.001.000_3", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.19", "antal": 2}, {"id": "Akustik paneler|010.001.000_4|Rød|R2.22", "kategori": "Akustik paneler", "nummer": "010.001.000_4", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.22", "antal": 2}, {"id": "Akustik paneler|010.001.000_5|Rød|R2.25", "kategori": "Akustik paneler", "nummer": "010.001.000_5", "type": "Samlingstegning", "farve": "Rød", "rum": "R2.25", "antal": 2}, {"id": "Akustik paneler|010.001.000_6|Blå|R2.01", "kategori": "Akustik paneler", "nummer": "010.001.000_6", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.01", "antal": 1}, {"id": "Akustik paneler|010.001.000_6|Blå|R2.07", "kategori": "Akustik paneler", "nummer": "010.001.000_6", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.07", "antal": 2}, {"id": "Akustik paneler|010.001.000_6|Blå|R2.08", "kategori": "Akustik paneler", "nummer": "010.001.000_6", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.08", "antal": 2}, {"id": "Akustik paneler|010.001.000_6|Blå|R2.09", "kategori": "Akustik paneler", "nummer": "010.001.000_6", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.09", "antal": 2}, {"id": "Akustik paneler|010.001.000_7|Blå|R2.07", "kategori": "Akustik paneler", "nummer": "010.001.000_7", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.07", "antal": 2}, {"id": "Akustik paneler|010.001.000_7|Blå|R2.08", "kategori": "Akustik paneler", "nummer": "010.001.000_7", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.08", "antal": 2}, {"id": "Akustik paneler|010.001.000_7|Blå|R2.09", "kategori": "Akustik paneler", "nummer": "010.001.000_7", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.09", "antal": 2}, {"id": "Akustik paneler|010.001.000_8|Blå|R2.01", "kategori": "Akustik paneler", "nummer": "010.001.000_8", "type": "Samlingstegning", "farve": "Blå", "rum": "R2.01", "antal": 2}];
+
+const CAT_COLORS = {
+  'Bænke': '#3b82f6',
+  'Topplader': '#8b5cf6',
+  'Siddehynder': '#ec4899',
+  'Ryglæn': '#f59e0b',
+  'Skillevægge': '#10b981',
+  'Lockers og bænke': '#ef4444',
+  'Akustik paneler': '#06b6d4',
+};
+
+const STORAGE_KEY = 'morkhoj_lev2_stade';
+let state = {};
+let activeRoom = 'alle';
+let activeCat = 'alle';
+
+// Load from localStorage
+function loadState() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) state = JSON.parse(saved);
+  } catch(e) {}
+}
+
+function saveState() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  const now = new Date();
+  document.getElementById('last-saved').textContent = 'Gemt ' + now.toLocaleTimeString('da-DK', {hour:'2-digit',minute:'2-digit'});
+}
+
+function toggleItem(id) {
+  state[id] = !state[id];
+  saveState();
+  render();
+}
+
+function setRoom(btn) {
+  document.querySelectorAll('.filter-btn[data-room]').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  activeRoom = btn.dataset.room;
+  render();
+}
+
+function setCat(cat) {
+  activeCat = activeCat === cat ? 'alle' : cat;
+  render();
+}
+
+function resetAll() {
+  if (confirm('Nulstil alle leverancer? Dette kan ikke fortrydes.')) {
+    state = {};
+    saveState();
+    render();
+  }
+}
+
+function exportStatus() {
+  const lines = ['Mørkhøj Leverance 2 – Stade eksport', new Date().toLocaleString('da-DK'), ''];
+  lines.push('Nummer;Kategori;Type;Farve;Rum;Antal;Status');
+  ITEMS.forEach(item => {
+    const done = state[item.id] ? 'Leveret' : 'Ikke leveret';
+    lines.push(`${item.nummer};${item.kategori};${item.type};${item.farve};${item.rum};${item.antal};${done}`);
+  });
+  const blob = new Blob([lines.join('\n')], {type: 'text/csv;charset=utf-8;'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'morkhoj_lev2_stade.csv';
+  a.click();
+}
+
+function render() {
+  const search = document.getElementById('search-input').value.toLowerCase();
+  const showDone = document.getElementById('show-done').checked;
+  
+  // Filter items
+  let visible = ITEMS.filter(item => {
+    if (activeRoom !== 'alle' && item.rum !== activeRoom) return false;
+    if (activeCat !== 'alle' && item.kategori !== activeCat) return false;
+    if (search && !item.nummer.toLowerCase().includes(search) && !item.type.toLowerCase().includes(search) && !item.kategori.toLowerCase().includes(search)) return false;
+    if (!showDone && state[item.id]) return false;
+    return true;
+  });
+
+  // Total stats
+  const totalAll = ITEMS.length;
+  const doneAll = ITEMS.filter(i => state[i.id]).length;
+  const pct = totalAll ? Math.round(doneAll / totalAll * 100) : 0;
+  document.getElementById('done-count').textContent = doneAll;
+  document.getElementById('total-count').textContent = totalAll;
+  document.getElementById('total-pct').textContent = pct + '%';
+  document.getElementById('total-fill').style.width = pct + '%';
+  document.getElementById('visible-count').textContent = visible.length + ' vist';
+
+  // Category cards
+  const cats = [...new Set(ITEMS.map(i => i.kategori))];
+  const catStrip = document.getElementById('cat-strip');
+  catStrip.innerHTML = cats.map(cat => {
+    const catItems = ITEMS.filter(i => i.kategori === cat);
+    const catDone = catItems.filter(i => state[i.id]).length;
+    const catPct = catItems.length ? Math.round(catDone / catItems.length * 100) : 0;
+    const color = CAT_COLORS[cat] || '#64748b';
+    const isActive = activeCat === cat;
+    return `<div class="cat-card ${isActive ? 'active' : ''}" style="--cat-color:${color}" onclick="setCat('${cat}')">
+      <div class="cat-name">${cat}</div>
+      <div class="cat-progress">${catDone} / ${catItems.length} leveret (${catPct}%)</div>
+      <div class="mini-bar"><div class="mini-fill" style="width:${catPct}%;background:${color}"></div></div>
+    </div>`;
+  }).join('');
+
+  // Items
+  const listEl = document.getElementById('items-list');
+  if (visible.length === 0) {
+    listEl.innerHTML = '<div class="empty-state"><div class="icon">✓</div><div>Ingen poster matcher filteret</div></div>';
+    return;
+  }
+
+  // Sort: not done first, then by category, then room, then nummer
+  visible.sort((a, b) => {
+    const aDone = state[a.id] ? 1 : 0;
+    const bDone = state[b.id] ? 1 : 0;
+    if (aDone !== bDone) return aDone - bDone;
+    if (a.kategori !== b.kategori) return a.kategori.localeCompare(b.kategori);
+    if (a.rum !== b.rum) return a.rum.localeCompare(b.rum);
+    return a.nummer.localeCompare(b.nummer);
+  });
+
+  listEl.innerHTML = visible.map(item => {
+    const done = state[item.id];
+    const color = CAT_COLORS[item.kategori] || '#64748b';
+    const farveBadge = item.farve === 'Blå' ? 'badge-blaa' : item.farve === 'Rød' ? 'badge-roed' : 'badge-ingen';
+    const farveLabel = item.farve === 'Blå' ? 'Blå' : item.farve === 'Rød' ? 'Rød' : item.farve || '—';
+    return `<div class="item-row ${done ? 'done' : ''}" onclick="toggleItem('${item.id.replace(/'/g, "\\'")}')" title="Klik for at markere som leveret">
+      <div class="item-check"><span class="checkmark">✓</span></div>
+      <div class="item-nummer">${item.nummer}</div>
+      <div class="item-cat"><span class="badge badge-cat" style="background:${color}22;color:${color};border:1px solid ${color}44">${item.kategori}</span></div>
+      <div><span class="badge ${farveBadge}">${farveLabel}</span></div>
+      <div class="item-rum">${item.rum}</div>
+      <div class="item-antal">${item.antal}</div>
+      <div class="item-type">${item.type}</div>
+    </div>`;
+  }).join('');
+}
+
+loadState();
+render();
+</script>
+</body>
+</html>
