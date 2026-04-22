@@ -24,7 +24,7 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run build
+      - run: npx vite build
         env:
           VITE_ENABLE_ROUTE_MESSAGING: "false"
 
