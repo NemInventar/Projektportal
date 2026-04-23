@@ -17,7 +17,17 @@
  */
 import React, { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { AlertTriangle, ArrowLeft, BarChart2, UserPlus } from 'lucide-react';
+import { pdf } from '@react-pdf/renderer';
+import {
+  AlertTriangle,
+  ArrowLeft,
+  BarChart2,
+  Download,
+  FileSpreadsheet,
+  Send,
+  Sparkles,
+  UserPlus,
+} from 'lucide-react';
 import Layout from '@/components/Layout';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -42,6 +52,10 @@ import QuoteInputDialog from '../components/QuoteInputDialog';
 import SupplierPickerDialog, {
   type PickedSupplier,
 } from '../components/SupplierPickerDialog';
+import { RFQPdf } from '../components/RFQPdf';
+import SendRFQDialog from '../components/SendRFQDialog';
+import ClaudePromptDialog from '../components/ClaudePromptDialog';
+import { generateRfqExcel } from '../lib/rfqExcel';
 
 export const RFQDetail: React.FC = () => {
   const { rfqId } = useParams<{ rfqId: string }>();
@@ -59,6 +73,10 @@ export const RFQDetail: React.FC = () => {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
   const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
+  const [sendDialogOpen, setSendDialogOpen] = useState(false);
+  const [claudePromptOpen, setClaudePromptOpen] = useState(false);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
+  const [downloadingExcel, setDownloadingExcel] = useState(false);
 
   const supplierNames = useMemo(() => {
     const m: Record<string, string> = {};
@@ -137,6 +155,63 @@ export const RFQDetail: React.FC = () => {
     }
   };
 
+  const handleDownloadRfqPdf = async () => {
+    if (!rfq) return;
+    setDownloadingPdf(true);
+    try {
+      const blob = await pdf(
+        <RFQPdf
+          rfq={rfq}
+          projectName={activeProject?.name ?? 'Projekt'}
+          projectNumber={activeProject?.projectNumber}
+        />,
+      ).toBlob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const slug = (s: string) =>
+        s.trim().replace(/\s+/g, '-').replace(/[^\w\-]/g, '').toLowerCase();
+      a.href = url;
+      a.download = `prisforesp-${slug(activeProject?.name ?? 'projekt')}-${slug(rfq.title)}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast({
+        title: 'Kunne ikke generere PDF',
+        description: err instanceof Error ? err.message : 'Ukendt fejl',
+        variant: 'destructive',
+      });
+    } finally {
+      setDownloadingPdf(false);
+    }
+  };
+
+  const handleDownloadRfqExcel = async () => {
+    if (!rfq) return;
+    setDownloadingExcel(true);
+    try {
+      const blob = await generateRfqExcel({
+        rfq,
+        projectName: activeProject?.name ?? 'Projekt',
+        projectNumber: activeProject?.projectNumber,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const safeTitle = rfq.title.replace(/[^a-z0-9]/gi, '_');
+      a.href = url;
+      a.download = `Prisforespørgsel_${safeTitle}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast({
+        title: 'Kunne ikke generere Excel',
+        description: err instanceof Error ? err.message : 'Ukendt fejl',
+        variant: 'destructive',
+      });
+    } finally {
+      setDownloadingExcel(false);
+    }
+  };
+
   const handleClose = async () => {
     if (!rfq) return;
     try {
@@ -208,15 +283,89 @@ export const RFQDetail: React.FC = () => {
   return (
     <Layout>
       <div className="p-6 space-y-6 max-w-6xl mx-auto">
-        {/* Back link */}
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => navigate('/purchasing')}
-          className="gap-2"
-        >
-          <ArrowLeft className="h-4 w-4" /> Tilbage til overblik
-        </Button>
+        {/* Back link + header actions */}
+        <div className="flex items-center justify-between gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => navigate('/purchasing')}
+            className="gap-2"
+          >
+            <ArrowLeft className="h-4 w-4" /> Tilbage til overblik
+          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleDownloadRfqExcel}
+              disabled={downloadingExcel || rfq.lines.length === 0}
+              className="gap-2"
+              title={
+                rfq.lines.length === 0
+                  ? 'Tilføj mindst én linje før du kan hente Excel-skabelonen'
+                  : undefined
+              }
+            >
+              <FileSpreadsheet className="h-4 w-4" />
+              {downloadingExcel ? 'Genererer...' : 'Hent Excel-skabelon'}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleDownloadRfqPdf}
+              disabled={downloadingPdf || rfq.lines.length === 0}
+              className="gap-2"
+              title={
+                rfq.lines.length === 0
+                  ? 'Tilføj mindst én linje før du kan downloade PDF'
+                  : undefined
+              }
+            >
+              <Download className="h-4 w-4" />
+              {downloadingPdf ? 'Genererer...' : 'Download PDF'}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setClaudePromptOpen(true)}
+              disabled={
+                rfq.suppliers.length === 0 || rfq.lines.length === 0
+              }
+              className="gap-2"
+              title={
+                rfq.suppliers.length === 0
+                  ? 'Tilføj mindst én leverandør'
+                  : rfq.lines.length === 0
+                    ? 'Tilføj mindst én linje'
+                    : 'Generér prompt til Claude Desktop'
+              }
+            >
+              <Sparkles className="h-4 w-4" />
+              Hent Claude prompt
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => setSendDialogOpen(true)}
+              disabled={
+                rfq.suppliers.length === 0 ||
+                rfq.lines.length === 0 ||
+                rfq.status === 'cancelled' ||
+                rfq.status === 'awarded'
+              }
+              className="gap-2"
+              title={
+                rfq.suppliers.length === 0
+                  ? 'Tilføj mindst én leverandør'
+                  : rfq.lines.length === 0
+                    ? 'Tilføj mindst én linje'
+                    : undefined
+              }
+            >
+              <Send className="h-4 w-4" />
+              Send forespørgsel
+            </Button>
+          </div>
+        </div>
 
         {/* Header card */}
         <RFQHeaderCard
@@ -339,6 +488,28 @@ export const RFQDetail: React.FC = () => {
             }}
           />
         )}
+
+        {/* Send RFQ dialog */}
+        <SendRFQDialog
+          rfq={rfq}
+          projectName={activeProject?.name ?? 'Projekt'}
+          projectNumber={activeProject?.projectNumber}
+          open={sendDialogOpen}
+          onOpenChange={setSendDialogOpen}
+          onMarkedSent={() => {
+            void refresh();
+          }}
+        />
+
+        {/* Claude Desktop prompt dialog */}
+        <ClaudePromptDialog
+          rfq={rfq}
+          projectName={activeProject?.name ?? 'Projekt'}
+          projectNumber={activeProject?.projectNumber}
+          supplierNames={supplierNames}
+          open={claudePromptOpen}
+          onOpenChange={setClaudePromptOpen}
+        />
 
         {/* Cancel RFQ confirm */}
         <Dialog open={cancelConfirmOpen} onOpenChange={setCancelConfirmOpen}>

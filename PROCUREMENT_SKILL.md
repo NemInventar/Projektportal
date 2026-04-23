@@ -83,6 +83,9 @@ Storage bucket: `rfq-attachments-2026-04-23` (bindestreger). Filsti: `{quote_id}
 
 - "Tjek indbakken" / "Scan mails" / "Scan sidste [tidsrum]" → kør WORKFLOW: SCAN
 - "Parse denne mail" + paste af tekst → WORKFLOW: SCAN step 2-9, brug hash af body som `source_email_id`
+- "Parse Excel fra [leverandør]" / vedhæft .xlsx i chatten → kør WORKFLOW: PARSE_EXCEL
+- "Send RFQ [titel/id]" / "Udsend forespørgsel [X]" → kør WORKFLOW: SEND
+- "Marker RFQ [X] som sendt" → kør WORKFLOW: MARK_SENT (når bruger har sendt uden for systemet)
 - "Status på indkøb" → kør QUERY: STATUS
 - "Hvad mangler svar?" → kør QUERY: VENTER
 - "Vis kø til gennemsyn" → kør QUERY: REVIEW
@@ -119,7 +122,10 @@ GROUP BY r.id, r.title, p.name;
 
 **Step 5 — Parse linjer.** For hver rfq_line, find pris i mail-body + evt. PDF. Match via navn-similaritet. Udtræk: `total_price`, `quoted_qty`, `unit`, `lead_time_days`, `min_qty`, `declined` (hvis "kan ikke levere"). Ikke-fundne linjer: opret ikke quote_line (= "ikke prissat").
 
-**Step 6 — PDF upload (hvis attachment).** Bucket `rfq-attachments-2026-04-23`, sti `{quote_id}/{filename}`, `upsert: true`. Gem URL i `pdf_url`, navn i `pdf_filename`. PDF-parse fejl: opret quote alligevel; flag usikre linjer i `notes`.
+**Step 6 — PDF upload (hvis attachment).**
+> **Prioritet:** Hvis attachment er `.xlsx`, brug WORKFLOW: PARSE_EXCEL i stedet for at prøve PDF-parse. Excel-format er deterministisk og fejler ikke.
+
+Bucket `rfq-attachments-2026-04-23`, sti `{quote_id}/{filename}`, `upsert: true`. Gem URL i `pdf_url`, navn i `pdf_filename`. PDF-parse fejl: opret quote alligevel; flag usikre linjer i `notes`.
 
 **Step 7 — INSERT quote.**
 ```sql
@@ -170,6 +176,122 @@ Skippet:
 ```
 
 Intet efter listen. Ingen "Lad mig vide hvis...".
+
+## WORKFLOW: SEND
+
+Outlook MCP understøtter kun read/search — ikke send. Skillen genererer mail-content + opdaterer DB; brugeren sender selv fra Outlook (eller via portalens send-dialog).
+
+**Step 1 — Hent RFQ.**
+```sql
+SELECT r.id, r.title, r.description, r.deadline,
+       r.first_delivery_date, r.last_delivery_date, r.payment_terms, r.status,
+       p.name AS project_name, p.project_number,
+       json_agg(DISTINCT jsonb_build_object('no', l.line_no, 'name', l.name,
+         'spec', l.spec, 'qty', l.qty, 'unit', l.unit) ORDER BY l.line_no) AS lines
+FROM project_rfqs_2026_04_23_10_00 r
+JOIN projects_2026_01_15_06_45 p ON p.id = r.project_id
+LEFT JOIN project_rfq_lines_2026_04_23_10_00 l ON l.rfq_id = r.id
+WHERE r.id = :rfq_id OR r.title ILIKE :title_pattern
+GROUP BY r.id, p.name, p.project_number;
+```
+
+Hvis brugeren refererer til RFQ'en ved titel (ikke uuid), match fuzzy. Hvis flere matches: spørg ÉN gang hvilken.
+
+**Step 2 — Hent leverandører.**
+```sql
+SELECT rs.id AS rfq_supplier_id, rs.invite_status, rs.invited_at,
+       s.name, s.email, rs.contact_email, rs.contact_person
+FROM project_rfq_suppliers_2026_04_23_10_00 rs
+JOIN standard_suppliers_2026_01_15_06_45 s ON s.id = rs.supplier_id
+WHERE rs.rfq_id = :rfq_id;
+```
+
+**Step 3 — Generér mail-content.** Markdown-format, klar til paste i Outlook. Én blok pr. leverandør:
+
+````
+---
+Til: [contact_email eller supplier.email]
+Emne: Prisforespørgsel: [rfq.title] – [project_name]
+
+Hej [contact_person eller supplier.name],
+
+Hermed prisforespørgsel vedr. [project_name][( [project_number])].
+
+| # | Vare | Specifikation | Antal | Enhed |
+|---|------|---------------|-------|-------|
+| 1 | [name] | [spec] | [qty] | [unit] |
+| ... |
+
+Vi vil sætte pris på svar senest [deadline].
+Inkluder venligst: pris pr. vare, leveringstid, mindstemængde hvis relevant, gyldighedsperiode.
+
+Venlig hilsen
+Joachim Skovbogaard
+NemInventar ApS
+js@neminventar.dk
+---
+````
+
+**Step 4 — Spørg brugeren:**
+> Generér ovenstående for [N] leverandører. Bruger portalens Send-dialog (med PDF) eller skal jeg bare vise mail-body her?
+
+Brugerens svar styrer:
+- "portal" / "dialog" → svar kun: "Åbn RFQ [titel] i portalen → klik Send forespørgsel". Ingen yderligere handling.
+- "vis" / "her" → output alle mail-blokke i markdown. Brugeren kopierer hver ind i Outlook og vedhæfter PDF manuelt.
+
+**Step 5 — Bekræft DB-opdatering.**
+> Skal jeg markere leverandørerne som inviteret nu, eller venter du til du har sendt?
+
+- "nu" / "marker" → fortsæt step 6
+- "vent" → stop. Brugeren kører WORKFLOW: MARK_SENT senere.
+
+**Step 6 — Opdatér DB** (kræver bekræftelse jf. regel 7 — en enkelt accept dækker hele batchen):
+```sql
+UPDATE project_rfq_suppliers_2026_04_23_10_00
+SET invite_status = 'invited', invited_at = now()
+WHERE rfq_id = :rfq_id AND invite_status IN ('invited', 'no_response')
+  AND invited_at IS NULL;
+```
+
+Hvis `rfq.status = 'draft'`:
+```sql
+UPDATE project_rfqs_2026_04_23_10_00 SET status = 'sent' WHERE id = :rfq_id;
+```
+
+**Step 7 — Kort summary:**
+```
+RFQ [titel] · [N] leverandører markeret som inviteret
+Status: draft → sent
+```
+
+## WORKFLOW: PARSE_EXCEL
+
+Leverandører får en Excel-skabelon fra portalen. Når de returnerer den, parses den deterministisk via `line_id` i skjult kolonne O. Ingen navn-similaritet nødvendig.
+
+**Step 1 — Identificér RFQ + supplier.**
+Excel-filen indeholder titlen i række 1 (format: `Prisforespørgsel: {rfq.title}`). Hvis ikke matchbart via titel, spørg brugeren.
+Match supplier via mailens `from.email` (hvis filen kom fra en mail Claude scanner) eller spørg.
+
+**Step 2 — Idempotens.** Brug mail-ID eller filhash som `source_email_id`. Eksisterer allerede → skip.
+
+**Step 3 — Læs Excel.** Ark "Prisforespørgsel", række 10 og nedefter. For hver række:
+- Kolonne O: `line_id` (rfq_line_id). Tom → ignorer (det er sum/kommentar-sektionen).
+- Kolonne F: "x" = alternativ, tom = hovedprodukt
+- Kolonne G-N: produktnummer, produktnavn, specifikation, totalpris, leveringstid, mindstemængde, gyldig til, bemærkninger
+- Tomme priser → `declined=true` eller spring rækken over
+
+**Step 4 — Opret quote + lines.** Samme SQL som WORKFLOW: SCAN step 7-8. For hver parseret række:
+- Hvis `kolonne F = 'x'`: sæt `alternative_offered=true`, gem produktnavn/spec i `alternative_note`
+- Ellers: normal `quote_line` med `rfq_line_id` fra kolonne O
+
+**Step 5 — Opdatér invite_status og giv summary.**
+
+## WORKFLOW: MARK_SENT
+
+Brugeren har sendt mails uden for systemet. Opdatér kun DB.
+
+1. Identificér RFQ (ID eller titel).
+2. Kør step 6-7 fra WORKFLOW: SEND.
 
 ## QUERY: STATUS
 

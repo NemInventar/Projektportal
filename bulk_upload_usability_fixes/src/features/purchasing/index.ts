@@ -38,6 +38,9 @@ export { QuoteReviewCard } from './components/QuoteReviewCard';
 export { AttachmentUploader } from './components/AttachmentUploader';
 export { SupplierPickerDialog } from './components/SupplierPickerDialog';
 export { ProjectMaterialsPickerDialog } from './components/ProjectMaterialsPickerDialog';
+export { RFQPdf } from './components/RFQPdf';
+export { SendRFQDialog } from './components/SendRFQDialog';
+export { ClaudePromptDialog } from './components/ClaudePromptDialog';
 
 // Types
 export type {

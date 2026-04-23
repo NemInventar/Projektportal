@@ -221,6 +221,33 @@ export async function removeSupplierInvite(rfqSupplierId: string): Promise<void>
 }
 
 /**
+ * Felter der må opdateres på en rfq_supplier-række.
+ * Bruges bl.a. af SendRFQDialog til at markere leverandører som inviteret.
+ */
+export type UpdateSupplierInviteInput = Partial<{
+  invite_status: RfqSupplier['invite_status'];
+  invited_at: string | null;
+  reminded_at: string | null;
+  contact_email: string | null;
+  contact_person: string | null;
+  notes: string | null;
+}>;
+
+/**
+ * Opdatér en rfq_supplier-invitation (status, timestamps, kontakt-snapshots).
+ */
+export async function updateSupplierInvite(
+  rfqSupplierId: string,
+  patch: UpdateSupplierInviteInput,
+): Promise<void> {
+  const { error } = await supabase
+    .from(RFQ_SUPPLIERS_TABLE)
+    .update(patch)
+    .eq('id', rfqSupplierId);
+  if (error) throw error;
+}
+
+/**
  * Opdatér RFQ-status med validering af overgangen.
  * Slår nuværende status op og kaster hvis overgangen er ugyldig.
  */
