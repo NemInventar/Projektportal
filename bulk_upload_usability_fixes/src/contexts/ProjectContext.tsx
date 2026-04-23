@@ -8,6 +8,29 @@ export interface Project {
   projectNumber?: string;
   phase: 'Tilbud' | 'Produktion' | 'Tabt' | 'Arkiv' | 'Garanti';
   isStarred?: boolean;
+  sortOrder?: number;
+  // Projekt
+  projectType?: string;
+  contractType?: string;
+  description?: string;
+  // Parter
+  client?: string;
+  architect?: string;
+  contractor?: string;
+  owner?: string;
+  // Kontakt
+  customerContact?: string;
+  customerEmail?: string;
+  customerPhone?: string;
+  deliveryAddress?: string;
+  // Tidsplan
+  startDate?: string;
+  endDate?: string;
+  deliveryDate?: string;
+  // Økonomi & links
+  budgetAmount?: number;
+  source?: string;
+  sharepointUrl?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -23,6 +46,7 @@ interface ProjectContextType {
   updateProject: (id: string, updates: Partial<Project>) => Promise<void>;
   deleteProject: (id: string) => Promise<void>;
   toggleStar: (id: string) => Promise<void>;
+  reorderProjects: (orderedIds: string[]) => Promise<void>;
 }
 
 const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
@@ -126,6 +150,7 @@ export const ProjectProvider: React.FC<{ children: ReactNode }> = ({ children })
       const { data, error } = await supabase
         .from('projects_2026_01_15_06_45')
         .select('*')
+        .order('sort_order', { ascending: true })
         .order('created_at', { ascending: false });
 
       console.log('Supabase response:', { data, error });
@@ -151,6 +176,24 @@ export const ProjectProvider: React.FC<{ children: ReactNode }> = ({ children })
           projectNumber: p.project_number,
           phase: p.phase,
           isStarred: p.is_starred || false,
+          sortOrder: p.sort_order ?? 0,
+          projectType: p.project_type,
+          contractType: p.contract_type,
+          description: p.description,
+          client: p.client,
+          architect: p.architect,
+          contractor: p.contractor,
+          owner: p.owner,
+          customerContact: p.customer_contact,
+          customerEmail: p.customer_email,
+          customerPhone: p.customer_phone,
+          deliveryAddress: p.delivery_address,
+          startDate: p.start_date,
+          endDate: p.end_date,
+          deliveryDate: p.delivery_date,
+          budgetAmount: p.budget_amount ? parseFloat(p.budget_amount) : undefined,
+          source: p.source,
+          sharepointUrl: p.sharepoint_url,
           createdAt: new Date(p.created_at),
           updatedAt: new Date(p.updated_at)
         }));
@@ -240,6 +283,23 @@ export const ProjectProvider: React.FC<{ children: ReactNode }> = ({ children })
           customer: updates.customer,
           project_number: updates.projectNumber,
           phase: updates.phase,
+          project_type: updates.projectType,
+          contract_type: updates.contractType,
+          description: updates.description,
+          client: updates.client,
+          architect: updates.architect,
+          contractor: updates.contractor,
+          owner: updates.owner,
+          customer_contact: updates.customerContact,
+          customer_email: updates.customerEmail,
+          customer_phone: updates.customerPhone,
+          delivery_address: updates.deliveryAddress,
+          start_date: updates.startDate || null,
+          end_date: updates.endDate || null,
+          delivery_date: updates.deliveryDate || null,
+          budget_amount: updates.budgetAmount || null,
+          source: updates.source,
+          sharepoint_url: updates.sharepointUrl,
           updated_at: new Date().toISOString()
         })
         .eq('id', id);
@@ -367,6 +427,24 @@ export const ProjectProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
   };
 
+  const reorderProjects = async (orderedIds: string[]) => {
+    const updatedProjects = projects.map(p => {
+      const idx = orderedIds.indexOf(p.id);
+      return idx !== -1 ? { ...p, sortOrder: idx * 10 } : p;
+    });
+    updatedProjects.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    setProjects(updatedProjects);
+
+    await Promise.all(
+      orderedIds.map((id, index) =>
+        supabase
+          .from('projects_2026_01_15_06_45')
+          .update({ sort_order: index * 10 })
+          .eq('id', id)
+      )
+    );
+  };
+
   const handleSetActiveProject = (project: Project | null) => {
     setActiveProject(project);
     saveToStorage('nem_inventar_active_project', project);
@@ -384,6 +462,7 @@ export const ProjectProvider: React.FC<{ children: ReactNode }> = ({ children })
       updateProject,
       deleteProject,
       toggleStar,
+      reorderProjects,
     }}>
       {children}
     </ProjectContext.Provider>

@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { pdf } from '@react-pdf/renderer';
+import { QuotePDF } from '@/components/QuotePDF';
 import { supabase } from '@/integrations/supabase/client';
 import Layout from '@/components/Layout';
 import { Button } from '@/components/ui/button';
@@ -28,7 +30,7 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible';
 import { 
-  Plus, 
+  Plus,
   ChevronDown,
   ChevronRight,
   Calculator,
@@ -40,7 +42,8 @@ import {
   FileText,
   ExternalLink,
   RefreshCw,
-  Loader2
+  Loader2,
+  Download
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useProject } from '@/contexts/ProjectContext';
@@ -222,6 +225,17 @@ const ProjectQuoteDetail = () => {
       checkForProductUpdates();
     }
   }, [lines]);
+
+  // Skriv cached_sell_total tilbage til databasen når lines ændres
+  useEffect(() => {
+    if (!id || lines.length === 0) return;
+    const total = lines.reduce((acc, line) => acc + calculateLineTotals(line).totalSellingPrice, 0);
+    supabase
+      .from('project_quotes_2026_01_16_23_00')
+      .update({ cached_sell_total: total })
+      .eq('id', id)
+      .then(() => {});
+  }, [lines, id]);
 
   // Load material data for material summary (Q-V1-10)
   useEffect(() => {
@@ -1980,6 +1994,37 @@ const ProjectQuoteDetail = () => {
     );
   }
 
+  const handleDownloadPDF = async () => {
+    if (!quote || !activeProject) return;
+    const pdfLines = lines.map(line => {
+      const totals = calculateLineTotals(line);
+      return {
+        title: line.title,
+        description: line.description,
+        quantity: line.quantity,
+        unit: line.unit,
+        sellingPricePerUnit: totals.sellingPricePerUnit,
+        totalSellingPrice: totals.totalSellingPrice,
+      };
+    });
+    const date = new Date(quote.created_at).toLocaleDateString('da-DK');
+    const blob = await pdf(
+      <QuotePDF
+        projectName={activeProject.name}
+        quoteTitle={quote.title}
+        quoteNumber={quote.quote_number}
+        quoteDate={date}
+        lines={pdfLines}
+      />
+    ).toBlob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `tilbud-${activeProject.name}-${quote.quote_number}.pdf`.replace(/\s+/g, '-');
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // Calculate totals for entire quote
   const quoteTotals = lines.reduce((acc, line) => {
     const lineTotals = calculateLineTotals(line);
@@ -2170,6 +2215,16 @@ const ProjectQuoteDetail = () => {
             )}
           </div>
           <div className="flex gap-2">
+            <Button
+              onClick={handleDownloadPDF}
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              disabled={lines.length === 0}
+            >
+              <Download className="h-4 w-4" />
+              Download PDF
+            </Button>
             {Object.keys(productUpdates).length > 0 && (
               <Button 
                 onClick={async () => {

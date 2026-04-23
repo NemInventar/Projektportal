@@ -1,11 +1,11 @@
 import React from 'react';
 import Layout from '@/components/Layout';
-import ProjectList from '@/components/ProjectList';
+import Dashboard from '@/components/Dashboard';
 
 const Index = () => {
   return (
     <Layout>
-      <ProjectList />
+      <Dashboard />
     </Layout>
   );
 };

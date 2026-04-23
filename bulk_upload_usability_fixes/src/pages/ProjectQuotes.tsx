@@ -30,15 +30,16 @@ import {
   DialogTitle,
   DialogDescription
 } from '@/components/ui/dialog';
-import { 
-  Plus, 
+import {
+  Plus,
   FileText,
   Calendar,
   Eye,
   Edit,
   Trash2,
   Archive,
-  ChevronDown
+  ChevronDown,
+  BarChart2
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useProject } from '@/contexts/ProjectContext';
@@ -51,6 +52,7 @@ interface ProjectQuote {
   status: 'draft' | 'sent' | 'accepted' | 'rejected' | 'archived';
   validUntil?: Date;
   notes?: string;
+  includeInProjectTotal: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -82,6 +84,9 @@ const ProjectQuotes = () => {
             <TableHead className="text-right">DB %</TableHead>
             <TableHead>Gyldig til</TableHead>
             <TableHead>Oprettet</TableHead>
+            <TableHead className="w-10 text-center" title="Tæl med i projektsum">
+              <BarChart2 className="h-4 w-4 mx-auto text-muted-foreground" />
+            </TableHead>
             <TableHead className="w-32">Handlinger</TableHead>
           </TableRow>
         </TableHeader>
@@ -116,6 +121,18 @@ const ProjectQuotes = () => {
                   {quote.validUntil ? quote.validUntil.toLocaleDateString('da-DK') : '-'}
                 </TableCell>
                 <TableCell>{quote.createdAt.toLocaleDateString('da-DK')}</TableCell>
+                <TableCell className="text-center">
+                  <button
+                    onClick={e => { e.stopPropagation(); handleToggleInclude(quote.id, quote.includeInProjectTotal); }}
+                    title={quote.includeInProjectTotal ? 'Tæller med i projektsum — klik for at fjerne' : 'Tæller ikke med — klik for at tilføje'}
+                    className={`w-5 h-5 rounded border-2 flex items-center justify-center mx-auto transition-colors
+                      ${quote.includeInProjectTotal
+                        ? 'bg-green-500 border-green-500 text-white'
+                        : 'border-gray-300 bg-white hover:border-green-400'}`}
+                  >
+                    {quote.includeInProjectTotal && <span className="text-xs leading-none">✓</span>}
+                  </button>
+                </TableCell>
                 <TableCell>
                   <div className="flex gap-2">
                     <Button
@@ -387,6 +404,7 @@ const ProjectQuotes = () => {
           status: q.status,
           validUntil: q.valid_until ? new Date(q.valid_until) : undefined,
           notes: q.notes,
+          includeInProjectTotal: q.include_in_project_total ?? true,
           createdAt: new Date(q.created_at),
           updatedAt: new Date(q.updated_at)
         }));
@@ -605,6 +623,15 @@ const ProjectQuotes = () => {
     } finally {
       setQuoteToDelete(null);
     }
+  };
+
+  const handleToggleInclude = async (quoteId: string, current: boolean) => {
+    const next = !current;
+    setQuotes(prev => prev.map(q => q.id === quoteId ? { ...q, includeInProjectTotal: next } : q));
+    await supabase
+      .from('project_quotes_2026_01_16_23_00')
+      .update({ include_in_project_total: next })
+      .eq('id', quoteId);
   };
 
   const confirmArchiveInstead = async () => {

@@ -1,16 +1,18 @@
 import React from 'react';
 import { useProject } from '@/contexts/ProjectContext';
+import { useQuoteReview } from '@/features/purchasing';
 import { cn } from '@/lib/utils';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
-import { 
-  FolderOpen, 
-  BarChart3, 
-  Package, 
-  Wrench, 
-  Users, 
-  FileText, 
-  Calculator, 
+import {
+  FolderOpen,
+  BarChart3,
+  Package,
+  Wrench,
+  Users,
+  FileText,
+  Calculator,
   PieChart,
   ClipboardList,
   ShoppingCart,
@@ -22,6 +24,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 
 const Sidebar = () => {
   const { activeProject } = useProject();
+  const { count: reviewCount } = useQuoteReview();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -70,11 +73,18 @@ const Sidebar = () => {
       path: '/project/products',
       active: isActive('/project/products')
     },
-    { 
-      label: 'Tilbud', 
-      icon: FileText, 
+    {
+      label: 'Tilbud',
+      icon: FileText,
       path: '/project/quotes',
       active: isActive('/project/quotes')
+    },
+    {
+      label: 'Indkøb',
+      icon: ShoppingCart,
+      path: '/purchasing',
+      active: isActive('/purchasing') || location.pathname.startsWith('/purchasing/'),
+      badge: reviewCount > 0 ? reviewCount : undefined,
     },
     { 
       label: 'Budgetter', 
@@ -193,9 +203,18 @@ const Sidebar = () => {
                       item.active && "bg-primary text-primary-foreground"
                     )}
                     onClick={() => navigate(item.path)}
+                    title={item.badge ? `${item.badge} svar venter på gennemsyn` : undefined}
                   >
                     <item.icon className="h-4 w-4" />
-                    {item.label}
+                    <span className="flex-1 text-left">{item.label}</span>
+                    {item.badge ? (
+                      <Badge
+                        variant="secondary"
+                        className="h-5 min-w-5 px-1.5 text-xs bg-amber-100 text-amber-800 border-amber-200"
+                      >
+                        {item.badge}
+                      </Badge>
+                    ) : null}
                   </Button>
                 ))}
               </div>

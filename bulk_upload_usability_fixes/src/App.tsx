@@ -2,7 +2,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { HashRouter, Routes, Route } from "react-router-dom";
+import { HashRouter, Routes, Route, Navigate, useParams } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import Login from "./pages/Login";
@@ -13,6 +13,14 @@ import { ProjectMaterialsProvider } from "@/contexts/ProjectMaterialsContext";
 import { PurchaseOrdersProvider } from "@/contexts/PurchaseOrdersContext";
 import { TransportProvider } from "@/contexts/TransportContext";
 import { ProjectProductsProvider } from "@/contexts/ProjectProductsContext";
+import {
+  PurchasingProvider,
+  PurchasingOverview,
+  RFQCreate,
+  RFQDetail,
+  RFQCompare,
+  QuoteReviewQueue,
+} from "@/features/purchasing";
 import Index from "./pages/Index";
 import ProjectOverview from "./pages/ProjectOverview";
 import Products from "./pages/Products";
@@ -51,11 +59,13 @@ function AppProviders({ children }: { children: React.ReactNode }) {
             <PurchaseOrdersProvider>
               <TransportProvider>
                 <ProjectProductsProvider>
-                  <TooltipProvider>
-                    <Toaster />
-                    <Sonner />
-                    {children}
-                  </TooltipProvider>
+                  <PurchasingProvider>
+                    <TooltipProvider>
+                      <Toaster />
+                      <Sonner />
+                      {children}
+                    </TooltipProvider>
+                  </PurchasingProvider>
                 </ProjectProductsProvider>
               </TransportProvider>
             </PurchaseOrdersProvider>
@@ -65,6 +75,12 @@ function AppProviders({ children }: { children: React.ReactNode }) {
     </ProjectProvider>
   );
 }
+
+// Legacy redirect helpers — gamle /price-requests-ruter sender til /purchasing.
+const PriceRequestDetailRedirect = () => {
+  const { id } = useParams<{ id: string }>();
+  return <Navigate to={id ? `/purchasing/rfq/${id}` : "/purchasing"} replace />;
+};
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
@@ -101,6 +117,17 @@ const App = () => (
           <Route path="/project/price-requests/new" element={<ProtectedRoute><AppProviders><PriceRequestForm /></AppProviders></ProtectedRoute>} />
           <Route path="/project/price-requests/:id" element={<ProtectedRoute><AppProviders><PriceRequestDetail /></AppProviders></ProtectedRoute>} />
           <Route path="/project/price-requests/:id/edit" element={<ProtectedRoute><AppProviders><PriceRequestForm /></AppProviders></ProtectedRoute>} />
+
+          {/* Purchasing (RFQ) — Fase 4 wiring */}
+          <Route path="/purchasing" element={<ProtectedRoute><AppProviders><PurchasingOverview /></AppProviders></ProtectedRoute>} />
+          <Route path="/purchasing/rfq/new" element={<ProtectedRoute><AppProviders><RFQCreate /></AppProviders></ProtectedRoute>} />
+          <Route path="/purchasing/rfq/:rfqId/compare" element={<ProtectedRoute><AppProviders><RFQCompare /></AppProviders></ProtectedRoute>} />
+          <Route path="/purchasing/rfq/:rfqId" element={<ProtectedRoute><AppProviders><RFQDetail /></AppProviders></ProtectedRoute>} />
+          <Route path="/purchasing/review" element={<ProtectedRoute><AppProviders><QuoteReviewQueue /></AppProviders></ProtectedRoute>} />
+
+          {/* Legacy /price-requests redirects (top-level jf. plan §5.1) */}
+          <Route path="/price-requests" element={<Navigate to="/purchasing" replace />} />
+          <Route path="/price-requests/:id" element={<PriceRequestDetailRedirect />} />
           <Route path="/standard/suppliers" element={<ProtectedRoute><AppProviders><StandardSuppliers /></AppProviders></ProtectedRoute>} />
           <Route path="/standard/materials" element={<ProtectedRoute><AppProviders><StandardMaterials /></AppProviders></ProtectedRoute>} />
           <Route path="/standard/materials/:id" element={<ProtectedRoute><AppProviders><MaterialDetail /></AppProviders></ProtectedRoute>} />
