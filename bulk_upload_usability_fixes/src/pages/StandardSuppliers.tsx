@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import Layout from '@/components/Layout';
 import { useStandardSuppliers, StandardSupplier } from '@/contexts/StandardSuppliersContext';
+import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -214,19 +216,62 @@ const SupplierForm: React.FC<{
   );
 };
 
+interface SupplierStats {
+  quote_count: number;
+  rfq_count: number;
+  selected_quote_count: number;
+  last_contact_at: string | null;
+}
+
 const StandardSuppliers = () => {
-  const { 
-    suppliers, 
-    addSupplier, 
-    updateSupplier, 
-    archiveSupplier 
+  const {
+    suppliers,
+    addSupplier,
+    updateSupplier,
+    archiveSupplier
   } = useStandardSuppliers();
   const { toast } = useToast();
-  
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('Aktiv');
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<StandardSupplier | null>(null);
+  const [stats, setStats] = useState<Record<string, SupplierStats>>({});
+
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (!editId) return;
+    const match = suppliers.find((s: StandardSupplier) => s.id === editId);
+    if (match) {
+      setEditingSupplier(match);
+      const next = new URLSearchParams(searchParams);
+      next.delete('edit');
+      setSearchParams(next, { replace: true });
+    }
+  }, [searchParams, suppliers, setSearchParams]);
+
+  useEffect(() => {
+    const loadStats = async () => {
+      const { data, error } = await supabase
+        .from('v_supplier_quote_stats_2026_04_23')
+        .select('*');
+      if (!error && data) {
+        const map: Record<string, SupplierStats> = {};
+        data.forEach((row: any) => {
+          map[row.supplier_id] = {
+            quote_count: Number(row.quote_count) || 0,
+            rfq_count: Number(row.rfq_count) || 0,
+            selected_quote_count: Number(row.selected_quote_count) || 0,
+            last_contact_at: row.last_contact_at,
+          };
+        });
+        setStats(map);
+      }
+    };
+    loadStats();
+  }, []);
 
   const filteredSuppliers = suppliers.filter(supplier => {
     const matchesSearch = supplier.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -391,60 +436,84 @@ const StandardSuppliers = () => {
                   <TableHead>CVR</TableHead>
                   <TableHead>Kontaktperson</TableHead>
                   <TableHead>Email</TableHead>
-                  <TableHead>Telefon</TableHead>
+                  <TableHead className="text-right">Tilbud</TableHead>
+                  <TableHead className="text-right">RFQ'er</TableHead>
+                  <TableHead>Sidste kontakt</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Sidst opdateret</TableHead>
                   <TableHead className="w-24">Handlinger</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredSuppliers.map((supplier) => (
-                  <TableRow 
-                    key={supplier.id}
-                    className="cursor-pointer hover:bg-muted/50"
-                    onClick={() => setEditingSupplier(supplier)}
-                  >
-                    <TableCell className="font-medium">
-                      {supplier.name}
-                    </TableCell>
-                    <TableCell>{supplier.cvr || '-'}</TableCell>
-                    <TableCell>{supplier.contactPerson || '-'}</TableCell>
-                    <TableCell>{supplier.email || '-'}</TableCell>
-                    <TableCell>{supplier.phone || '-'}</TableCell>
-                    <TableCell>
-                      <Badge className={getStatusColor(supplier.status)}>
-                        {supplier.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {supplier.updatedAt.toLocaleDateString('da-DK')}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditingSupplier(supplier);
-                          }}
-                        >
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleArchiveSupplier(supplier);
-                          }}
-                        >
-                          <Archive className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {filteredSuppliers.map((supplier) => {
+                  const s = stats[supplier.id];
+                  const quoteCount = s?.quote_count ?? 0;
+                  const rfqCount = s?.rfq_count ?? 0;
+                  const selectedCount = s?.selected_quote_count ?? 0;
+                  const lastContact = s?.last_contact_at
+                    ? new Date(s.last_contact_at).toLocaleDateString('da-DK')
+                    : '-';
+                  return (
+                    <TableRow
+                      key={supplier.id}
+                      className="cursor-pointer hover:bg-muted/50"
+                      onClick={() => navigate(`/standard/suppliers/${supplier.id}`)}
+                    >
+                      <TableCell className="font-medium text-primary hover:underline">
+                        {supplier.name}
+                      </TableCell>
+                      <TableCell>{supplier.cvr || '-'}</TableCell>
+                      <TableCell>{supplier.contactPerson || '-'}</TableCell>
+                      <TableCell>{supplier.email || '-'}</TableCell>
+                      <TableCell className="text-right">
+                        {quoteCount > 0 ? (
+                          <span>
+                            {quoteCount}
+                            {selectedCount > 0 && (
+                              <span className="text-xs text-green-700 ml-1">
+                                ({selectedCount} valgt)
+                              </span>
+                            )}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {rfqCount > 0 ? rfqCount : <span className="text-muted-foreground">-</span>}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">{lastContact}</TableCell>
+                      <TableCell>
+                        <Badge className={getStatusColor(supplier.status)}>
+                          {supplier.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e: React.MouseEvent) => {
+                              e.stopPropagation();
+                              setEditingSupplier(supplier);
+                            }}
+                          >
+                            <Edit className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e: React.MouseEvent) => {
+                              e.stopPropagation();
+                              handleArchiveSupplier(supplier);
+                            }}
+                          >
+                            <Archive className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
             

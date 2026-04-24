@@ -1,6 +1,7 @@
 import React from 'react';
 import { useProject } from '@/contexts/ProjectContext';
 import { useQuoteReview } from '@/features/purchasing';
+import { useLeads } from '@/features/leads';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -18,22 +19,37 @@ import {
   ShoppingCart,
   Settings,
   Database,
-  DollarSign
+  DollarSign,
+  Inbox
 } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
 const Sidebar = () => {
   const { activeProject } = useProject();
   const { count: reviewCount } = useQuoteReview();
+  const { overdueCount } = useLeads();
   const navigate = useNavigate();
   const location = useLocation();
 
   const isActive = (path: string) => location.pathname === path;
 
-  const mainMenuItems = [
-    { 
-      label: 'Projekter', 
-      icon: FolderOpen, 
+  const mainMenuItems: Array<{
+    label: string;
+    icon: any;
+    path: string;
+    active: boolean;
+    badge?: number;
+  }> = [
+    {
+      label: 'Leads',
+      icon: Inbox,
+      path: '/leads',
+      active: isActive('/leads') || location.pathname.startsWith('/leads/'),
+      badge: overdueCount > 0 ? overdueCount : undefined,
+    },
+    {
+      label: 'Projekter',
+      icon: FolderOpen,
       path: '/',
       active: isActive('/')
     },
@@ -143,9 +159,18 @@ const Sidebar = () => {
                 item.active && "bg-primary text-primary-foreground"
               )}
               onClick={() => navigate(item.path)}
+              title={item.badge ? `${item.badge} forfaldne aktiviteter` : undefined}
             >
               <item.icon className="h-4 w-4" />
-              {item.label}
+              <span className="flex-1 text-left">{item.label}</span>
+              {item.badge ? (
+                <Badge
+                  variant="secondary"
+                  className="h-5 min-w-5 px-1.5 text-xs bg-red-100 text-red-800 border-red-200"
+                >
+                  {item.badge}
+                </Badge>
+              ) : null}
             </Button>
           ))}
         </div>

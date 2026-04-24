@@ -64,43 +64,17 @@ const fmt = (n: number) =>
   new Intl.NumberFormat('da-DK', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n) + ' kr.';
 
 // ─── Quote total calculation ──────────────────────────────────────────────────
+// Bruger shared helper fra @/lib/quotePricing for at undgå duplikeret logik.
+import { calculateLine, pricingFromLine, type CostItem } from '@/lib/quotePricing';
 
-function calcSellingPrice(items: any[], quantity: number, pricing: any): number {
-  if (!quantity) return 0;
-  const cb = items.reduce((acc: any, item: any) => {
-    const c = item.cost_breakdown_json || {};
-    const q = parseFloat(item.qty) || 0;
-    return {
-      materials:          acc.materials          + (c.materials || 0) * q,
-      material_transport: acc.material_transport + (c.material_transport || 0) * q,
-      product_transport:  acc.product_transport  + ((c.product_transport || c.transport) || 0) * q,
-      labor_production:   acc.labor_production   + (c.labor_production || 0) * q,
-      labor_dk:           acc.labor_dk           + (c.labor_dk || 0) * q,
-      other:              acc.other              + (c.other || 0) * q,
-    };
-  }, { materials: 0, material_transport: 0, product_transport: 0, labor_production: 0, labor_dk: 0, other: 0 });
-
-  const pu: Record<string, number> = {};
-  Object.keys(cb).forEach(k => { pu[k] = cb[k] / quantity; });
-  const base = Object.values(pu).reduce((s: number, v: any) => s + v, 0);
-  const risk = parseFloat(pricing?.risk_per_unit || 0);
-  const cost = base + risk;
-
-  if (!pricing) return cost * quantity;
-  switch (pricing.pricing_mode) {
-    case 'markup_pct':       return pricing.markup_pct       ? cost * (1 + pricing.markup_pct / 100) * quantity : cost * quantity;
-    case 'gross_margin_pct': return pricing.gross_margin_pct ? cost / (1 - pricing.gross_margin_pct / 100) * quantity : cost * quantity;
-    case 'target_unit_price':return pricing.target_unit_price ? parseFloat(pricing.target_unit_price) * quantity : cost * quantity;
-    case 'profit_by_category': {
-      if (!pricing.profit_by_category_json) return cost * quantity;
-      let total = 0;
-      ['materials','material_transport','product_transport','labor_production','labor_dk','other'].forEach(k => {
-        total += (pu[k] || 0) * (1 + (pricing.profit_by_category_json[k] || 0) / 100);
-      });
-      return total * quantity;
-    }
-    default: return cost * quantity;
-  }
+function calcSellingPrice(items: any[], quantity: number, pricingOrLineRow: any): number {
+  const costItems: CostItem[] = (items || []).map((it) => ({
+    qty: parseFloat(it.qty) || 0,
+    cost_total_per_unit: it.cost_total_per_unit != null ? parseFloat(it.cost_total_per_unit) : null,
+    cost_breakdown_json: it.cost_breakdown_json,
+  }));
+  const pricing = pricingFromLine(pricingOrLineRow);
+  return calculateLine(costItems, quantity, pricing).totalSellingPrice;
 }
 
 // ─── Edit form ────────────────────────────────────────────────────────────────
@@ -471,19 +445,20 @@ export default function Dashboard() {
       let quoteSums: Record<string, number> = {};
 
       if (quoteIds.length > 0) {
+        // Pricing er nu kolonner direkte på line (merged fra gammel pricing-tabel)
         const { data: linesData } = await supabase
           .from('project_quote_lines_2026_01_16_23_00')
           .select(`id, project_quote_id, quantity,
-            project_quote_line_pricing_2026_01_16_23_00(pricing_mode,markup_pct,gross_margin_pct,target_unit_price,risk_per_unit,profit_by_category_json),
-            project_quote_line_items_2026_01_16_23_00(qty,cost_breakdown_json)`)
+            pricing_mode, markup_pct, target_unit_price, risk_per_unit,
+            project_quote_line_items_2026_01_16_23_00(qty,cost_breakdown_json,cost_total_per_unit)`)
           .in('project_quote_id', quoteIds)
           .neq('archived', true);
 
         (linesData || []).forEach(line => {
-          const qty = parseFloat(line.quantity) || 0;
-          const pricing = (line.project_quote_line_pricing_2026_01_16_23_00 as any[])?.[0] || null;
-          const items   = (line.project_quote_line_items_2026_01_16_23_00 as any[]) || [];
-          quoteSums[line.project_quote_id] = (quoteSums[line.project_quote_id] || 0) + calcSellingPrice(items, qty, pricing);
+          const qty = parseFloat((line as any).quantity) || 0;
+          const items = ((line as any).project_quote_line_items_2026_01_16_23_00 as any[]) || [];
+          quoteSums[(line as any).project_quote_id] =
+            (quoteSums[(line as any).project_quote_id] || 0) + calcSellingPrice(items, qty, line);
         });
       }
 
@@ -607,12 +582,22 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Stat rows */}
-      <div className="space-y-2">
-        <StatRow label="Kladder"    count={globalDraft.count}    sum={globalDraft.sum}    color="border-gray-400" />
-        <StatRow label="Sendt"      count={globalSent.count}     sum={globalSent.sum}     color="border-blue-400" />
-        <StatRow label="Accepteret" count={globalAccepted.count} sum={globalAccepted.sum} color="border-green-500" />
-        <StatRow label="Afvist"     count={globalRejected.count}                          color="border-red-400" />
+      {/* Stat rows + running total */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-3">
+        <div className="space-y-2">
+          <StatRow label="Kladder"    count={globalDraft.count}    sum={globalDraft.sum}    color="border-gray-400" />
+          <StatRow label="Sendt"      count={globalSent.count}     sum={globalSent.sum}     color="border-blue-400" />
+          <StatRow label="Accepteret" count={globalAccepted.count} sum={globalAccepted.sum} color="border-green-500" />
+          <StatRow label="Afvist"     count={globalRejected.count}                          color="border-red-400" />
+        </div>
+        <div className="rounded-lg border bg-white px-5 py-4 flex flex-col justify-center">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Running total</span>
+          <div className="text-3xl font-bold mt-1">{fmt(globalDraft.sum + globalSent.sum + globalAccepted.sum)}</div>
+          <div className="text-xs text-muted-foreground mt-3 space-y-1">
+            <div className="flex justify-between"><span>Pipeline</span><span className="font-medium">{fmt(globalDraft.sum + globalSent.sum)}</span></div>
+            <div className="flex justify-between"><span>Vundet</span><span className="font-medium text-green-700">{fmt(globalAccepted.sum)}</span></div>
+          </div>
+        </div>
       </div>
 
       {/* Card view */}

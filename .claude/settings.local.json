@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__42a06d77-49a0-4976-9587-5bca49cd4f58__list_projects",
+      "mcp__42a06d77-49a0-4976-9587-5bca49cd4f58__list_tables",
+      "mcp__42a06d77-49a0-4976-9587-5bca49cd4f58__execute_sql"
+    ]
+  }
+}

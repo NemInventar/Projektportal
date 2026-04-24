@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
+import { calculateLine, pricingFromLine } from '@/lib/quotePricing';
 import Layout from '@/components/Layout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -305,17 +306,18 @@ const ProjectQuotes = () => {
     }
   }, [activeProject]);
 
-  // Beregn tilbudstotaler
+  // Beregn tilbudstotaler via shared helper fra @/lib/quotePricing
   const calculateQuoteTotals = async (quoteId: string) => {
     try {
       const { data: linesData, error } = await supabase
         .from('project_quote_lines_2026_01_16_23_00')
         .select(`
-          *,
-          project_quote_line_pricing_2026_01_16_23_00(*),
-          project_quote_line_items_2026_01_16_23_00(*)
+          id, quantity, archived,
+          pricing_mode, markup_pct, target_unit_price, risk_per_unit,
+          project_quote_line_items_2026_01_16_23_00(qty,cost_breakdown_json,cost_total_per_unit)
         `)
-        .eq('project_quote_id', quoteId);
+        .eq('project_quote_id', quoteId)
+        .neq('archived', true);
 
       if (error || !linesData) {
         return { totalSellingPrice: 0, totalCost: 0, totalProfit: 0, dbPercent: 0 };
@@ -324,51 +326,15 @@ const ProjectQuotes = () => {
       let totalSellingPrice = 0;
       let totalCost = 0;
 
-      linesData.forEach(line => {
-        const quantity = parseFloat(line.quantity);
-        
-        // Beregn cost fra items
-        const lineCost = (line.project_quote_line_items_2026_01_16_23_00 || []).reduce((sum, item) => {
-          const itemCost = item.cost_breakdown_json || {};
-          const itemTotalCost = (itemCost.materials || 0) + 
-            (itemCost.material_transport || 0) + 
-            (itemCost.product_transport || itemCost.transport || 0) + 
-            (itemCost.labor_production || 0) + 
-            (itemCost.labor_dk || 0) + 
-            (itemCost.other || 0);
-          return sum + (itemTotalCost * (item.qty || 0));
-        }, 0);
-
-        const costPerUnit = lineCost / quantity;
-        const riskPerUnit = line.project_quote_line_pricing_2026_01_16_23_00?.[0]?.risk_per_unit || 0;
-        const totalCostPerUnit = costPerUnit + riskPerUnit;
-        
-        // Beregn salgspris baseret på pricing mode
-        let sellingPricePerUnit = totalCostPerUnit;
-        const pricing = line.project_quote_line_pricing_2026_01_16_23_00?.[0];
-        
-        if (pricing) {
-          switch (pricing.pricing_mode) {
-            case 'markup_pct':
-              if (pricing.markup_pct) {
-                sellingPricePerUnit = totalCostPerUnit * (1 + pricing.markup_pct / 100);
-              }
-              break;
-            case 'gross_margin_pct':
-              if (pricing.gross_margin_pct) {
-                sellingPricePerUnit = totalCostPerUnit / (1 - pricing.gross_margin_pct / 100);
-              }
-              break;
-            case 'target_unit_price':
-              if (pricing.target_unit_price) {
-                sellingPricePerUnit = pricing.target_unit_price;
-              }
-              break;
-          }
-        }
-
-        totalSellingPrice += sellingPricePerUnit * quantity;
-        totalCost += totalCostPerUnit * quantity;
+      linesData.forEach((line: any) => {
+        const items = (line.project_quote_line_items_2026_01_16_23_00 || []).map((it: any) => ({
+          qty: parseFloat(it.qty) || 0,
+          cost_total_per_unit: it.cost_total_per_unit != null ? parseFloat(it.cost_total_per_unit) : null,
+          cost_breakdown_json: it.cost_breakdown_json,
+        }));
+        const t = calculateLine(items, parseFloat(line.quantity) || 0, pricingFromLine(line));
+        totalSellingPrice += t.totalSellingPrice;
+        totalCost += t.totalCost;
       });
 
       const totalProfit = totalSellingPrice - totalCost;

@@ -21,6 +21,7 @@ import {
   RFQCompare,
   QuoteReviewQueue,
 } from "@/features/purchasing";
+import { LeadsProvider, LeadsInbox, LeadDetail } from "@/features/leads";
 import Index from "./pages/Index";
 import ProjectOverview from "./pages/ProjectOverview";
 import Products from "./pages/Products";
@@ -40,6 +41,7 @@ import BOM from "./pages/BOM";
 import PurchaseOrders from "./pages/PurchaseOrders";
 import PurchaseOrderDetail from "./pages/PurchaseOrderDetail";
 import StandardSuppliers from "./pages/StandardSuppliers";
+import StandardSupplierDetail from "./pages/StandardSupplierDetail";
 import StandardMaterials from "./pages/StandardMaterials";
 import MaterialDetail from "./pages/MaterialDetail";
 import ProjectMaterials from "./pages/ProjectMaterials";
@@ -60,11 +62,13 @@ function AppProviders({ children }: { children: React.ReactNode }) {
               <TransportProvider>
                 <ProjectProductsProvider>
                   <PurchasingProvider>
+                    <LeadsProvider>
                     <TooltipProvider>
                       <Toaster />
                       <Sonner />
                       {children}
                     </TooltipProvider>
+                    </LeadsProvider>
                   </PurchasingProvider>
                 </ProjectProductsProvider>
               </TransportProvider>
@@ -118,6 +122,10 @@ const App = () => (
           <Route path="/project/price-requests/:id" element={<ProtectedRoute><AppProviders><PriceRequestDetail /></AppProviders></ProtectedRoute>} />
           <Route path="/project/price-requests/:id/edit" element={<ProtectedRoute><AppProviders><PriceRequestForm /></AppProviders></ProtectedRoute>} />
 
+          {/* Leads (CRM) */}
+          <Route path="/leads" element={<ProtectedRoute><AppProviders><LeadsInbox /></AppProviders></ProtectedRoute>} />
+          <Route path="/leads/:dealId" element={<ProtectedRoute><AppProviders><LeadDetail /></AppProviders></ProtectedRoute>} />
+
           {/* Purchasing (RFQ) — Fase 4 wiring */}
           <Route path="/purchasing" element={<ProtectedRoute><AppProviders><PurchasingOverview /></AppProviders></ProtectedRoute>} />
           <Route path="/purchasing/rfq/new" element={<ProtectedRoute><AppProviders><RFQCreate /></AppProviders></ProtectedRoute>} />
@@ -129,6 +137,7 @@ const App = () => (
           <Route path="/price-requests" element={<Navigate to="/purchasing" replace />} />
           <Route path="/price-requests/:id" element={<PriceRequestDetailRedirect />} />
           <Route path="/standard/suppliers" element={<ProtectedRoute><AppProviders><StandardSuppliers /></AppProviders></ProtectedRoute>} />
+          <Route path="/standard/suppliers/:id" element={<ProtectedRoute><AppProviders><StandardSupplierDetail /></AppProviders></ProtectedRoute>} />
           <Route path="/standard/materials" element={<ProtectedRoute><AppProviders><StandardMaterials /></AppProviders></ProtectedRoute>} />
           <Route path="/standard/materials/:id" element={<ProtectedRoute><AppProviders><MaterialDetail /></AppProviders></ProtectedRoute>} />
           <Route path="/test/:id?" element={<ProtectedRoute><AppProviders><TestPage /></AppProviders></ProtectedRoute>} />

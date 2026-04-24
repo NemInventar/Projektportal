@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { pdf } from '@react-pdf/renderer';
 import { QuotePDF } from '@/components/QuotePDF';
 import { supabase } from '@/integrations/supabase/client';
+import { calculateLine } from '@/lib/quotePricing';
 import Layout from '@/components/Layout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -260,12 +261,11 @@ const ProjectQuoteDetail = () => {
       if (quoteError) throw quoteError;
       setQuote(quoteData);
 
-      // Load quote lines with pricing and items
+      // Pricing er nu kolonner direkte på line — ingen separat pricing-tabel-join
       const { data: linesData, error: linesError } = await supabase
         .from('project_quote_lines_2026_01_16_23_00')
         .select(`
           *,
-          project_quote_line_pricing_2026_01_16_23_00(*),
           project_quote_line_items_2026_01_16_23_00(*)
         `)
         .eq('project_quote_id', id)
@@ -276,17 +276,14 @@ const ProjectQuoteDetail = () => {
       if (linesError) throw linesError;
 
       if (linesData) {
-        // Tildel automatisk display_order til linjer der mangler det
         const hasUpdatedOrders = await assignMissingDisplayOrders(linesData);
-        
-        // Hvis vi opdaterede display_order, genindlæs data
+
         let finalLinesData = linesData;
         if (hasUpdatedOrders) {
           const { data: refreshedData } = await supabase
             .from('project_quote_lines_2026_01_16_23_00')
             .select(`
               *,
-              project_quote_line_pricing_2026_01_16_23_00(*),
               project_quote_line_items_2026_01_16_23_00(*)
             `)
             .eq('project_quote_id', id)
@@ -295,8 +292,9 @@ const ProjectQuoteDetail = () => {
             .order('created_at');
           finalLinesData = refreshedData || linesData;
         }
-        
-        const formattedLines = finalLinesData.map(line => ({
+
+        const formattedLines = finalLinesData.map((line: any) => {
+          return {
           id: line.id,
           title: line.title,
           description: line.description,
@@ -305,14 +303,14 @@ const ProjectQuoteDetail = () => {
           sortOrder: line.sort_order,
           displayOrder: line.display_order,
           createdAt: line.created_at,
-          pricing: line.project_quote_line_pricing_2026_01_16_23_00?.[0] ? {
-            pricingMode: line.project_quote_line_pricing_2026_01_16_23_00[0].pricing_mode,
-            markupPct: line.project_quote_line_pricing_2026_01_16_23_00[0].markup_pct,
-            grossMarginPct: line.project_quote_line_pricing_2026_01_16_23_00[0].gross_margin_pct,
-            targetUnitPrice: line.project_quote_line_pricing_2026_01_16_23_00[0].target_unit_price,
-            riskPerUnit: parseFloat(line.project_quote_line_pricing_2026_01_16_23_00[0].risk_per_unit || 0),
-            profitByCategory: line.project_quote_line_pricing_2026_01_16_23_00[0].profit_by_category_json || {}
-          } : undefined,
+          pricing: {
+            pricingMode: (line.pricing_mode === 'target_unit_price' ? 'target_unit_price' : 'markup_pct'),
+            markupPct: line.markup_pct != null ? parseFloat(line.markup_pct) : 25,
+            grossMarginPct: null, // Deprecated — bevares i type for kompatibilitet men altid null
+            targetUnitPrice: line.target_unit_price != null ? parseFloat(line.target_unit_price) : null,
+            riskPerUnit: line.risk_per_unit != null ? parseFloat(line.risk_per_unit) : 0,
+            profitByCategory: {}, // Deprecated — bevares i type
+          },
           items: line.project_quote_line_items_2026_01_16_23_00?.map((item: any) => ({
             id: item.id,
             sourceType: item.source_type,
@@ -323,7 +321,8 @@ const ProjectQuoteDetail = () => {
             costBreakdown: item.cost_breakdown_json || { materials: 0, transport: 0, labor_production: 0, labor_dk: 0, other: 0 },
             costTotalPerUnit: parseFloat(item.cost_total_per_unit || 0)
           })) || []
-        }));
+          };
+        });
         setLines(formattedLines);
       }
       
@@ -772,19 +771,15 @@ const ProjectQuoteDetail = () => {
   };
 
   const calculateLineTotals = (line: QuoteLine) => {
-    // Calculate total cost breakdown from all items in the line
+    // Calculate cost breakdown per unit (til visning + % af salgspris i UI)
     const totalCostBreakdown = line.items.reduce((acc, item) => {
-      // Standardiseret cost_breakdown_json struktur - ignorer gamle keys
       const itemCost = item.costBreakdown || { materials: 0, material_transport: 0, product_transport: 0, labor_production: 0, labor_dk: 0, other: 0 };
-      
-      // Backward compatibility - hvis gamle struktur findes
       const materials = itemCost.materials || 0;
       const materialTransport = itemCost.material_transport || 0;
-      const productTransport = itemCost.product_transport || itemCost.transport || 0; // Fallback til gamle transport key
+      const productTransport = itemCost.product_transport || itemCost.transport || 0;
       const laborProduction = itemCost.labor_production || 0;
       const laborDk = itemCost.labor_dk || 0;
       const other = itemCost.other || 0;
-      
       return {
         materials: acc.materials + (materials * item.qty),
         material_transport: acc.material_transport + (materialTransport * item.qty),
@@ -794,64 +789,36 @@ const ProjectQuoteDetail = () => {
         other: acc.other + (other * item.qty)
       };
     }, { materials: 0, material_transport: 0, product_transport: 0, labor_production: 0, labor_dk: 0, other: 0 });
-    
-    // Convert to per unit costs med standardiseret struktur
-    const costBreakdownPerUnit = {
+
+    const costBreakdownPerUnit = line.quantity > 0 ? {
       materials: totalCostBreakdown.materials / line.quantity,
       material_transport: totalCostBreakdown.material_transport / line.quantity,
       product_transport: totalCostBreakdown.product_transport / line.quantity,
       labor_production: totalCostBreakdown.labor_production / line.quantity,
       labor_dk: totalCostBreakdown.labor_dk / line.quantity,
       other: totalCostBreakdown.other / line.quantity
-    };
-    
-    const baseCostPerUnit = Object.values(costBreakdownPerUnit).reduce((sum, cost) => sum + cost, 0);
-    
-    // Add risk
-    const riskPerUnit = line.pricing?.riskPerUnit || 0;
-    const totalCostPerUnit = baseCostPerUnit + riskPerUnit;
-    
-    // Calculate selling price based on pricing mode
-    let sellingPricePerUnit = totalCostPerUnit;
-    
-    if (line.pricing) {
-      switch (line.pricing.pricingMode) {
-        case 'markup_pct':
-          if (line.pricing.markupPct) {
-            sellingPricePerUnit = totalCostPerUnit * (1 + line.pricing.markupPct / 100);
-          }
-          break;
-        case 'gross_margin_pct':
-          if (line.pricing.grossMarginPct) {
-            sellingPricePerUnit = totalCostPerUnit / (1 - line.pricing.grossMarginPct / 100);
-          }
-          break;
-        case 'target_unit_price':
-          if (line.pricing.targetUnitPrice) {
-            sellingPricePerUnit = line.pricing.targetUnitPrice;
-          }
-          break;
-        case 'profit_by_category':
-          if (line.pricing.profitByCategory) {
-            // Beregn salgspris baseret på profit pr. kategori
-            let totalSellPrice = 0;
-            const categories = ['materials', 'material_transport', 'product_transport', 'labor_production', 'labor_dk', 'other'];
-            
-            categories.forEach(category => {
-              const costForCategory = costBreakdownPerUnit[category] || 0;
-              const profitPct = line.pricing.profitByCategory[category] || 0;
-              const sellPriceForCategory = costForCategory * (1 + profitPct / 100);
-              totalSellPrice += sellPriceForCategory;
-            });
-            
-            sellingPricePerUnit = totalSellPrice;
-          }
-          break;
-      }
-    }
-    
-    const profitPerUnit = sellingPricePerUnit - totalCostPerUnit;
-    const dbPercent = totalCostPerUnit > 0 ? (profitPerUnit / sellingPricePerUnit) * 100 : 0;
+    } : { materials: 0, material_transport: 0, product_transport: 0, labor_production: 0, labor_dk: 0, other: 0 };
+
+    // Delegér sell/cost/profit-beregning til shared helper for konsistens med lister + dashboard
+    const sharedItems = line.items.map(it => ({
+      qty: it.qty,
+      cost_total_per_unit: it.costTotalPerUnit ?? null,
+      cost_breakdown_json: it.costBreakdown,
+    }));
+    const sharedPricing = line.pricing ? {
+      pricing_mode: (line.pricing.pricingMode === 'target_unit_price' ? 'target_unit_price' : 'markup_pct') as 'markup_pct' | 'target_unit_price',
+      markup_pct: line.pricing.markupPct ?? 25,
+      target_unit_price: line.pricing.targetUnitPrice ?? null,
+      risk_per_unit: line.pricing.riskPerUnit ?? 0,
+    } : null;
+    const t = calculateLine(sharedItems, line.quantity, sharedPricing);
+
+    const baseCostPerUnit = t.costPerUnit;
+    const riskPerUnit = t.riskPerUnit;
+    const totalCostPerUnit = t.totalCostPerUnit;
+    const sellingPricePerUnit = t.sellingPricePerUnit;
+    const profitPerUnit = t.sellingPricePerUnit - t.totalCostPerUnit;
+    const dbPercent = t.dbPercent;
     
     return {
       baseCostPerUnit,
@@ -888,9 +855,9 @@ const ProjectQuoteDetail = () => {
     }
 
     try {
-      // Find the highest display_order for new line positioning
       const maxDisplayOrder = Math.max(...lines.map(l => l.displayOrder || 0), 0);
-      
+
+      // Pricing er nu defaults på line-kolonner (markup_pct=25, risk_per_unit=0 automatisk via schema)
       const lineData = {
         project_quote_id: quote.id,
         title: lineFormData.title,
@@ -901,27 +868,11 @@ const ProjectQuoteDetail = () => {
         display_order: maxDisplayOrder + 1
       };
 
-      const { data: newLine, error: lineError } = await supabase
+      const { error: lineError } = await supabase
         .from('project_quote_lines_2026_01_16_23_00')
-        .insert(lineData)
-        .select()
-        .single();
+        .insert(lineData);
 
       if (lineError) throw lineError;
-
-      // Create default pricing
-      const pricingData = {
-        project_quote_line_id: newLine.id,
-        pricing_mode: 'markup_pct',
-        markup_pct: 25,
-        risk_per_unit: 0
-      };
-
-      const { error: pricingError } = await supabase
-        .from('project_quote_line_pricing_2026_01_16_23_00')
-        .insert(pricingData);
-
-      if (pricingError) throw pricingError;
 
       toast({
         title: "Linje tilføjet",
@@ -942,8 +893,11 @@ const ProjectQuoteDetail = () => {
   };
 
   const handleUpdatePricing = async (lineId: string) => {
-    // Validering af pricing inputs
-    if (pricingFormData.pricingMode === 'markup_pct' && (pricingFormData.markupPct < 0 || pricingFormData.markupPct > 1000)) {
+    // V2: Kun 2 modes — markup_pct (default) og target_unit_price (fast pris)
+    // gross_margin_pct og profit_by_category er fjernet
+    const mode = pricingFormData.pricingMode === 'target_unit_price' ? 'target_unit_price' : 'markup_pct';
+
+    if (mode === 'markup_pct' && (pricingFormData.markupPct < 0 || pricingFormData.markupPct > 1000)) {
       toast({
         title: "Ugyldig markup",
         description: "Markup skal være mellem 0% og 1000%",
@@ -951,17 +905,8 @@ const ProjectQuoteDetail = () => {
       });
       return;
     }
-    
-    if (pricingFormData.pricingMode === 'gross_margin_pct' && (pricingFormData.grossMarginPct < 0 || pricingFormData.grossMarginPct >= 100)) {
-      toast({
-        title: "Ugyldig DB%",
-        description: "DB% skal være mellem 0% og 99%",
-        variant: "destructive",
-      });
-      return;
-    }
-    
-    if (pricingFormData.pricingMode === 'target_unit_price' && pricingFormData.targetUnitPrice <= 0) {
+
+    if (mode === 'target_unit_price' && pricingFormData.targetUnitPrice <= 0) {
       toast({
         title: "Ugyldig salgspris",
         description: "Salgspris skal være større end 0",
@@ -969,7 +914,7 @@ const ProjectQuoteDetail = () => {
       });
       return;
     }
-    
+
     if (pricingFormData.riskPerUnit < 0) {
       toast({
         title: "Ugyldig risk",
@@ -981,18 +926,23 @@ const ProjectQuoteDetail = () => {
 
     setSavingPricing(true);
     try {
-      const updateData = {
-        pricing_mode: pricingFormData.pricingMode,
-        markup_pct: pricingFormData.pricingMode === 'markup_pct' ? pricingFormData.markupPct : null,
-        gross_margin_pct: pricingFormData.pricingMode === 'gross_margin_pct' ? pricingFormData.grossMarginPct : null,
-        target_unit_price: pricingFormData.pricingMode === 'target_unit_price' ? pricingFormData.targetUnitPrice : null,
-        risk_per_unit: pricingFormData.riskPerUnit
+      // Pricing er nu kolonner direkte på line — simple UPDATE
+      const updateData: any = {
+        pricing_mode: mode,
+        risk_per_unit: pricingFormData.riskPerUnit,
       };
+      if (mode === 'markup_pct') {
+        updateData.markup_pct = pricingFormData.markupPct;
+        // target_unit_price bevares men bruges ikke i denne mode
+      } else {
+        updateData.target_unit_price = pricingFormData.targetUnitPrice;
+        // markup_pct bevares men bruges ikke i denne mode
+      }
 
       const { error } = await supabase
-        .from('project_quote_line_pricing_2026_01_16_23_00')
+        .from('project_quote_lines_2026_01_16_23_00')
         .update(updateData)
-        .eq('project_quote_line_id', lineId);
+        .eq('id', lineId);
 
       if (error) throw error;
 
@@ -1476,6 +1426,9 @@ const ProjectQuoteDetail = () => {
   };
 
   const startEditPricing = (line: QuoteLine) => {
+    // Hvis pricing mangler (fx linje oprettet via AI uden default pricing),
+    // initialiser form med husets default (markup 25%) så brugeren kan gemme
+    // og få en pricing-række oprettet via upsert.
     if (line.pricing) {
       setPricingFormData({
         pricingMode: line.pricing.pricingMode,
@@ -1484,6 +1437,22 @@ const ProjectQuoteDetail = () => {
         targetUnitPrice: line.pricing.targetUnitPrice || 0,
         riskPerUnit: line.pricing.riskPerUnit,
         profitByCategory: line.pricing.profitByCategory || {
+          materials: 30,
+          material_transport: 30,
+          product_transport: 30,
+          labor_production: 30,
+          labor_dk: 30,
+          other: 30
+        }
+      });
+    } else {
+      setPricingFormData({
+        pricingMode: 'markup_pct',
+        markupPct: 25,
+        grossMarginPct: 20,
+        targetUnitPrice: 0,
+        riskPerUnit: 0,
+        profitByCategory: {
           materials: 30,
           material_transport: 30,
           product_transport: 30,
@@ -2708,11 +2677,8 @@ const ProjectQuoteDetail = () => {
                               <tr className="border-t bg-blue-50">
                                 <td className="border border-gray-300 px-3 py-2 font-semibold text-blue-700">
                                   Profit ({(() => {
-                                    if (line.pricing?.pricingMode === 'markup_pct') return 'Markup %';
-                                    if (line.pricing?.pricingMode === 'gross_margin_pct') return 'DB %';
-                                    if (line.pricing?.pricingMode === 'target_unit_price') return 'Target price';
-                                    if (line.pricing?.pricingMode === 'profit_by_category') return 'Profit pr. kategori';
-                                    return 'Standard';
+                                    if (line.pricing?.pricingMode === 'target_unit_price') return 'Fast salgspris';
+                                    return 'Markup %';
                                   })()})
                                 </td>
                                 <td className="border border-gray-300 px-3 py-2 text-right text-blue-700">
@@ -2783,9 +2749,9 @@ const ProjectQuoteDetail = () => {
                           <div className="space-y-4">
                             <div>
                               <Label>Prisfastsættelse</Label>
-                              <Select 
-                                value={pricingFormData.pricingMode} 
-                                onValueChange={(value: 'markup_pct' | 'gross_margin_pct' | 'target_unit_price') => 
+                              <Select
+                                value={pricingFormData.pricingMode === 'target_unit_price' ? 'target_unit_price' : 'markup_pct'}
+                                onValueChange={(value: 'markup_pct' | 'target_unit_price') =>
                                   setPricingFormData(prev => ({ ...prev, pricingMode: value }))
                                 }
                               >
@@ -2794,9 +2760,7 @@ const ProjectQuoteDetail = () => {
                                 </SelectTrigger>
                                 <SelectContent>
                                   <SelectItem value="markup_pct">Markup % på (cost + risk)</SelectItem>
-                                  <SelectItem value="gross_margin_pct">Target DB %</SelectItem>
                                   <SelectItem value="target_unit_price">Jeg sætter salgspris</SelectItem>
-                                  <SelectItem value="profit_by_category">Profit pr. kategori</SelectItem>
                                 </SelectContent>
                               </Select>
                             </div>
