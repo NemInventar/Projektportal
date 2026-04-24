@@ -505,6 +505,12 @@ const ProjectQuotes = () => {
         updateData.valid_until = editQuoteFormData.validUntil;
       }
 
+      // Auto-sæt sent_at når status skifter til 'sent' og vi ikke allerede har det.
+      // DB-trigger gør det også som backup, men vi sender fra UI så værdien er synlig straks.
+      if (editQuoteFormData.status === 'sent' && editingQuote.status !== 'sent') {
+        updateData.sent_at = new Date().toISOString();
+      }
+
       const { error } = await supabase
         .from('project_quotes_2026_01_16_23_00')
         .update(updateData)

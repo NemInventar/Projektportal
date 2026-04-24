@@ -30,6 +30,7 @@ import Materials from "./pages/Materials";
 import Suppliers from "./pages/Suppliers";
 import Quotes from "./pages/Quotes";
 import ProjectQuotes from "./pages/ProjectQuotes";
+import AllQuotes from "./pages/AllQuotes";
 import ProjectQuoteDetail from "./pages/ProjectQuoteDetail";
 import ProjectBudgets from "./pages/ProjectBudgets";
 import ProjectBudgetDetail from "./pages/ProjectBudgetDetail";
@@ -121,6 +122,9 @@ const App = () => (
           <Route path="/project/price-requests/new" element={<ProtectedRoute><AppProviders><PriceRequestForm /></AppProviders></ProtectedRoute>} />
           <Route path="/project/price-requests/:id" element={<ProtectedRoute><AppProviders><PriceRequestDetail /></AppProviders></ProtectedRoute>} />
           <Route path="/project/price-requests/:id/edit" element={<ProtectedRoute><AppProviders><PriceRequestForm /></AppProviders></ProtectedRoute>} />
+
+          {/* Global tilbudsoversigt */}
+          <Route path="/quotes" element={<ProtectedRoute><AppProviders><AllQuotes /></AppProviders></ProtectedRoute>} />
 
           {/* Leads (CRM) */}
           <Route path="/leads" element={<ProtectedRoute><AppProviders><LeadsInbox /></AppProviders></ProtectedRoute>} />

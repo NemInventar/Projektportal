@@ -13,7 +13,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import {
   Plus, Star, ChevronDown, ChevronRight, FileText,
   LayoutGrid, List, ArrowUpDown, ArrowUp, ArrowDown, Edit, GripVertical,
+  Clock, AlertTriangle, Lock,
 } from 'lucide-react';
+import { formatCurrency, relativeDanish, formatDateDanish, isValidityExpired } from '@/lib/quoteHelpers';
 import { useToast } from '@/hooks/use-toast';
 import {
   DndContext, closestCenter, PointerSensor, KeyboardSensor,
@@ -417,6 +419,30 @@ export default function Dashboard() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
 
+  // Sendte tilbud — "Venter på svar"-sektion
+  const [sentQuotes, setSentQuotes] = useState<Array<{
+    id: string;
+    project_id: string;
+    quote_number: string | null;
+    title: string | null;
+    sent_at: string | null;
+    valid_until: string | null;
+    is_locked: boolean;
+    cached_sell_total: number | null;
+  }>>([]);
+  const [editingValidUntilId, setEditingValidUntilId] = useState<string | null>(null);
+
+  const updateValidUntilInSent = async (quoteId: string, newDate: string | null) => {
+    const { error } = await supabase
+      .from('project_quotes_2026_01_16_23_00')
+      .update({ valid_until: newDate, updated_at: new Date().toISOString() })
+      .eq('id', quoteId);
+    if (!error) {
+      setSentQuotes(prev => prev.map(q => q.id === quoteId ? { ...q, valid_until: newDate } : q));
+    }
+    setEditingValidUntilId(null);
+  };
+
   const [viewMode, setViewMode] = useState<ViewMode>(
     () => (localStorage.getItem('dashboard_view') as ViewMode) || 'cards'
   );
@@ -437,9 +463,29 @@ export default function Dashboard() {
     try {
       const { data: quotesData } = await supabase
         .from('project_quotes_2026_01_16_23_00')
-        .select('id, project_id, status, include_in_project_total')
+        .select('id, project_id, status, include_in_project_total, quote_number, title, sent_at, valid_until, is_locked, cached_sell_total')
         .in('project_id', ids)
         .neq('status', 'archived');
+
+      // Byg sentQuotes-liste sorteret på sent_at ASC (ældste først = mest akutte)
+      const sentList = (quotesData || [])
+        .filter((q: any) => q.status === 'sent')
+        .sort((a: any, b: any) => {
+          const aKey = a.sent_at ?? a.created_at ?? '';
+          const bKey = b.sent_at ?? b.created_at ?? '';
+          return aKey.localeCompare(bKey);
+        })
+        .map((q: any) => ({
+          id: q.id,
+          project_id: q.project_id,
+          quote_number: q.quote_number,
+          title: q.title,
+          sent_at: q.sent_at,
+          valid_until: q.valid_until,
+          is_locked: Boolean(q.is_locked),
+          cached_sell_total: q.cached_sell_total != null ? Number(q.cached_sell_total) : null,
+        }));
+      setSentQuotes(sentList);
 
       const quoteIds = (quotesData || []).map(q => q.id);
       let quoteSums: Record<string, number> = {};
@@ -599,6 +645,83 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Venter på svar — synlig når der er sendte tilbud */}
+      {sentQuotes.length > 0 && (
+        <div className="rounded-lg border bg-white p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-blue-700 flex items-center gap-2">
+              <Clock className="h-4 w-4" />
+              Venter på svar · {sentQuotes.length}
+            </h2>
+            <span className="text-xs text-muted-foreground">Ældste først</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+            {sentQuotes.map((q) => {
+              const project = projects.find(p => p.id === q.project_id);
+              const expired = isValidityExpired(q.valid_until);
+              const isEditing = editingValidUntilId === q.id;
+              const goToQuote = () => {
+                if (project) setActiveProject(project);
+                navigate(`/project/quotes/${q.id}`);
+              };
+              return (
+                <div
+                  key={q.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={goToQuote}
+                  onKeyDown={(e) => { if (e.key === 'Enter') goToQuote(); }}
+                  className={`cursor-pointer text-left rounded-md border px-3 py-2.5 hover:bg-blue-50 hover:border-blue-300 transition-colors ${expired ? 'border-red-300 bg-red-50/40' : 'border-gray-200'}`}
+                  title={q.sent_at ? `Sendt ${formatDateDanish(q.sent_at)}` : undefined}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-medium text-muted-foreground truncate">
+                      {project?.customer || project?.name || 'Ukendt projekt'}
+                    </div>
+                    {q.is_locked && <Lock className="h-3 w-3 text-muted-foreground shrink-0" />}
+                  </div>
+                  <div className="font-medium text-sm truncate mt-0.5">
+                    {q.quote_number ? `${q.quote_number} · ` : ''}{q.title || '(uden titel)'}
+                  </div>
+                  <div className="flex items-center justify-between gap-2 mt-1">
+                    <span className="text-xs text-muted-foreground">
+                      {q.sent_at ? `Sendt ${relativeDanish(q.sent_at)}` : 'Sendt (ukendt tid)'}
+                    </span>
+                    <span className="text-sm font-semibold">{formatCurrency(q.cached_sell_total)}</span>
+                  </div>
+                  <div className="mt-1 flex items-center gap-2 text-xs" onClick={(e) => e.stopPropagation()}>
+                    {isEditing ? (
+                      <Input
+                        type="date"
+                        autoFocus
+                        defaultValue={q.valid_until ?? ''}
+                        onBlur={(e) => updateValidUntilInSent(q.id, e.target.value || null)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                          if (e.key === 'Escape') setEditingValidUntilId(null);
+                        }}
+                        className="h-6 text-xs w-36 px-2"
+                      />
+                    ) : (
+                      <button
+                        onClick={() => setEditingValidUntilId(q.id)}
+                        className={`flex items-center gap-1 hover:underline ${expired ? 'text-red-700 font-medium' : 'text-muted-foreground'}`}
+                        title="Klik for at ændre (virker også på låste tilbud)"
+                      >
+                        {expired && <AlertTriangle className="h-3 w-3" />}
+                        {q.valid_until
+                          ? (expired ? `Udløbet ${formatDateDanish(q.valid_until)}` : `Gælder til ${formatDateDanish(q.valid_until)}`)
+                          : 'Sæt gælder-til dato'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Card view */}
       {viewMode === 'cards' && (

@@ -53,6 +53,12 @@ const Sidebar = () => {
       path: '/',
       active: isActive('/')
     },
+    {
+      label: 'Tilbud',
+      icon: FileText,
+      path: '/quotes',
+      active: isActive('/quotes'),
+    },
   ];
 
   const standardMenuItems = [
