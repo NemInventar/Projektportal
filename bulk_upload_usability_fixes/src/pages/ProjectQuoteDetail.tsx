@@ -49,6 +49,9 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useProject } from '@/contexts/ProjectContext';
 import { useProjectProducts } from '@/contexts/ProjectProductsContext';
+import { useCompanies, type Company } from '@/contexts/CompaniesContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { EMPLOYEES, findEmployeeByEmail } from '@/config/company';
 
 interface QuoteLine {
   id: string;
@@ -104,6 +107,8 @@ const ProjectQuoteDetail = () => {
   const { toast } = useToast();
   const { activeProject } = useProject();
   const { products, calculateProductCost } = useProjectProducts();
+  const { companies, addCompany } = useCompanies();
+  const { user } = useAuth();
   
   // Utility function for currency formatting
   const formatCurrency = (amount: number) => {
@@ -141,6 +146,29 @@ const ProjectQuoteDetail = () => {
   const [showAddLineModal, setShowAddLineModal] = useState(false);
   const [showAddItemModal, setShowAddItemModal] = useState(false);
   const [showCustomItemModal, setShowCustomItemModal] = useState(false);
+  const [showNewCompanyDialog, setShowNewCompanyDialog] = useState(false);
+  const [savingNewCompany, setSavingNewCompany] = useState(false);
+  const [newCompanyForm, setNewCompanyForm] = useState({
+    name: '',
+    cvr: '',
+    addressLine1: '',
+    addressZip: '',
+    addressCity: '',
+    defaultContactName: '',
+    defaultContactEmail: '',
+    defaultContactPhone: '',
+  });
+  // Lokal state for tekstfelter i Tilbudsdetaljer — gemmes ved blur,
+  // så vi ikke skyder en Supabase-update + toast på hver keystroke.
+  const [detailsForm, setDetailsForm] = useState({
+    customer_contact_name: '',
+    payment_terms: '',
+    delivery_period: '',
+    reservations: '',
+    created_by_name: '',
+    created_by_email: '',
+    created_by_phone: '',
+  });
   const [editingPricing, setEditingPricing] = useState<string | null>(null);
   const [selectedLineForItems, setSelectedLineForItems] = useState<string | null>(null);
   const [selectedProductForAdd, setSelectedProductForAdd] = useState<string | null>(null);
@@ -244,6 +272,52 @@ const ProjectQuoteDetail = () => {
       loadMaterialData(lines);
     }
   }, [lines]);
+
+  // Auto-prefill tilbudsgiver fra indlogget bruger ved første load (kun hvis alle 3 felter er tomme)
+  useEffect(() => {
+    if (!quote?.id || !user?.email) return;
+    if (quote.created_by_name || quote.created_by_email || quote.created_by_phone) return;
+    const emp = findEmployeeByEmail(user.email);
+    if (!emp) return;
+    updateQuoteMetadata({
+      created_by_name: emp.name,
+      created_by_email: emp.email,
+      created_by_phone: emp.phone,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quote?.id, user?.email]);
+
+  // Synkronisér lokal detailsForm når quote ændres (id-skift eller eksternt save)
+  useEffect(() => {
+    if (!quote) return;
+    setDetailsForm({
+      customer_contact_name: quote.customer_contact_name ?? '',
+      payment_terms: quote.payment_terms ?? '',
+      delivery_period: quote.delivery_period ?? '',
+      reservations: quote.reservations ?? '',
+      created_by_name: quote.created_by_name ?? '',
+      created_by_email: quote.created_by_email ?? '',
+      created_by_phone: quote.created_by_phone ?? '',
+    });
+  }, [
+    quote?.id,
+    quote?.customer_contact_name,
+    quote?.payment_terms,
+    quote?.delivery_period,
+    quote?.reservations,
+    quote?.created_by_name,
+    quote?.created_by_email,
+    quote?.created_by_phone,
+  ]);
+
+  // Gem ét tekstfelt hvis det har ændret sig (kaldes onBlur)
+  const saveDetailField = (key: keyof typeof detailsForm) => {
+    if (!quote) return;
+    const localVal = detailsForm[key];
+    const storedVal = (quote[key] ?? '') as string;
+    if (localVal === storedVal) return;
+    updateQuoteMetadata({ [key]: localVal || null });
+  };
 
   const loadQuoteData = async () => {
     if (!id) return;
@@ -444,6 +518,47 @@ const ProjectQuoteDetail = () => {
       });
     } finally {
       setSavingMetadata(false);
+    }
+  };
+
+  // Opret ny kunde inline og link til tilbuddet
+  const handleCreateNewCompany = async () => {
+    if (!newCompanyForm.name.trim()) {
+      toast({ title: "Fejl", description: "Firmanavn er påkrævet", variant: "destructive" });
+      return;
+    }
+    try {
+      setSavingNewCompany(true);
+      const company = await addCompany({
+        name: newCompanyForm.name.trim(),
+        cvr: newCompanyForm.cvr.trim() || undefined,
+        addressLine1: newCompanyForm.addressLine1.trim() || undefined,
+        addressZip: newCompanyForm.addressZip.trim() || undefined,
+        addressCity: newCompanyForm.addressCity.trim() || undefined,
+        defaultContactName: newCompanyForm.defaultContactName.trim() || undefined,
+        defaultContactEmail: newCompanyForm.defaultContactEmail.trim() || undefined,
+        defaultContactPhone: newCompanyForm.defaultContactPhone.trim() || undefined,
+        isCustomer: true,
+        isSupplier: false,
+        isPartner: false,
+      });
+      // Link til tilbud + snapshot kontaktperson
+      await updateQuoteMetadata({
+        company_id: company.id,
+        customer_contact_name: company.defaultContactName ?? null,
+      });
+      // Reset + luk
+      setNewCompanyForm({
+        name: '', cvr: '', addressLine1: '', addressZip: '', addressCity: '',
+        defaultContactName: '', defaultContactEmail: '', defaultContactPhone: '',
+      });
+      setShowNewCompanyDialog(false);
+      toast({ title: "Kunde oprettet", description: `${company.name} er tilføjet og linket til tilbuddet` });
+    } catch (err) {
+      console.error(err);
+      toast({ title: "Fejl", description: "Kunne ikke oprette kunde", variant: "destructive" });
+    } finally {
+      setSavingNewCompany(false);
     }
   };
 
@@ -1976,14 +2091,40 @@ const ProjectQuoteDetail = () => {
         totalSellingPrice: totals.totalSellingPrice,
       };
     });
-    const date = new Date(quote.created_at).toLocaleDateString('da-DK');
+    const formatDk = (iso?: string | null) =>
+      iso ? new Date(iso).toLocaleDateString('da-DK') : '';
+    const date = formatDk(quote.created_at);
+    const validUntil = quote.valid_until ? formatDk(quote.valid_until) : null;
+    const linkedCompany = quote.company_id ? companies.find(c => c.id === quote.company_id) : undefined;
+    const customer = linkedCompany
+      ? {
+          name: linkedCompany.name,
+          cvr: linkedCompany.cvr ?? null,
+          addressLine1: linkedCompany.addressLine1 ?? null,
+          addressZip: linkedCompany.addressZip ?? null,
+          addressCity: linkedCompany.addressCity ?? null,
+          contactName: quote.customer_contact_name ?? linkedCompany.defaultContactName ?? null,
+        }
+      : activeProject.customer
+        ? { name: activeProject.customer, contactName: quote.customer_contact_name ?? null }
+        : { contactName: quote.customer_contact_name ?? null };
     const blob = await pdf(
       <QuotePDF
         projectName={activeProject.name}
         quoteTitle={quote.title}
         quoteNumber={quote.quote_number}
         quoteDate={date}
+        validUntil={validUntil}
         lines={pdfLines}
+        customer={customer}
+        paymentTerms={quote.payment_terms ?? null}
+        deliveryPeriod={quote.delivery_period ?? null}
+        reservations={quote.reservations ?? null}
+        createdBy={{
+          name: quote.created_by_name ?? null,
+          email: quote.created_by_email ?? null,
+          phone: quote.created_by_phone ?? null,
+        }}
       />
     ).toBlob();
     const url = URL.createObjectURL(blob);
@@ -2261,6 +2402,278 @@ const ProjectQuoteDetail = () => {
             </Button>
           </div>
         </div>
+
+        {/* Tilbudsdetaljer Section — vises på PDF */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Tilbudsdetaljer</CardTitle>
+            <p className="text-sm text-muted-foreground">Kunde, vilkår og tilbudsgiver — vises på tilbuds-PDF</p>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {/* Kunde */}
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Kunde</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="company_id">Firma</Label>
+                  <div className="flex gap-2">
+                    <Select
+                      value={quote?.company_id || ''}
+                      onValueChange={(v) => {
+                        const company = companies.find(c => c.id === v);
+                        updateQuoteMetadata({
+                          company_id: v || null,
+                          customer_contact_name: quote?.customer_contact_name || company?.defaultContactName || null,
+                        });
+                      }}
+                      disabled={savingMetadata}
+                    >
+                      <SelectTrigger className="flex-1">
+                        <SelectValue placeholder="Vælg kunde" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {companies
+                          .filter((c: Company) => c.isCustomer)
+                          .map((c: Company) => (
+                            <SelectItem key={c.id} value={c.id}>
+                              {c.name}{c.cvr ? ` · CVR ${c.cvr}` : ''}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => setShowNewCompanyDialog(true)}
+                      disabled={savingMetadata}
+                      title="Opret ny kunde"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  {quote?.company_id && (() => {
+                    const c = companies.find(co => co.id === quote.company_id);
+                    if (!c) return null;
+                    const lines = [
+                      c.cvr ? `CVR ${c.cvr}` : null,
+                      [c.addressLine1, c.addressZip && c.addressCity ? `${c.addressZip} ${c.addressCity}` : c.addressCity]
+                        .filter(Boolean).join(', ') || null,
+                    ].filter(Boolean);
+                    return lines.length ? (
+                      <div className="text-xs text-muted-foreground">{lines.join(' · ')}</div>
+                    ) : null;
+                  })()}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="customer_contact_name">Att. / kontaktperson</Label>
+                  <Input
+                    id="customer_contact_name"
+                    placeholder="Fx Lena Andersen"
+                    value={detailsForm.customer_contact_name}
+                    onChange={(e) => setDetailsForm(p => ({ ...p, customer_contact_name: e.target.value }))}
+                    onBlur={() => saveDetailField('customer_contact_name')}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Vilkår */}
+            <div className="space-y-3 pt-4 border-t">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Vilkår</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="valid_until">Gyldig til</Label>
+                  <Input
+                    id="valid_until"
+                    type="date"
+                    value={quote?.valid_until || ''}
+                    onChange={(e) => updateQuoteMetadata({ valid_until: e.target.value || null })}
+                    disabled={savingMetadata}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="payment_terms">Betalingsbetingelser</Label>
+                  <Input
+                    id="payment_terms"
+                    placeholder="Fx Netto 14 dage fra fakturadato"
+                    value={detailsForm.payment_terms}
+                    onChange={(e) => setDetailsForm(p => ({ ...p, payment_terms: e.target.value }))}
+                    onBlur={() => saveDetailField('payment_terms')}
+                  />
+                </div>
+                <div className="space-y-2 md:col-span-2">
+                  <Label htmlFor="delivery_period">Leveringstid / udførelsesperiode</Label>
+                  <Input
+                    id="delivery_period"
+                    placeholder='Fx "Uge 32-34, 2026" eller "6 uger efter ordrebekræftelse"'
+                    value={detailsForm.delivery_period}
+                    onChange={(e) => setDetailsForm(p => ({ ...p, delivery_period: e.target.value }))}
+                    onBlur={() => saveDetailField('delivery_period')}
+                  />
+                </div>
+                <div className="space-y-2 md:col-span-2">
+                  <Label htmlFor="reservations">Forbehold</Label>
+                  <Textarea
+                    id="reservations"
+                    placeholder="Fx prisregulering ved materialestigning >5%, forudsætter uhindret adgang..."
+                    value={detailsForm.reservations}
+                    onChange={(e) => setDetailsForm(p => ({ ...p, reservations: e.target.value }))}
+                    onBlur={() => saveDetailField('reservations')}
+                    rows={3}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Tilbudsgiver */}
+            <div className="space-y-3 pt-4 border-t">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Tilbudsgiver</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="space-y-2 md:col-span-3">
+                  <Label>Hurtigvalg medarbejder</Label>
+                  <Select
+                    value={quote?.created_by_email && EMPLOYEES.find(e => e.email === quote.created_by_email) ? quote.created_by_email : ''}
+                    onValueChange={(email) => {
+                      const emp = EMPLOYEES.find(e => e.email === email);
+                      if (emp) {
+                        updateQuoteMetadata({
+                          created_by_name: emp.name,
+                          created_by_email: emp.email,
+                          created_by_phone: emp.phone,
+                        });
+                      }
+                    }}
+                    disabled={savingMetadata}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Vælg for at autoudfylde felterne nedenfor" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {EMPLOYEES.map(emp => (
+                        <SelectItem key={emp.email} value={emp.email}>
+                          {emp.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="created_by_name">Navn</Label>
+                  <Input
+                    id="created_by_name"
+                    value={detailsForm.created_by_name}
+                    onChange={(e) => setDetailsForm(p => ({ ...p, created_by_name: e.target.value }))}
+                    onBlur={() => saveDetailField('created_by_name')}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="created_by_email">Email</Label>
+                  <Input
+                    id="created_by_email"
+                    type="email"
+                    value={detailsForm.created_by_email}
+                    onChange={(e) => setDetailsForm(p => ({ ...p, created_by_email: e.target.value }))}
+                    onBlur={() => saveDetailField('created_by_email')}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="created_by_phone">Telefon</Label>
+                  <Input
+                    id="created_by_phone"
+                    value={detailsForm.created_by_phone}
+                    onChange={(e) => setDetailsForm(p => ({ ...p, created_by_phone: e.target.value }))}
+                    onBlur={() => saveDetailField('created_by_phone')}
+                  />
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Ny kunde dialog */}
+        <Dialog open={showNewCompanyDialog} onOpenChange={setShowNewCompanyDialog}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Opret ny kunde</DialogTitle>
+              <DialogDescription>Tilføjes som kunde og linkes til dette tilbud</DialogDescription>
+            </DialogHeader>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="space-y-1 md:col-span-2">
+                <Label htmlFor="new_co_name">Firmanavn *</Label>
+                <Input
+                  id="new_co_name"
+                  value={newCompanyForm.name}
+                  onChange={(e) => setNewCompanyForm(p => ({ ...p, name: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="new_co_cvr">CVR</Label>
+                <Input
+                  id="new_co_cvr"
+                  value={newCompanyForm.cvr}
+                  onChange={(e) => setNewCompanyForm(p => ({ ...p, cvr: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="new_co_addr">Adresse</Label>
+                <Input
+                  id="new_co_addr"
+                  value={newCompanyForm.addressLine1}
+                  onChange={(e) => setNewCompanyForm(p => ({ ...p, addressLine1: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="new_co_zip">Postnr.</Label>
+                <Input
+                  id="new_co_zip"
+                  value={newCompanyForm.addressZip}
+                  onChange={(e) => setNewCompanyForm(p => ({ ...p, addressZip: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="new_co_city">By</Label>
+                <Input
+                  id="new_co_city"
+                  value={newCompanyForm.addressCity}
+                  onChange={(e) => setNewCompanyForm(p => ({ ...p, addressCity: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1 md:col-span-2">
+                <Label htmlFor="new_co_contact">Kontaktperson</Label>
+                <Input
+                  id="new_co_contact"
+                  value={newCompanyForm.defaultContactName}
+                  onChange={(e) => setNewCompanyForm(p => ({ ...p, defaultContactName: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="new_co_email">Email</Label>
+                <Input
+                  id="new_co_email"
+                  type="email"
+                  value={newCompanyForm.defaultContactEmail}
+                  onChange={(e) => setNewCompanyForm(p => ({ ...p, defaultContactEmail: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="new_co_phone">Telefon</Label>
+                <Input
+                  id="new_co_phone"
+                  value={newCompanyForm.defaultContactPhone}
+                  onChange={(e) => setNewCompanyForm(p => ({ ...p, defaultContactPhone: e.target.value }))}
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setShowNewCompanyDialog(false)} disabled={savingNewCompany}>
+                Annullér
+              </Button>
+              <Button onClick={handleCreateNewCompany} disabled={savingNewCompany || !newCompanyForm.name.trim()}>
+                {savingNewCompany ? 'Opretter...' : 'Opret og link'}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         {/* Metadata Section */}
         <Card>

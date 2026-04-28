@@ -13,6 +13,7 @@ import { ProjectMaterialsProvider } from "@/contexts/ProjectMaterialsContext";
 import { PurchaseOrdersProvider } from "@/contexts/PurchaseOrdersContext";
 import { TransportProvider } from "@/contexts/TransportContext";
 import { ProjectProductsProvider } from "@/contexts/ProjectProductsContext";
+import { CompaniesProvider } from "@/contexts/CompaniesContext";
 import {
   PurchasingProvider,
   PurchasingOverview,
@@ -62,15 +63,17 @@ function AppProviders({ children }: { children: React.ReactNode }) {
             <PurchaseOrdersProvider>
               <TransportProvider>
                 <ProjectProductsProvider>
-                  <PurchasingProvider>
-                    <LeadsProvider>
-                    <TooltipProvider>
-                      <Toaster />
-                      <Sonner />
-                      {children}
-                    </TooltipProvider>
-                    </LeadsProvider>
-                  </PurchasingProvider>
+                  <CompaniesProvider>
+                    <PurchasingProvider>
+                      <LeadsProvider>
+                      <TooltipProvider>
+                        <Toaster />
+                        <Sonner />
+                        {children}
+                      </TooltipProvider>
+                      </LeadsProvider>
+                    </PurchasingProvider>
+                  </CompaniesProvider>
                 </ProjectProductsProvider>
               </TransportProvider>
             </PurchaseOrdersProvider>
