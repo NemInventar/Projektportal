@@ -1,6 +1,9 @@
 import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 
+// TODO (V2): Overvej at merge companies_2026_04_27 og crm_contacts (leads)
+// til ét unified system. I V1 holdes de adskilte for at undgå migration af leads-data.
+
 export interface Company {
   id: string;
   name: string;
@@ -28,6 +31,8 @@ interface CompaniesContextType {
   reload: () => Promise<void>;
   addCompany: (input: CompanyInput) => Promise<Company>;
   updateCompany: (id: string, updates: Partial<CompanyInput>) => Promise<void>;
+  removeCompany: (id: string) => Promise<void>;
+  countQuotesUsing: (id: string) => Promise<number>;
 }
 
 const CompaniesContext = createContext<CompaniesContextType | undefined>(undefined);
@@ -115,8 +120,23 @@ export const CompaniesProvider: React.FC<{ children: ReactNode }> = ({ children 
     );
   };
 
+  const countQuotesUsing = async (id: string): Promise<number> => {
+    const { count, error } = await supabase
+      .from('project_quotes_2026_01_16_23_00')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', id);
+    if (error) throw error;
+    return count ?? 0;
+  };
+
+  const removeCompany = async (id: string) => {
+    const { error } = await supabase.from(TABLE).delete().eq('id', id);
+    if (error) throw error;
+    setCompanies(prev => prev.filter(c => c.id !== id));
+  };
+
   return (
-    <CompaniesContext.Provider value={{ companies, loading, reload, addCompany, updateCompany }}>
+    <CompaniesContext.Provider value={{ companies, loading, reload, addCompany, updateCompany, removeCompany, countQuotesUsing }}>
       {children}
     </CompaniesContext.Provider>
   );

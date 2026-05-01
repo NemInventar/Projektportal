@@ -1,6 +1,9 @@
 /**
  * CRUD på crm_contacts_2026_04_12 (unified organizations + persons).
  * Filtrér altid på contact_type.
+ *
+ * TODO (V2): Overvej at merge crm_contacts og companies_2026_04_27 (kunder/leverandører
+ * på tilbud) til ét unified system. I V1 holdes de adskilte for at undgå migration af leads-data.
  */
 
 import { supabase } from '@/integrations/supabase/client';

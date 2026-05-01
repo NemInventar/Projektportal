@@ -32,7 +32,7 @@ export interface CostItem {
   } | null;
 }
 
-/** Sum af én items cost-breakdown. Fallback til cost_total_per_unit hvis breakdown er tom/null. */
+/** Sum af én items cost-breakdown. Fallback til cost_total_per_unit kun hvis breakdown er helt tom. */
 export function itemCostPerUnit(item: CostItem): number {
   const b = item.cost_breakdown_json ?? {};
   const breakdownSum =
@@ -42,8 +42,11 @@ export function itemCostPerUnit(item: CostItem): number {
     (b.labor_production ?? 0) +
     (b.labor_dk ?? 0) +
     (b.other ?? 0);
-  // cost_total_per_unit som fallback: bruges når breakdown er tom men total er sat
-  return Math.max(breakdownSum, item.cost_total_per_unit ?? 0);
+  // Breakdown er sandheden når den er populeret. cost_total_per_unit bruges kun
+  // som fallback for items uden breakdown (fx legacy data eller manuelle totaler).
+  // VIGTIGT: tidligere brugt Math.max kunne overskygge en korrekt breakdown med
+  // en stale cost_total_per_unit-snapshot og inflate salgsprisen — derfor strict fallback.
+  return breakdownSum > 0 ? breakdownSum : (item.cost_total_per_unit ?? 0);
 }
 
 /** Total cost for én linje (sum over items × item.qty). */

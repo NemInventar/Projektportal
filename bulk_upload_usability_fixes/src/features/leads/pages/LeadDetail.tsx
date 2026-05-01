@@ -48,7 +48,9 @@ import {
   XCircle,
   ArrowRightCircle,
   CalendarDays,
+  Pencil,
 } from 'lucide-react';
+import { OrganizationPickerDialog } from '../components/OrganizationPickerDialog';
 import { useToast } from '@/hooks/use-toast';
 
 import { getDealWithRelations, updateDeal, archiveDeal } from '../lib/dealsApi';
@@ -431,6 +433,7 @@ export const LeadDetail: React.FC = () => {
   const [activityOpen, setActivityOpen] = useState(false);
   const [convertOpen, setConvertOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
+  const [orgEditOpen, setOrgEditOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!dealId) return;
@@ -571,9 +574,22 @@ export const LeadDetail: React.FC = () => {
           <div className="space-y-4">
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm flex items-center gap-2">
-                  <Building className="h-4 w-4" /> Organisation
-                </CardTitle>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Building className="h-4 w-4" /> Organisation
+                  </CardTitle>
+                  {deal.organization && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 w-7 p-0"
+                      onClick={() => setOrgEditOpen(true)}
+                      title="Rediger organisation"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                </div>
               </CardHeader>
               <CardContent className="text-sm space-y-1">
                 {deal.organization ? (
@@ -602,6 +618,14 @@ export const LeadDetail: React.FC = () => {
                 )}
               </CardContent>
             </Card>
+
+            <OrganizationPickerDialog
+              open={orgEditOpen}
+              onOpenChange={setOrgEditOpen}
+              defaultMode="edit"
+              initialEditOrg={deal.organization ?? null}
+              onSelect={() => { void load(); }}
+            />
 
             <Card>
               <CardHeader className="pb-2">

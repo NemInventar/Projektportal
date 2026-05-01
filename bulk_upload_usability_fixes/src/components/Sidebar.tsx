@@ -20,7 +20,8 @@ import {
   Settings,
   Database,
   DollarSign,
-  Inbox
+  Inbox,
+  Building2
 } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -58,6 +59,12 @@ const Sidebar = () => {
       icon: FileText,
       path: '/quotes',
       active: isActive('/quotes'),
+    },
+    {
+      label: 'Firmaer',
+      icon: Building2,
+      path: '/firmaer',
+      active: isActive('/firmaer') || location.pathname.startsWith('/firmaer/'),
     },
   ];
 

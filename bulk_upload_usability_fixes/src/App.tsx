@@ -42,6 +42,7 @@ import Budget from "./pages/Budget";
 import BOM from "./pages/BOM";
 import PurchaseOrders from "./pages/PurchaseOrders";
 import PurchaseOrderDetail from "./pages/PurchaseOrderDetail";
+import Companies from "./pages/Companies";
 import StandardSuppliers from "./pages/StandardSuppliers";
 import StandardSupplierDetail from "./pages/StandardSupplierDetail";
 import StandardMaterials from "./pages/StandardMaterials";
@@ -128,6 +129,9 @@ const App = () => (
 
           {/* Global tilbudsoversigt */}
           <Route path="/quotes" element={<ProtectedRoute><AppProviders><AllQuotes /></AppProviders></ProtectedRoute>} />
+
+          {/* Firmaer (kunder, leverandører, partnere) */}
+          <Route path="/firmaer" element={<ProtectedRoute><AppProviders><Companies /></AppProviders></ProtectedRoute>} />
 
           {/* Leads (CRM) */}
           <Route path="/leads" element={<ProtectedRoute><AppProviders><LeadsInbox /></AppProviders></ProtectedRoute>} />

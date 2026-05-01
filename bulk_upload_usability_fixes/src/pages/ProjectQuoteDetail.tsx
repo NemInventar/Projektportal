@@ -30,7 +30,14 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible';
-import { 
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu';
+import {
   Plus,
   ChevronDown,
   ChevronRight,
@@ -44,7 +51,8 @@ import {
   ExternalLink,
   RefreshCw,
   Loader2,
-  Download
+  Download,
+  MoreHorizontal
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useProject } from '@/contexts/ProjectContext';
@@ -52,6 +60,47 @@ import { useProjectProducts } from '@/contexts/ProjectProductsContext';
 import { useCompanies, type Company } from '@/contexts/CompaniesContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { EMPLOYEES, findEmployeeByEmail } from '@/config/company';
+
+// Quick-add cost-kategorier (mapper til cost_breakdown_json slot)
+type QuickCategory = 'material' | 'transport' | 'production' | 'montage' | 'intern';
+
+const QUICK_DEFAULTS: Record<QuickCategory, {
+  title: string;
+  unit: string;
+  pricePerUnit: number;
+  costSlot: 'materials' | 'product_transport' | 'labor_production' | 'labor_dk' | 'other';
+  label: string;
+}> = {
+  material:   { title: 'Materialer',     unit: 'stk',   pricePerUnit: 0,    costSlot: 'materials',         label: 'Materiale' },
+  transport:  { title: 'Transport',      unit: 'palle', pricePerUnit: 1000, costSlot: 'product_transport', label: 'Transport' },
+  production: { title: 'Produktion KS',  unit: 'time',  pricePerUnit: 200,  costSlot: 'labor_production',  label: 'Produktion' },
+  montage:    { title: 'Montage DK',     unit: 'time',  pricePerUnit: 550,  costSlot: 'labor_dk',          label: 'Montage DK' },
+  intern:     { title: 'Intern',         unit: 'time',  pricePerUnit: 450,  costSlot: 'other',             label: 'Intern' },
+};
+
+// Find primær cost-slot ud fra breakdown — bruges til compact rendering
+const COST_SLOT_LABELS: Record<string, string> = {
+  materials: 'Materiale',
+  material_transport: 'Mat. transport',
+  product_transport: 'Transport',
+  labor_production: 'Produktion',
+  labor_dk: 'Montage DK',
+  other: 'Øvrigt',
+};
+
+const COST_SLOT_BADGE_CLASSES: Record<string, string> = {
+  materials: 'bg-emerald-100 text-emerald-800 hover:bg-emerald-100',
+  material_transport: 'bg-sky-100 text-sky-800 hover:bg-sky-100',
+  product_transport: 'bg-sky-100 text-sky-800 hover:bg-sky-100',
+  labor_production: 'bg-amber-100 text-amber-800 hover:bg-amber-100',
+  labor_dk: 'bg-amber-100 text-amber-800 hover:bg-amber-100',
+  other: 'bg-gray-100 text-gray-700 hover:bg-gray-100',
+};
+
+const getActiveCostSlots = (breakdown: any): string[] => {
+  if (!breakdown) return [];
+  return Object.keys(breakdown).filter(k => (breakdown[k] || 0) > 0);
+};
 
 interface QuoteLine {
   id: string;
@@ -107,7 +156,7 @@ const ProjectQuoteDetail = () => {
   const { toast } = useToast();
   const { activeProject } = useProject();
   const { products, calculateProductCost } = useProjectProducts();
-  const { companies, addCompany } = useCompanies();
+  const { companies, addCompany, updateCompany } = useCompanies();
   const { user } = useAuth();
   
   // Utility function for currency formatting
@@ -146,7 +195,17 @@ const ProjectQuoteDetail = () => {
   const [showAddLineModal, setShowAddLineModal] = useState(false);
   const [showAddItemModal, setShowAddItemModal] = useState(false);
   const [showCustomItemModal, setShowCustomItemModal] = useState(false);
+  // Quick-add state — én cost-kategori med defaults pr. type
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [quickAddSavingItem, setQuickAddSavingItem] = useState(false);
+  const [quickAddCategory, setQuickAddCategory] = useState<QuickCategory | null>(null);
+  const [quickAddForm, setQuickAddForm] = useState({ title: '', qty: 1, unit: 'stk', pricePerUnit: 0 });
+  // Hvilke items er foldet ud (compact rendering)
+  const [expandedItemIds, setExpandedItemIds] = useState<Set<string>>(new Set());
+  // Lokal state for inline qty-edit
+  const [itemQtyEdits, setItemQtyEdits] = useState<Record<string, number>>({});
   const [showNewCompanyDialog, setShowNewCompanyDialog] = useState(false);
+  const [editingCompanyId, setEditingCompanyId] = useState<string | null>(null);
   const [savingNewCompany, setSavingNewCompany] = useState(false);
   const [newCompanyForm, setNewCompanyForm] = useState({
     name: '',
@@ -158,6 +217,9 @@ const ProjectQuoteDetail = () => {
     defaultContactEmail: '',
     defaultContactPhone: '',
   });
+  // Collapse-state for sekundære cards (default collapsed for fokus på linjeposterne)
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [metaOpen, setMetaOpen] = useState(false);
   // Lokal state for tekstfelter i Tilbudsdetaljer — gemmes ved blur,
   // så vi ikke skyder en Supabase-update + toast på hver keystroke.
   const [detailsForm, setDetailsForm] = useState({
@@ -521,15 +583,43 @@ const ProjectQuoteDetail = () => {
     }
   };
 
-  // Opret ny kunde inline og link til tilbuddet
-  const handleCreateNewCompany = async () => {
+  // Åbn dialog i edit-mode for det valgte firma
+  const openEditCompanyDialog = () => {
+    if (!quote?.company_id) return;
+    const c = companies.find(co => co.id === quote.company_id);
+    if (!c) return;
+    setEditingCompanyId(c.id);
+    setNewCompanyForm({
+      name: c.name,
+      cvr: c.cvr ?? '',
+      addressLine1: c.addressLine1 ?? '',
+      addressZip: c.addressZip ?? '',
+      addressCity: c.addressCity ?? '',
+      defaultContactName: c.defaultContactName ?? '',
+      defaultContactEmail: c.defaultContactEmail ?? '',
+      defaultContactPhone: c.defaultContactPhone ?? '',
+    });
+    setShowNewCompanyDialog(true);
+  };
+
+  const openNewCompanyDialog = () => {
+    setEditingCompanyId(null);
+    setNewCompanyForm({
+      name: '', cvr: '', addressLine1: '', addressZip: '', addressCity: '',
+      defaultContactName: '', defaultContactEmail: '', defaultContactPhone: '',
+    });
+    setShowNewCompanyDialog(true);
+  };
+
+  // Opret eller opdater firma — link til tilbud hvis det er en oprettelse
+  const handleSaveCompany = async () => {
     if (!newCompanyForm.name.trim()) {
       toast({ title: "Fejl", description: "Firmanavn er påkrævet", variant: "destructive" });
       return;
     }
     try {
       setSavingNewCompany(true);
-      const company = await addCompany({
+      const payload = {
         name: newCompanyForm.name.trim(),
         cvr: newCompanyForm.cvr.trim() || undefined,
         addressLine1: newCompanyForm.addressLine1.trim() || undefined,
@@ -538,25 +628,28 @@ const ProjectQuoteDetail = () => {
         defaultContactName: newCompanyForm.defaultContactName.trim() || undefined,
         defaultContactEmail: newCompanyForm.defaultContactEmail.trim() || undefined,
         defaultContactPhone: newCompanyForm.defaultContactPhone.trim() || undefined,
-        isCustomer: true,
-        isSupplier: false,
-        isPartner: false,
-      });
-      // Link til tilbud + snapshot kontaktperson
-      await updateQuoteMetadata({
-        company_id: company.id,
-        customer_contact_name: company.defaultContactName ?? null,
-      });
-      // Reset + luk
-      setNewCompanyForm({
-        name: '', cvr: '', addressLine1: '', addressZip: '', addressCity: '',
-        defaultContactName: '', defaultContactEmail: '', defaultContactPhone: '',
-      });
+      };
+      if (editingCompanyId) {
+        await updateCompany(editingCompanyId, payload);
+        toast({ title: "Firma opdateret", description: payload.name });
+      } else {
+        const company = await addCompany({
+          ...payload,
+          isCustomer: true,
+          isSupplier: false,
+          isPartner: false,
+        });
+        await updateQuoteMetadata({
+          company_id: company.id,
+          customer_contact_name: company.defaultContactName ?? null,
+        });
+        toast({ title: "Kunde oprettet", description: `${company.name} er tilføjet og linket til tilbuddet` });
+      }
       setShowNewCompanyDialog(false);
-      toast({ title: "Kunde oprettet", description: `${company.name} er tilføjet og linket til tilbuddet` });
+      setEditingCompanyId(null);
     } catch (err) {
       console.error(err);
-      toast({ title: "Fejl", description: "Kunne ikke oprette kunde", variant: "destructive" });
+      toast({ title: "Fejl", description: editingCompanyId ? "Kunne ikke opdatere firma" : "Kunne ikke oprette kunde", variant: "destructive" });
     } finally {
       setSavingNewCompany(false);
     }
@@ -1336,6 +1429,97 @@ const ProjectQuoteDetail = () => {
         description: "Der opstod en fejl ved tilføjelse",
         variant: "destructive",
       });
+    }
+  };
+
+  const openQuickAdd = (lineId: string, cat: QuickCategory) => {
+    const def = QUICK_DEFAULTS[cat];
+    setSelectedLineForItems(lineId);
+    setQuickAddCategory(cat);
+    setQuickAddForm({
+      title: def.title,
+      qty: 1,
+      unit: def.unit,
+      pricePerUnit: def.pricePerUnit,
+    });
+    setQuickAddOpen(true);
+  };
+
+  const handleQuickAddSubmit = async () => {
+    if (!selectedLineForItems || !quickAddCategory) return;
+    if (!quickAddForm.title.trim()) {
+      toast({ title: 'Fejl', description: 'Beskrivelse er påkrævet', variant: 'destructive' });
+      return;
+    }
+    if (quickAddForm.qty <= 0) {
+      toast({ title: 'Ugyldigt antal', description: 'Antal skal være > 0', variant: 'destructive' });
+      return;
+    }
+    if (quickAddForm.pricePerUnit < 0) {
+      toast({ title: 'Ugyldig pris', description: 'Pris kan ikke være negativ', variant: 'destructive' });
+      return;
+    }
+    const def = QUICK_DEFAULTS[quickAddCategory];
+    const breakdown = {
+      materials: 0,
+      material_transport: 0,
+      product_transport: 0,
+      labor_production: 0,
+      labor_dk: 0,
+      other: 0,
+      [def.costSlot]: quickAddForm.pricePerUnit,
+    };
+    try {
+      setQuickAddSavingItem(true);
+      const { error } = await supabase
+        .from('project_quote_line_items_2026_01_16_23_00')
+        .insert({
+          project_quote_line_id: selectedLineForItems,
+          source_type: 'custom',
+          title: quickAddForm.title.trim(),
+          qty: quickAddForm.qty,
+          unit: quickAddForm.unit.trim() || def.unit,
+          cost_breakdown_json: breakdown,
+          cost_total_per_unit: quickAddForm.pricePerUnit,
+        });
+      if (error) throw error;
+      toast({ title: `${def.label} tilføjet`, description: quickAddForm.title.trim() });
+      setQuickAddOpen(false);
+      setQuickAddCategory(null);
+      setSelectedLineForItems(null);
+      loadQuoteData();
+    } catch (err) {
+      console.error(err);
+      toast({ title: 'Fejl', description: 'Kunne ikke tilføje item', variant: 'destructive' });
+    } finally {
+      setQuickAddSavingItem(false);
+    }
+  };
+
+  // Inline qty-save (onBlur fra qty-input)
+  const saveItemQty = async (itemId: string) => {
+    const newQty = itemQtyEdits[itemId];
+    if (newQty === undefined) return;
+    if (newQty <= 0) {
+      toast({ title: 'Ugyldigt antal', description: 'Antal skal være > 0', variant: 'destructive' });
+      return;
+    }
+    try {
+      const { error } = await supabase
+        .from('project_quote_line_items_2026_01_16_23_00')
+        .update({ qty: newQty })
+        .eq('id', itemId);
+      if (error) throw error;
+      // Fjern fra local edit-state og genindlæs
+      setItemQtyEdits(prev => {
+        const next = { ...prev };
+        delete next[itemId];
+        return next;
+      });
+      loadQuoteData();
+    } catch (err) {
+      console.error(err);
+      toast({ title: 'Fejl', description: 'Kunne ikke opdatere antal', variant: 'destructive' });
     }
   };
 
@@ -2285,7 +2469,7 @@ const ProjectQuoteDetail = () => {
 
   return (
     <Layout>
-      <div className="p-6 space-y-6">
+      <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
         {/* Header */}
         <div className="flex justify-between items-start">
           <div>
@@ -2324,19 +2508,10 @@ const ProjectQuoteDetail = () => {
               </div>
             )}
           </div>
-          <div className="flex gap-2">
-            <Button
-              onClick={handleDownloadPDF}
-              variant="outline"
-              size="sm"
-              className="gap-2"
-              disabled={lines.length === 0}
-            >
-              <Download className="h-4 w-4" />
-              Download PDF
-            </Button>
+          <div className="flex gap-2 items-center">
+            {/* Kontekstuelle primære knapper */}
             {Object.keys(productUpdates).length > 0 && (
-              <Button 
+              <Button
                 onClick={async () => {
                   for (const itemId of Object.keys(productUpdates)) {
                     await updateProductItem(itemId);
@@ -2349,43 +2524,14 @@ const ProjectQuoteDetail = () => {
                 Opdater alle priser ({Object.keys(productUpdates).length})
               </Button>
             )}
-            <Button 
-              onClick={checkForProductUpdates} 
-              variant="outline" 
-              size="sm"
-              disabled={checkingUpdates}
-              className="gap-2"
-            >
-              {checkingUpdates ? 'Tjekker...' : 'Tjek opdateringer'}
-            </Button>
-            <Button 
-              onClick={() => setShowUpdateAllConfirm(true)}
-              disabled={updatingAllPrices || lines.length === 0}
-              variant="default"
-              size="sm"
-              className="gap-2"
-            >
-              {updatingAllPrices ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Opdaterer {updateProgress.current}/{updateProgress.total}...
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="h-4 w-4" />
-                  Opdater alle produktpriser
-                </>
-              )}
-            </Button>
-            <Button
-              onClick={() => setShowUpdateWarnings(!showUpdateWarnings)} 
-              variant={showUpdateWarnings ? "default" : "outline"}
-              size="sm"
-            >
-              {showUpdateWarnings ? 'Advarsler til' : 'Advarsler fra'}
-            </Button>
+            {updatingAllPrices && (
+              <Button variant="default" size="sm" disabled className="gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Opdaterer {updateProgress.current}/{updateProgress.total}...
+              </Button>
+            )}
             {quote?.status === 'accepted' && (
-              <Button 
+              <Button
                 onClick={transferToBudget}
                 disabled={transferringToBudget}
                 variant="default"
@@ -2396,19 +2542,120 @@ const ProjectQuoteDetail = () => {
                 {transferringToBudget ? 'Overfører...' : 'Overfør til budget'}
               </Button>
             )}
+
+            {/* Faste primære knapper */}
+            <Button
+              onClick={handleDownloadPDF}
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              disabled={lines.length === 0}
+            >
+              <Download className="h-4 w-4" />
+              Download PDF
+            </Button>
             <Button onClick={() => setShowAddLineModal(true)} className="gap-2">
               <Plus className="h-4 w-4" />
               Tilføj linje
             </Button>
+
+            {/* Mere-dropdown */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="gap-1">
+                  <MoreHorizontal className="h-4 w-4" />
+                  Mere
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={checkForProductUpdates} disabled={checkingUpdates}>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  {checkingUpdates ? 'Tjekker opdateringer…' : 'Tjek opdateringer'}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => setShowUpdateAllConfirm(true)}
+                  disabled={updatingAllPrices || lines.length === 0}
+                >
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Opdater alle produktpriser
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => setShowUpdateWarnings(!showUpdateWarnings)}>
+                  {showUpdateWarnings ? '✓ Advarsler vises' : 'Vis advarsler'}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
+
+        {/* Sticky totals-bar */}
+        <div className="sticky top-0 z-20 -mx-6 px-6 py-3 bg-background/95 backdrop-blur border-b">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-3 text-sm">
+              <span className="font-medium">{quote.quote_number || '—'}</span>
+              <Badge variant={quote?.status === 'sent' ? 'default' : 'secondary'}>
+                {quote?.status === 'draft' ? 'Kladde' :
+                 quote?.status === 'sent' ? 'Sendt' :
+                 quote?.status === 'accepted' ? 'Accepteret' :
+                 quote?.status === 'rejected' ? 'Afvist' : quote?.status}
+              </Badge>
+              {(() => {
+                const linkedCo = quote?.company_id ? companies.find(c => c.id === quote.company_id) : null;
+                const customerName = linkedCo?.name || activeProject?.customer;
+                return customerName ? <span className="text-muted-foreground">· {customerName}</span> : null;
+              })()}
+            </div>
+            <div className="flex items-center gap-6 text-sm">
+              <div>
+                <div className="text-xs text-muted-foreground">Ekskl. moms</div>
+                <div className="font-medium">{formatCurrency(quoteTotals.totalSellingPrice)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">Inkl. moms</div>
+                <div className="font-semibold">{formatCurrency(Math.round(quoteTotals.totalSellingPrice * 1.25))}</div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">Bruttomargin</div>
+                <div className={`font-medium ${averageDbPercent >= 25 ? 'text-emerald-600' : averageDbPercent >= 15 ? 'text-amber-600' : 'text-red-600'}`}>
+                  {averageDbPercent.toFixed(1)}%
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
         {/* Tilbudsdetaljer Section — vises på PDF */}
         <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">Tilbudsdetaljer</CardTitle>
-            <p className="text-sm text-muted-foreground">Kunde, vilkår og tilbudsgiver — vises på tilbuds-PDF</p>
-          </CardHeader>
+          <Collapsible open={detailsOpen} onOpenChange={setDetailsOpen}>
+            <CollapsibleTrigger asChild>
+              <CardHeader className="cursor-pointer hover:bg-muted/30 transition-colors">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    {detailsOpen ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+                    <CardTitle className="text-lg shrink-0">Tilbudsdetaljer</CardTitle>
+                    {!detailsOpen && (() => {
+                      const co = quote?.company_id ? companies.find(c => c.id === quote.company_id) : null;
+                      const fmtDk = (iso?: string | null) => iso ? new Date(iso).toLocaleDateString('da-DK') : '';
+                      const parts = [
+                        co?.name,
+                        quote?.payment_terms,
+                        quote?.valid_until ? `Gyldig til ${fmtDk(quote.valid_until)}` : null,
+                        quote?.created_by_name,
+                      ].filter(Boolean);
+                      return parts.length > 0 ? (
+                        <span className="text-sm text-muted-foreground truncate">▸ {parts.join(' · ')}</span>
+                      ) : (
+                        <span className="text-sm text-muted-foreground italic">▸ Klik for at udfylde</span>
+                      );
+                    })()}
+                  </div>
+                  {!detailsOpen && (
+                    <span className="text-xs text-muted-foreground hidden md:inline shrink-0">Kunde · Vilkår · Tilbudsgiver</span>
+                  )}
+                </div>
+              </CardHeader>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
           <CardContent className="space-y-6">
             {/* Kunde */}
             <div className="space-y-3">
@@ -2441,10 +2688,21 @@ const ProjectQuoteDetail = () => {
                           ))}
                       </SelectContent>
                     </Select>
+                    {quote?.company_id && (
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={openEditCompanyDialog}
+                        disabled={savingMetadata}
+                        title="Rediger valgte kunde"
+                      >
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                    )}
                     <Button
                       variant="outline"
                       size="icon"
-                      onClick={() => setShowNewCompanyDialog(true)}
+                      onClick={openNewCompanyDialog}
                       disabled={savingMetadata}
                       title="Opret ny kunde"
                     >
@@ -2588,14 +2846,20 @@ const ProjectQuoteDetail = () => {
               </div>
             </div>
           </CardContent>
+            </CollapsibleContent>
+          </Collapsible>
         </Card>
 
         {/* Ny kunde dialog */}
         <Dialog open={showNewCompanyDialog} onOpenChange={setShowNewCompanyDialog}>
           <DialogContent className="max-w-lg">
             <DialogHeader>
-              <DialogTitle>Opret ny kunde</DialogTitle>
-              <DialogDescription>Tilføjes som kunde og linkes til dette tilbud</DialogDescription>
+              <DialogTitle>{editingCompanyId ? 'Rediger kunde' : 'Opret ny kunde'}</DialogTitle>
+              <DialogDescription>
+                {editingCompanyId
+                  ? 'Ændringer slår igennem på tilbuds-PDF (firmanavn, CVR, adresse hentes live).'
+                  : 'Tilføjes som kunde og linkes til dette tilbud.'}
+              </DialogDescription>
             </DialogHeader>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="space-y-1 md:col-span-2">
@@ -2668,8 +2932,10 @@ const ProjectQuoteDetail = () => {
               <Button variant="outline" onClick={() => setShowNewCompanyDialog(false)} disabled={savingNewCompany}>
                 Annullér
               </Button>
-              <Button onClick={handleCreateNewCompany} disabled={savingNewCompany || !newCompanyForm.name.trim()}>
-                {savingNewCompany ? 'Opretter...' : 'Opret og link'}
+              <Button onClick={handleSaveCompany} disabled={savingNewCompany || !newCompanyForm.name.trim()}>
+                {savingNewCompany
+                  ? (editingCompanyId ? 'Gemmer…' : 'Opretter…')
+                  : (editingCompanyId ? 'Gem ændringer' : 'Opret og link')}
               </Button>
             </div>
           </DialogContent>
@@ -2677,9 +2943,31 @@ const ProjectQuoteDetail = () => {
 
         {/* Metadata Section */}
         <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">Metadata</CardTitle>
-          </CardHeader>
+          <Collapsible open={metaOpen} onOpenChange={setMetaOpen}>
+            <CollapsibleTrigger asChild>
+              <CardHeader className="cursor-pointer hover:bg-muted/30 transition-colors">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    {metaOpen ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+                    <CardTitle className="text-lg shrink-0">Metadata</CardTitle>
+                    {!metaOpen && (() => {
+                      const fmtDk = (iso?: string | null) => iso ? new Date(iso).toLocaleDateString('da-DK') : '';
+                      const prio = quote?.priority === 1 ? 'Høj' : quote?.priority === 3 ? 'Lav' : 'Normal';
+                      const parts = [
+                        `Prioritet: ${prio}`,
+                        quote?.next_action ? `Handling: ${quote.next_action}` : null,
+                        quote?.next_delivery_date ? `Levering: ${fmtDk(quote.next_delivery_date)}` : null,
+                      ].filter(Boolean);
+                      return <span className="text-sm text-muted-foreground truncate">▸ {parts.join(' · ')}</span>;
+                    })()}
+                  </div>
+                  {!metaOpen && (
+                    <span className="text-xs text-muted-foreground hidden md:inline shrink-0">Intern arbejdskø</span>
+                  )}
+                </div>
+              </CardHeader>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               {/* Redigerbare felter */}
@@ -2788,9 +3076,14 @@ const ProjectQuoteDetail = () => {
               </div>
             </div>
           </CardContent>
+            </CollapsibleContent>
+          </Collapsible>
         </Card>
 
         {/* Quote Lines */}
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Tilbudslinjer · {lines.length}</h2>
+        </div>
         <div className="space-y-4">
           {lines
             .sort((a, b) => {
@@ -3542,32 +3835,50 @@ const ProjectQuoteDetail = () => {
 
                       {/* Line Items */}
                       <div className="mt-6">
-                        <div className="flex justify-between items-center mb-3">
+                        <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
                           <h4 className="font-semibold">Line Items</h4>
-                          <div className="flex gap-2">
+                          <div className="flex gap-2 flex-wrap">
+                            {(Object.keys(QUICK_DEFAULTS) as QuickCategory[]).map(cat => {
+                              const def = QUICK_DEFAULTS[cat];
+                              return (
+                                <Button
+                                  key={cat}
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => openQuickAdd(line.id, cat)}
+                                  className="gap-1"
+                                  title={`Tilføj ${def.label.toLowerCase()} (${def.pricePerUnit > 0 ? def.pricePerUnit + ' kr/' + def.unit : 'pris ej sat'})`}
+                                >
+                                  <Plus className="h-3.5 w-3.5" />
+                                  {def.label}
+                                </Button>
+                              );
+                            })}
                             <Button
-                              size="sm" 
-                              variant="outline" 
+                              size="sm"
+                              variant="outline"
                               onClick={() => {
                                 setSelectedLineForItems(line.id);
                                 setProductSearchTerm('');
                                 setProductTypeFilter('all');
                                 setShowAddItemModal(true);
                               }}
+                              className="gap-1"
                             >
-                              <Package className="h-4 w-4 mr-1" />
-                              Tilføj produkt
+                              <Package className="h-3.5 w-3.5" />
+                              Produkt
                             </Button>
-                            <Button 
-                              size="sm" 
-                              variant="outline" 
+                            <Button
+                              size="sm"
+                              variant="ghost"
                               onClick={() => {
                                 setSelectedLineForItems(line.id);
                                 setShowCustomItemModal(true);
                               }}
+                              className="gap-1"
+                              title="Avanceret custom cost"
                             >
-                              <Plus className="h-4 w-4 mr-1" />
-                              Custom cost
+                              Andet…
                             </Button>
                           </div>
                         </div>
@@ -3621,93 +3932,142 @@ const ProjectQuoteDetail = () => {
                                       <Button size="sm" variant="outline" onClick={() => setEditingItem(null)}>Annullér</Button>
                                     </div>
                                   </div>
-                                ) : (
-                                  <div className="flex justify-between items-center">
-                                    <div className="flex-1">
-                                      <div className="flex items-center gap-2">
-                                        <span className="font-medium">{item.title}</span>
-                                        <Badge variant="outline" className="text-xs">
-                                          {item.sourceType === 'project_product' ? 'Produkt' : 'Custom'}
-                                        </Badge>
-
+                                ) : (() => {
+                                  const activeSlots = getActiveCostSlots(item.costBreakdown);
+                                  const isSinglePurpose = activeSlots.length === 1;
+                                  const primarySlot = isSinglePurpose ? activeSlots[0] : null;
+                                  const isExpanded = expandedItemIds.has(item.id);
+                                  const localQty = itemQtyEdits[item.id] ?? item.qty;
+                                  const toggleExpand = () => setExpandedItemIds(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(item.id)) next.delete(item.id); else next.add(item.id);
+                                    return next;
+                                  });
+                                  return (
+                                    <div className="space-y-2">
+                                      {/* Compact line — grid med faste kolonner så rækkerne flugter */}
+                                      <div className="grid grid-cols-[24px_minmax(0,1fr)_140px_140px_140px_180px] items-center gap-3">
+                                        {/* 1. Chevron */}
+                                        <button
+                                          type="button"
+                                          onClick={toggleExpand}
+                                          className="text-muted-foreground hover:text-foreground"
+                                          title={isExpanded ? 'Skjul detaljer' : 'Vis detaljer'}
+                                        >
+                                          {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                                        </button>
+                                        {/* 2. Titel + badge */}
+                                        <div className="flex items-center gap-2 min-w-0">
+                                          <span className="font-medium truncate">{item.title}</span>
+                                          {primarySlot ? (
+                                            <Badge className={`text-xs shrink-0 ${COST_SLOT_BADGE_CLASSES[primarySlot] || ''}`}>
+                                              {COST_SLOT_LABELS[primarySlot]}
+                                            </Badge>
+                                          ) : (
+                                            <Badge variant="outline" className="text-xs shrink-0">
+                                              {item.sourceType === 'project_product' ? 'Produkt' : 'Custom'}
+                                            </Badge>
+                                          )}
+                                          {item.costTotalPerUnit === 0 && (
+                                            <Badge variant="destructive" className="text-xs shrink-0">Mangler pris</Badge>
+                                          )}
+                                        </div>
+                                        {/* 3. Antal + enhed */}
+                                        <div className="flex items-center gap-2">
+                                          <Input
+                                            type="number"
+                                            step="0.01"
+                                            min="0.01"
+                                            className="h-7 w-20 text-sm"
+                                            value={localQty}
+                                            onChange={(e) => setItemQtyEdits(prev => ({ ...prev, [item.id]: parseFloat(e.target.value) || 0 }))}
+                                            onBlur={() => saveItemQty(item.id)}
+                                            onClick={(e) => e.stopPropagation()}
+                                          />
+                                          <span className="text-sm text-muted-foreground">{item.unit}</span>
+                                        </div>
+                                        {/* 4. Pris pr. enhed */}
+                                        <span className="text-sm text-right tabular-nums">
+                                          {formatCurrency(item.costTotalPerUnit)} / {item.unit}
+                                        </span>
+                                        {/* 5. Total */}
+                                        <span className="text-sm font-semibold text-right tabular-nums">
+                                          {formatCurrency(item.costTotalPerUnit * item.qty)}
+                                        </span>
+                                        {/* 6. Actions */}
+                                        <div className="flex gap-1 justify-end">
+                                          {item.sourceType === 'project_product' && item.projectProductId && (
+                                            <Button
+                                              size="sm"
+                                              variant="outline"
+                                              className="h-7"
+                                              onClick={async () => {
+                                                try {
+                                                  const result = await updateItemCostSnapshot(item.id, item.projectProductId!);
+                                                  if (result.success) {
+                                                    toast({ title: 'Pris opdateret', description: `Ny pris: ${formatCurrency(result.newTotalCost!)}` });
+                                                    loadQuoteData();
+                                                  } else {
+                                                    throw result.error;
+                                                  }
+                                                } catch (error) {
+                                                  console.error('Error updating product price:', error);
+                                                  toast({ title: 'Fejl', description: 'Kunne ikke opdatere produktprisen', variant: 'destructive' });
+                                                }
+                                              }}
+                                              title="Opdater til nyeste produktpris"
+                                            >
+                                              Opdater pris
+                                            </Button>
+                                          )}
+                                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => startEditItem(item)}>
+                                            <Edit className="h-4 w-4" />
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            className="h-7 w-7 p-0"
+                                            disabled={deletingItem === item.id}
+                                            onClick={() => handleDeleteItem(item.id)}
+                                          >
+                                            <Trash2 className="h-4 w-4" />
+                                          </Button>
+                                        </div>
                                       </div>
-                                      <div className="text-sm text-muted-foreground mt-1">
-                                        {item.qty} {item.unit} • Cost: {formatCurrency(item.costTotalPerUnit)} kr/{item.unit}
-                                        {item.costTotalPerUnit === 0 && (
-                                          <Badge variant="destructive" className="ml-2 text-xs">
-                                            Snapshot = 0 – mangler priser eller qty
-                                          </Badge>
-                                        )}
-                                      </div>
-                                      {item.sourceType === 'project_product' && item.costBreakdown && (
-                                        <div className="text-xs text-muted-foreground mt-1 space-y-1">
-                                          <div className="grid grid-cols-1 gap-1">
-                                            <span>Materialekost: {item.costBreakdown.materials?.toLocaleString('da-DK') || '0'} kr</span>
-                                            <span>Materialetransport: {item.costBreakdown.material_transport?.toLocaleString('da-DK') || '0'} kr</span>
-                                            <span>Produkttransport: {item.costBreakdown.product_transport?.toLocaleString('da-DK') || item.costBreakdown.transport?.toLocaleString('da-DK') || '0'} kr</span>
-                                            <span>Labor (produktion): {item.costBreakdown.labor_production?.toLocaleString('da-DK') || '0'} kr</span>
-                                            <span>Labor (montage i DK): {item.costBreakdown.labor_dk?.toLocaleString('da-DK') || '0'} kr</span>
-                                            <span>Øvrige omkostninger: {item.costBreakdown.other?.toLocaleString('da-DK') || '0'} kr</span>
-                                            <span className="font-medium text-green-600 pt-1 border-t">
-                                              ✅ Total Landed Cost (DK) = {formatCurrency(item.costTotalPerUnit)} kr
-                                            </span>
+                                      {/* Expanded breakdown — aligned med parent-kolonnerne */}
+                                      {isExpanded && item.costBreakdown && (
+                                        <div className="text-xs text-muted-foreground pt-2 border-t space-y-1">
+                                          {(['materials','material_transport','product_transport','labor_production','labor_dk','other'] as const).map(slot => {
+                                            const val = (item.costBreakdown as any)?.[slot] ?? 0;
+                                            const total = val * localQty;
+                                            const isActive = val > 0;
+                                            return (
+                                              <div
+                                                key={slot}
+                                                className={`grid grid-cols-[24px_minmax(0,1fr)_140px_140px_140px_180px] gap-3 ${isActive ? 'text-foreground' : ''}`}
+                                              >
+                                                <span />
+                                                <span>{COST_SLOT_LABELS[slot]}</span>
+                                                <span />
+                                                <span className="text-right tabular-nums">{val.toLocaleString('da-DK')} kr / {item.unit}</span>
+                                                <span className="text-right tabular-nums">{total.toLocaleString('da-DK')} kr</span>
+                                                <span />
+                                              </div>
+                                            );
+                                          })}
+                                          <div className="grid grid-cols-[24px_minmax(0,1fr)_140px_140px_140px_180px] gap-3 font-medium text-emerald-600 pt-1 border-t">
+                                            <span />
+                                            <span>Total cost</span>
+                                            <span />
+                                            <span className="text-right tabular-nums">{formatCurrency(item.costTotalPerUnit)} / {item.unit}</span>
+                                            <span className="text-right tabular-nums">{formatCurrency(item.costTotalPerUnit * localQty)}</span>
+                                            <span />
                                           </div>
                                         </div>
                                       )}
                                     </div>
-                                    <div className="flex gap-2">
-                                      {item.sourceType === 'project_product' && item.projectProductId && (
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          onClick={async () => {
-                                            try {
-                                              const result = await updateItemCostSnapshot(item.id, item.projectProductId!);
-                                              
-                                              if (result.success) {
-                                                toast({
-                                                  title: "Pris opdateret",
-                                                  description: `Produktprisen er opdateret til ${formatCurrency(result.newTotalCost!)}`,
-                                                });
-                                                loadQuoteData();
-                                              } else {
-                                                throw result.error;
-                                              }
-                                            } catch (error) {
-                                              console.error('Error updating product price:', error);
-                                              toast({
-                                                title: "Fejl",
-                                                description: "Kunne ikke opdatere produktprisen",
-                                                variant: "destructive",
-                                              });
-                                            }
-                                          }}
-                                          title="Opdater til nyeste produktpris"
-                                        >
-                                          Opdater pris
-                                        </Button>
-                                      )}
-                                      <Button
-                                        size="sm"
-                                        variant="ghost"
-                                        onClick={() => startEditItem(item)}
-                                      >
-                                        <Edit className="h-4 w-4" />
-                                      </Button>
-                                      <Button
-                                        size="sm"
-                                        variant="ghost"
-                                        disabled={deletingItem === item.id}
-                                        onClick={() => {
-                                          console.log('Delete button clicked for item:', item.id);
-                                          handleDeleteItem(item.id);
-                                        }}
-                                      >
-                                        <Trash2 className="h-4 w-4" />
-                                      </Button>
-                                    </div>
-                                  </div>
-                                )}
+                                  );
+                                })()}
                               </div>
                             ))}
                           </div>
@@ -4154,6 +4514,74 @@ const ProjectQuoteDetail = () => {
                   Tilføj linje
                 </Button>
               </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Quick-add cost dialog */}
+        <Dialog open={quickAddOpen} onOpenChange={(o) => { if (!o) { setQuickAddOpen(false); setQuickAddCategory(null); setSelectedLineForItems(null); } }}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>
+                Tilføj {quickAddCategory ? QUICK_DEFAULTS[quickAddCategory].label : ''}
+              </DialogTitle>
+              <DialogDescription>
+                Tilføjes som single-purpose cost-item på linjen.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div>
+                <Label htmlFor="qa_title">Beskrivelse</Label>
+                <Input
+                  id="qa_title"
+                  value={quickAddForm.title}
+                  onChange={(e) => setQuickAddForm(p => ({ ...p, title: e.target.value }))}
+                />
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <Label htmlFor="qa_qty">Antal</Label>
+                  <Input
+                    id="qa_qty"
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    value={quickAddForm.qty}
+                    onChange={(e) => setQuickAddForm(p => ({ ...p, qty: parseFloat(e.target.value) || 0 }))}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="qa_unit">Enhed</Label>
+                  <Input
+                    id="qa_unit"
+                    value={quickAddForm.unit}
+                    onChange={(e) => setQuickAddForm(p => ({ ...p, unit: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="qa_price">Pris pr. enhed</Label>
+                  <Input
+                    id="qa_price"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    autoFocus
+                    value={quickAddForm.pricePerUnit}
+                    onChange={(e) => setQuickAddForm(p => ({ ...p, pricePerUnit: parseFloat(e.target.value) || 0 }))}
+                  />
+                </div>
+              </div>
+              <div className="text-sm text-muted-foreground">
+                Total: <span className="font-semibold text-foreground">{formatCurrency(quickAddForm.qty * quickAddForm.pricePerUnit)} kr</span>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => { setQuickAddOpen(false); setQuickAddCategory(null); }} disabled={quickAddSavingItem}>
+                Annullér
+              </Button>
+              <Button onClick={handleQuickAddSubmit} disabled={quickAddSavingItem || !quickAddForm.title.trim()}>
+                {quickAddSavingItem ? 'Tilføjer…' : 'Tilføj'}
+              </Button>
             </div>
           </DialogContent>
         </Dialog>
