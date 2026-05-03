@@ -6,7 +6,16 @@ export interface Project {
   name: string;
   customer?: string;
   projectNumber?: string;
-  phase: 'Tilbud' | 'Produktion' | 'Tabt' | 'Arkiv' | 'Garanti';
+  phase:
+    | 'Afventer opstart'
+    | 'Tilbud'
+    | 'Sendt'
+    | 'Kontrakt og planlægning'
+    | 'Produktion'
+    | 'Garanti'
+    | 'Tabt'
+    | 'Fravalgt'
+    | 'Arkiv';
   isStarred?: boolean;
   sortOrder?: number;
   // Projekt

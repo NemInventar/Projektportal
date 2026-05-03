@@ -1899,13 +1899,18 @@ const ProjectQuoteDetail = () => {
       // If it's a custom item, also update cost_total_per_unit and cost_breakdown_json
       if (item?.sourceType === 'custom') {
         updateData.cost_total_per_unit = editItemFormData.totalCostPerUnit;
+        // Bevar single-purpose kategorien hvis itemet havde én aktiv slot.
+        // Ellers fall back til 'other' (legacy custom-cost adfærd).
+        const existingSlots = getActiveCostSlots(item.costBreakdown);
+        const targetSlot = existingSlots.length === 1 ? existingSlots[0] : 'other';
         updateData.cost_breakdown_json = {
           materials: 0,
           material_transport: 0,
           product_transport: 0,
           labor_production: 0,
           labor_dk: 0,
-          other: editItemFormData.totalCostPerUnit
+          other: 0,
+          [targetSlot]: editItemFormData.totalCostPerUnit,
         };
       }
 

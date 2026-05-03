@@ -42,21 +42,51 @@ type SortCol = 'name' | 'customer' | 'phase' | 'acceptedSum' | 'updatedAt' | 'so
 type SortDir = 'asc' | 'desc';
 type ViewMode = 'cards' | 'list';
 
-const PHASE_ORDER: Project['phase'][] = ['Tilbud', 'Produktion', 'Garanti'];
-const INACTIVE: Project['phase'][] = ['Tabt', 'Arkiv'];
+const PHASE_ORDER: Project['phase'][] = [
+  'Afventer opstart',
+  'Tilbud',
+  'Sendt',
+  'Kontrakt og planlægning',
+  'Produktion',
+  'Garanti',
+];
+const INACTIVE: Project['phase'][] = ['Tabt', 'Fravalgt', 'Arkiv'];
+const ALL_PHASES: Project['phase'][] = [...PHASE_ORDER, ...INACTIVE];
 
 const BADGE: Record<string, string> = {
-  Tilbud:     'bg-blue-100 text-blue-800 border-blue-200',
-  Produktion: 'bg-green-100 text-green-800 border-green-200',
-  Garanti:    'bg-purple-100 text-purple-800 border-purple-200',
-  Tabt:       'bg-red-100 text-red-800 border-red-200',
-  Arkiv:      'bg-gray-100 text-gray-800 border-gray-200',
+  'Afventer opstart':       'bg-slate-100 text-slate-800 border-slate-200',
+  Tilbud:                   'bg-blue-100 text-blue-800 border-blue-200',
+  Sendt:                    'bg-cyan-100 text-cyan-800 border-cyan-200',
+  'Kontrakt og planlægning':'bg-amber-100 text-amber-800 border-amber-200',
+  Produktion:               'bg-green-100 text-green-800 border-green-200',
+  Garanti:                  'bg-purple-100 text-purple-800 border-purple-200',
+  Tabt:                     'bg-red-100 text-red-800 border-red-200',
+  Fravalgt:                 'bg-stone-100 text-stone-800 border-stone-200',
+  Arkiv:                    'bg-gray-100 text-gray-800 border-gray-200',
 };
 
 const HEADING: Record<string, string> = {
-  Tilbud:     'text-blue-700',
-  Produktion: 'text-green-700',
-  Garanti:    'text-purple-700',
+  'Afventer opstart':       'text-slate-700',
+  Tilbud:                   'text-blue-700',
+  Sendt:                    'text-cyan-700',
+  'Kontrakt og planlægning':'text-amber-700',
+  Produktion:               'text-green-700',
+  Garanti:                  'text-purple-700',
+};
+
+// Filter-state persisteres lokalt så det ikke påvirker andre dele af dashboardet
+const PHASE_FILTER_KEY = 'nem_inventar_phase_filter_v1';
+const loadPhaseFilter = (): Set<string> => {
+  try {
+    const raw = localStorage.getItem(PHASE_FILTER_KEY);
+    if (!raw) return new Set(PHASE_ORDER); // default: alle aktive faser synlige
+    return new Set(JSON.parse(raw));
+  } catch {
+    return new Set(PHASE_ORDER);
+  }
+};
+const savePhaseFilter = (s: Set<string>) => {
+  try { localStorage.setItem(PHASE_FILTER_KEY, JSON.stringify(Array.from(s))); } catch {}
 };
 
 const EMPTY_BUCKET: StatusBucket = { count: 0, sum: 0 };
@@ -151,11 +181,9 @@ function ProjectForm({ project, onSubmit, onCancel }: {
           <Select value={f.phase} onValueChange={v => set('phase', v as Project['phase'])}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="Tilbud">Tilbud</SelectItem>
-              <SelectItem value="Produktion">Produktion</SelectItem>
-              <SelectItem value="Garanti">Garanti</SelectItem>
-              <SelectItem value="Tabt">Tabt</SelectItem>
-              <SelectItem value="Arkiv">Arkiv</SelectItem>
+              {ALL_PHASES.map(p => (
+                <SelectItem key={p} value={p}>{p}</SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </Field>
@@ -448,6 +476,23 @@ export default function Dashboard() {
   );
   const [sortCol, setSortCol] = useState<SortCol>('sortOrder');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
+  // Phase-filter — persisteres i localStorage, påvirker kun project-grupperne
+  const [phaseFilter, setPhaseFilter] = useState<Set<string>>(() => loadPhaseFilter());
+  const togglePhase = (phase: string) => {
+    setPhaseFilter(prev => {
+      const next = new Set(prev);
+      if (next.has(phase)) next.delete(phase); else next.add(phase);
+      savePhaseFilter(next);
+      return next;
+    });
+  };
+  const resetPhaseFilter = (preset: 'active' | 'all' | 'none') => {
+    const next = preset === 'active' ? new Set<string>(PHASE_ORDER)
+              : preset === 'all'    ? new Set<string>(ALL_PHASES)
+              :                       new Set<string>();
+    savePhaseFilter(next);
+    setPhaseFilter(next);
+  };
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -585,12 +630,21 @@ export default function Dashboard() {
     return all;
   }, [projects, stats, sortCol, sortDir]);
 
-  const activeGroups = PHASE_ORDER.map(phase => ({
-    phase,
-    items: projects.filter(p => p.phase === phase).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)),
-  })).filter(g => g.items.length > 0);
+  // Tæl projekter pr. fase (uden filter) — bruges til chip-badges
+  const phaseCounts: Record<string, number> = ALL_PHASES.reduce((acc, p) => {
+    acc[p] = projects.filter(pr => pr.phase === p).length;
+    return acc;
+  }, {} as Record<string, number>);
 
-  const inactiveProjects = projects.filter(p => INACTIVE.includes(p.phase));
+  const activeGroups = PHASE_ORDER
+    .filter(phase => phaseFilter.has(phase))
+    .map(phase => ({
+      phase,
+      items: projects.filter(p => p.phase === phase).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)),
+    }))
+    .filter(g => g.items.length > 0);
+
+  const inactiveProjects = projects.filter(p => INACTIVE.includes(p.phase) && phaseFilter.has(p.phase));
 
   if (loading) return <div className="p-6 text-muted-foreground">Indlæser projekter...</div>;
 
@@ -625,6 +679,40 @@ export default function Dashboard() {
               <ProjectForm onSubmit={handleCreate} onCancel={() => setCreateOpen(false)} />
             </DialogContent>
           </Dialog>
+        </div>
+      </div>
+
+      {/* Phase-filter — visuelle chips, kun i project-listen */}
+      <div className="rounded-lg border bg-white p-3">
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Vis faser</span>
+          <div className="flex gap-1">
+            <button onClick={() => resetPhaseFilter('active')} className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline">Aktive</button>
+            <span className="text-muted-foreground">·</span>
+            <button onClick={() => resetPhaseFilter('all')} className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline">Alle</button>
+            <span className="text-muted-foreground">·</span>
+            <button onClick={() => resetPhaseFilter('none')} className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline">Ingen</button>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {ALL_PHASES.map(phase => {
+            const isOn = phaseFilter.has(phase);
+            const count = phaseCounts[phase] || 0;
+            return (
+              <button
+                key={phase}
+                onClick={() => togglePhase(phase)}
+                className={`text-xs px-2.5 py-1 rounded-full border transition-all ${
+                  isOn
+                    ? `${BADGE[phase]} font-medium shadow-sm`
+                    : 'bg-white text-muted-foreground border-gray-200 hover:bg-gray-50 opacity-60'
+                }`}
+                title={isOn ? `Skjul ${phase}` : `Vis ${phase}`}
+              >
+                {phase} <span className={isOn ? 'opacity-80' : ''}>· {count}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 

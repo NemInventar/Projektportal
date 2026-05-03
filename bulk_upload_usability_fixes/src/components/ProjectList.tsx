@@ -93,15 +93,19 @@ const ProjectForm: React.FC<{
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
+            <SelectItem value="Afventer opstart">Afventer opstart</SelectItem>
             <SelectItem value="Tilbud">Tilbud</SelectItem>
+            <SelectItem value="Sendt">Sendt</SelectItem>
+            <SelectItem value="Kontrakt og planlægning">Kontrakt og planlægning</SelectItem>
             <SelectItem value="Produktion">Produktion</SelectItem>
             <SelectItem value="Garanti">Garanti</SelectItem>
             <SelectItem value="Tabt">Tabt</SelectItem>
+            <SelectItem value="Fravalgt">Fravalgt</SelectItem>
             <SelectItem value="Arkiv">Arkiv</SelectItem>
           </SelectContent>
         </Select>
       </div>
-      
+
       <div className="flex gap-2 pt-4">
         <Button type="submit" className="flex-1">
           {project ? 'Opdater' : 'Opret'} Projekt
@@ -476,11 +480,15 @@ const ProjectList = () => {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Alle faser</SelectItem>
+                <SelectItem value="Afventer opstart">Afventer opstart</SelectItem>
                 <SelectItem value="Tilbud">Tilbud</SelectItem>
+                <SelectItem value="Sendt">Sendt</SelectItem>
+                <SelectItem value="Kontrakt og planlægning">Kontrakt og planlægning</SelectItem>
                 <SelectItem value="Produktion">Produktion</SelectItem>
-                <SelectItem value="Tabt">Tabt</SelectItem>
-                <SelectItem value="Arkiv">Arkiv</SelectItem>
                 <SelectItem value="Garanti">Garanti</SelectItem>
+                <SelectItem value="Tabt">Tabt</SelectItem>
+                <SelectItem value="Fravalgt">Fravalgt</SelectItem>
+                <SelectItem value="Arkiv">Arkiv</SelectItem>
               </SelectContent>
             </Select>
           </div>
