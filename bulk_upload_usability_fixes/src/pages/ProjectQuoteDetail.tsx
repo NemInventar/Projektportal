@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { pdf } from '@react-pdf/renderer';
 import { QuotePDF } from '@/components/QuotePDF';
+import { QuoteAppendixPDF } from '@/components/QuoteAppendixPDF';
 import { supabase } from '@/integrations/supabase/client';
 import { calculateLine } from '@/lib/quotePricing';
 import Layout from '@/components/Layout';
@@ -102,6 +103,9 @@ const getActiveCostSlots = (breakdown: any): string[] => {
   return Object.keys(breakdown).filter(k => (breakdown[k] || 0) > 0);
 };
 
+type RenderStatus = 'none' | 'pending' | 'generating' | 'ready' | 'failed';
+type ImageSource = 'render' | 'custom' | 'none';
+
 interface QuoteLine {
   id: string;
   title: string;
@@ -113,6 +117,22 @@ interface QuoteLine {
   createdAt: string;
   pricing?: QuoteLinePricing;
   items: QuoteLineItem[];
+  // Billed/render-felter
+  renderContext?: string | null;
+  renderPrompt?: string | null;
+  renderImageUrl?: string | null;
+  renderStatus?: RenderStatus;
+  renderError?: string | null;
+  renderGeneratedAt?: string | null;
+  renderModel?: string | null;
+  customImageUrl?: string | null;
+  customImageUploadedAt?: string | null;
+  customImageCaption?: string | null;
+  activeImageSource?: ImageSource;
+  // Levende beskrivelse
+  livingDescription?: string | null;
+  livingDescriptionGeneratedAt?: string | null;
+  livingDescriptionEdited?: boolean;
 }
 
 interface QuoteLineItem {
@@ -230,6 +250,7 @@ const ProjectQuoteDetail = () => {
     created_by_name: '',
     created_by_email: '',
     created_by_phone: '',
+    recipient_notes: '',
   });
   const [editingPricing, setEditingPricing] = useState<string | null>(null);
   const [selectedLineForItems, setSelectedLineForItems] = useState<string | null>(null);
@@ -360,6 +381,7 @@ const ProjectQuoteDetail = () => {
       created_by_name: quote.created_by_name ?? '',
       created_by_email: quote.created_by_email ?? '',
       created_by_phone: quote.created_by_phone ?? '',
+      recipient_notes: quote.recipient_notes ?? '',
     });
   }, [
     quote?.id,
@@ -370,6 +392,7 @@ const ProjectQuoteDetail = () => {
     quote?.created_by_name,
     quote?.created_by_email,
     quote?.created_by_phone,
+    quote?.recipient_notes,
   ]);
 
   // Gem ét tekstfelt hvis det har ændret sig (kaldes onBlur)
@@ -456,7 +479,23 @@ const ProjectQuoteDetail = () => {
             unit: item.unit,
             costBreakdown: item.cost_breakdown_json || { materials: 0, transport: 0, labor_production: 0, labor_dk: 0, other: 0 },
             costTotalPerUnit: parseFloat(item.cost_total_per_unit || 0)
-          })) || []
+          })) || [],
+          // Billed/render-felter
+          renderContext: line.render_context ?? null,
+          renderPrompt: line.render_prompt ?? null,
+          renderImageUrl: line.render_image_url ?? null,
+          renderStatus: (line.render_status ?? 'none') as RenderStatus,
+          renderError: line.render_error ?? null,
+          renderGeneratedAt: line.render_generated_at ?? null,
+          renderModel: line.render_model ?? null,
+          customImageUrl: line.custom_image_url ?? null,
+          customImageUploadedAt: line.custom_image_uploaded_at ?? null,
+          customImageCaption: line.custom_image_caption ?? null,
+          activeImageSource: (line.active_image_source ?? 'render') as ImageSource,
+          // Levende beskrivelse
+          livingDescription: line.living_description ?? null,
+          livingDescriptionGeneratedAt: line.living_description_generated_at ?? null,
+          livingDescriptionEdited: !!line.living_description_edited,
           };
         });
         setLines(formattedLines);
@@ -1496,7 +1535,130 @@ const ProjectQuoteDetail = () => {
     }
   };
 
-  // Inline qty-save (onBlur fra qty-input)
+  // ── Image / render helpers ───────────────────────────────────────────────
+  const lineEffectiveImageUrl = (line: QuoteLine): string | null => {
+    if (line.activeImageSource === 'custom') return line.customImageUrl ?? null;
+    if (line.activeImageSource === 'render') return line.renderImageUrl ?? null;
+    if (line.activeImageSource === 'none') return null;
+    // Fallback: foretræk custom > render
+    return line.customImageUrl || line.renderImageUrl || null;
+  };
+
+  const updateLineFields = async (lineId: string, updates: Record<string, any>) => {
+    const { error } = await supabase
+      .from('project_quote_lines_2026_01_16_23_00')
+      .update(updates)
+      .eq('id', lineId);
+    if (error) throw error;
+  };
+
+  const setLineImageSource = async (lineId: string, source: ImageSource) => {
+    try {
+      await updateLineFields(lineId, { active_image_source: source });
+      setLines(prev => prev.map(l => l.id === lineId ? { ...l, activeImageSource: source } : l));
+    } catch (err) {
+      console.error(err);
+      toast({ title: 'Fejl', description: 'Kunne ikke skifte billede-kilde', variant: 'destructive' });
+    }
+  };
+
+  // Lokal state for tekstfelter på linje (save-on-blur)
+  const [lineFieldEdits, setLineFieldEdits] = useState<Record<string, Record<string, string>>>({});
+  const setLineFieldLocal = (lineId: string, field: string, value: string) => {
+    setLineFieldEdits(prev => ({ ...prev, [lineId]: { ...(prev[lineId] || {}), [field]: value } }));
+  };
+  const saveLineTextField = async (lineId: string, field: string, dbColumn: string, extraUpdates: Record<string, any> = {}) => {
+    const localVal = lineFieldEdits[lineId]?.[field];
+    if (localVal === undefined) return;
+    const line = lines.find(l => l.id === lineId);
+    if (!line) return;
+    const stored = (line as any)[field] ?? '';
+    if (localVal === stored) return;
+    try {
+      await updateLineFields(lineId, { [dbColumn]: localVal || null, ...extraUpdates });
+      setLines(prev => prev.map(l => l.id === lineId ? { ...l, [field]: localVal || null, ...Object.fromEntries(Object.entries(extraUpdates).map(([k, v]) => [
+        k === 'living_description_edited' ? 'livingDescriptionEdited' : k,
+        v,
+      ])) } as any : l));
+      setLineFieldEdits(prev => {
+        const next = { ...prev };
+        if (next[lineId]) {
+          const lineEdits = { ...next[lineId] };
+          delete lineEdits[field];
+          if (Object.keys(lineEdits).length === 0) delete next[lineId];
+          else next[lineId] = lineEdits;
+        }
+        return next;
+      });
+    } catch (err) {
+      console.error(err);
+      toast({ title: 'Fejl', description: `Kunne ikke gemme ${field}`, variant: 'destructive' });
+    }
+  };
+
+  // Custom-billede upload
+  const [uploadingImageLineId, setUploadingImageLineId] = useState<string | null>(null);
+  const uploadCustomImage = async (lineId: string, file: File) => {
+    if (!file.type.startsWith('image/')) {
+      toast({ title: 'Fejl', description: 'Kun billed-filer er tilladt', variant: 'destructive' });
+      return;
+    }
+    if (!quote?.id) return;
+    try {
+      setUploadingImageLineId(lineId);
+      const ext = file.name.split('.').pop() || 'jpg';
+      const path = `${quote.id}/${lineId}_${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage.from('quote-custom-images').upload(path, file, { upsert: false });
+      if (upErr) throw upErr;
+      const { data: { publicUrl } } = supabase.storage.from('quote-custom-images').getPublicUrl(path);
+      await updateLineFields(lineId, { custom_image_url: publicUrl });
+      // DB-trigger sætter automatisk active_image_source = 'custom' + custom_image_uploaded_at
+      toast({ title: 'Billede uploadet' });
+      loadQuoteData();
+    } catch (err: any) {
+      console.error(err);
+      toast({ title: 'Fejl', description: err?.message || 'Upload fejlede', variant: 'destructive' });
+    } finally {
+      setUploadingImageLineId(null);
+    }
+  };
+
+  const deleteCustomImage = async (lineId: string) => {
+    try {
+      await updateLineFields(lineId, { custom_image_url: null, custom_image_caption: null });
+      // Skift kilde tilbage til render hvis muligt, ellers none
+      const line = lines.find(l => l.id === lineId);
+      const newSource: ImageSource = line?.renderImageUrl ? 'render' : 'none';
+      await updateLineFields(lineId, { active_image_source: newSource });
+      toast({ title: 'Eget billede fjernet' });
+      loadQuoteData();
+    } catch (err) {
+      console.error(err);
+      toast({ title: 'Fejl', description: 'Kunne ikke fjerne billede', variant: 'destructive' });
+    }
+  };
+
+  const triggerRenderGeneration = async (lineId: string) => {
+    try {
+      await updateLineFields(lineId, { render_status: 'pending', render_error: null });
+      setLines(prev => prev.map(l => l.id === lineId ? { ...l, renderStatus: 'pending', renderError: null } : l));
+      toast({ title: 'Render-generering startet', description: 'Tjekker status hvert 5. sekund' });
+    } catch (err) {
+      console.error(err);
+      toast({ title: 'Fejl', description: 'Kunne ikke starte generering', variant: 'destructive' });
+    }
+  };
+
+  // Polling: refetch quote-data hvert 5. sekund så længe der er linjer i pending/generating
+  useEffect(() => {
+    const inFlight = lines.some(l => l.renderStatus === 'pending' || l.renderStatus === 'generating');
+    if (!inFlight) return;
+    const t = setInterval(() => loadQuoteData(), 5000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lines.map(l => `${l.id}:${l.renderStatus}`).join('|')]);
+
+  // ── Inline qty-save (onBlur fra qty-input) ───────────────────────────────
   const saveItemQty = async (itemId: string) => {
     const newQty = itemQtyEdits[itemId];
     if (newQty === undefined) return;
@@ -2324,6 +2486,55 @@ const ProjectQuoteDetail = () => {
     URL.revokeObjectURL(url);
   };
 
+  // Download bilags-PDF (kundevendt med billeder + levende beskrivelser)
+  const handleDownloadAppendix = async () => {
+    if (!quote || !activeProject) return;
+    const formatDk = (iso?: string | null) => iso ? new Date(iso).toLocaleDateString('da-DK') : '';
+    const date = formatDk(quote.created_at);
+    const linkedCompany = quote.company_id ? companies.find(c => c.id === quote.company_id) : undefined;
+    const customer = linkedCompany
+      ? {
+          name: linkedCompany.name,
+          cvr: linkedCompany.cvr ?? null,
+          contactName: quote.customer_contact_name ?? linkedCompany.defaultContactName ?? null,
+        }
+      : activeProject.customer
+        ? { name: activeProject.customer, contactName: quote.customer_contact_name ?? null }
+        : { contactName: quote.customer_contact_name ?? null };
+
+    const sortedLines = [...lines].sort((a, b) => {
+      if (a.displayOrder !== undefined && b.displayOrder !== undefined) return a.displayOrder - b.displayOrder;
+      if (a.displayOrder !== undefined) return -1;
+      if (b.displayOrder !== undefined) return 1;
+      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    });
+
+    const appendixLines = sortedLines.map(line => ({
+      title: line.title,
+      description: line.description ?? null,
+      livingDescription: line.livingDescription ?? null,
+      imageUrl: lineEffectiveImageUrl(line),
+      imageCaption: line.activeImageSource === 'custom' ? (line.customImageCaption ?? null) : null,
+    }));
+
+    const blob = await pdf(
+      <QuoteAppendixPDF
+        projectName={activeProject.name}
+        quoteTitle={quote.title}
+        quoteNumber={quote.quote_number}
+        quoteDate={date}
+        customer={customer}
+        lines={appendixLines}
+      />
+    ).toBlob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `bilag-${activeProject.name}-${quote.quote_number}.pdf`.replace(/\s+/g, '-');
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // Calculate totals for entire quote
   const quoteTotals = lines.reduce((acc, line) => {
     const lineTotals = calculateLineTotals(line);
@@ -2557,7 +2768,18 @@ const ProjectQuoteDetail = () => {
               disabled={lines.length === 0}
             >
               <Download className="h-4 w-4" />
-              Download PDF
+              Tilbuds-PDF
+            </Button>
+            <Button
+              onClick={handleDownloadAppendix}
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              disabled={lines.length === 0}
+              title="Kundevendt bilag med billeder og levende beskrivelser"
+            >
+              <Download className="h-4 w-4" />
+              Bilag
             </Button>
             <Button onClick={() => setShowAddLineModal(true)} className="gap-2">
               <Plus className="h-4 w-4" />
@@ -2846,6 +3068,42 @@ const ProjectQuoteDetail = () => {
                     value={detailsForm.created_by_phone}
                     onChange={(e) => setDetailsForm(p => ({ ...p, created_by_phone: e.target.value }))}
                     onBlur={() => saveDetailField('created_by_phone')}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Modtager — styrer tone i AI-genererede levende beskrivelser */}
+            <div className="space-y-3 pt-4 border-t">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Modtager</h3>
+              <p className="text-xs text-muted-foreground">Styrer tone i AI-genererede levende beskrivelser på tilbuddets linjer.</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="recipient_profile">Modtager-profil</Label>
+                  <Select
+                    value={quote?.recipient_profile || 'mixed'}
+                    onValueChange={(v) => updateQuoteMetadata({ recipient_profile: v })}
+                    disabled={savingMetadata}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="architect">Arkitekt</SelectItem>
+                      <SelectItem value="contractor">Hovedentreprenør</SelectItem>
+                      <SelectItem value="enduser">Slutkunde</SelectItem>
+                      <SelectItem value="mixed">Blandet</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="recipient_notes">Noter om modtager</Label>
+                  <Input
+                    id="recipient_notes"
+                    placeholder="Fx tone, sprogniveau, særlige hensyn"
+                    value={detailsForm.recipient_notes}
+                    onChange={(e) => setDetailsForm(p => ({ ...p, recipient_notes: e.target.value }))}
+                    onBlur={() => saveDetailField('recipient_notes')}
                   />
                 </div>
               </div>
@@ -3837,6 +4095,208 @@ const ProjectQuoteDetail = () => {
                           </div>
                         )}
                       </div>
+
+                      {/* Billede + AI-render */}
+                      {(() => {
+                        const effectiveUrl = lineEffectiveImageUrl(line);
+                        const hasRender = !!line.renderImageUrl;
+                        const hasCustom = !!line.customImageUrl;
+                        const renderStatus = line.renderStatus || 'none';
+                        const isInFlight = renderStatus === 'pending' || renderStatus === 'generating';
+                        const ctxLocal = lineFieldEdits[line.id]?.renderContext;
+                        const ctxValue = ctxLocal !== undefined ? ctxLocal : (line.renderContext ?? '');
+                        const promptLocal = lineFieldEdits[line.id]?.renderPrompt;
+                        const promptValue = promptLocal !== undefined ? promptLocal : (line.renderPrompt ?? '');
+                        const captionLocal = lineFieldEdits[line.id]?.customImageCaption;
+                        const captionValue = captionLocal !== undefined ? captionLocal : (line.customImageCaption ?? '');
+                        const isUploading = uploadingImageLineId === line.id;
+                        return (
+                          <div className="mt-6 rounded-lg border bg-muted/20 p-4 space-y-4">
+                            <div className="flex items-center justify-between flex-wrap gap-2">
+                              <h4 className="font-semibold">Billede</h4>
+                              <div className="flex rounded-md border overflow-hidden text-xs">
+                                <button
+                                  type="button"
+                                  disabled={!hasRender}
+                                  onClick={() => setLineImageSource(line.id, 'render')}
+                                  className={`px-3 py-1.5 transition-colors ${line.activeImageSource === 'render' ? 'bg-primary text-primary-foreground' : 'bg-white hover:bg-gray-50'} ${!hasRender ? 'opacity-40 cursor-not-allowed' : ''}`}
+                                  title={hasRender ? `Render genereret ${line.renderGeneratedAt ? new Date(line.renderGeneratedAt).toLocaleDateString('da-DK') : ''}` : 'Endnu ikke genereret'}
+                                >
+                                  Render
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={!hasCustom}
+                                  onClick={() => setLineImageSource(line.id, 'custom')}
+                                  className={`px-3 py-1.5 transition-colors border-l ${line.activeImageSource === 'custom' ? 'bg-primary text-primary-foreground' : 'bg-white hover:bg-gray-50'} ${!hasCustom ? 'opacity-40 cursor-not-allowed' : ''}`}
+                                  title={hasCustom ? `Uploadet ${line.customImageUploadedAt ? new Date(line.customImageUploadedAt).toLocaleDateString('da-DK') : ''}` : 'Intet uploadet'}
+                                >
+                                  Eget billede
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setLineImageSource(line.id, 'none')}
+                                  className={`px-3 py-1.5 transition-colors border-l ${line.activeImageSource === 'none' ? 'bg-primary text-primary-foreground' : 'bg-white hover:bg-gray-50'}`}
+                                  title="Skjul billede på bilag"
+                                >
+                                  Intet
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Aktivt billede */}
+                            <div className="aspect-video rounded-md border bg-white overflow-hidden flex items-center justify-center">
+                              {effectiveUrl ? (
+                                <img src={effectiveUrl} alt={line.title} className="w-full h-full object-contain" />
+                              ) : (
+                                <div className="text-center text-muted-foreground text-sm">
+                                  <Package className="h-10 w-10 mx-auto mb-2 opacity-50" />
+                                  Intet billede valgt
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Upload eget billede */}
+                            <div className="space-y-2">
+                              <Label className="text-xs uppercase tracking-wide text-muted-foreground">Eget billede</Label>
+                              <div className="flex gap-2 flex-wrap">
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  id={`upload_${line.id}`}
+                                  className="hidden"
+                                  onChange={(e) => {
+                                    const f = e.target.files?.[0];
+                                    if (f) uploadCustomImage(line.id, f);
+                                    e.target.value = '';
+                                  }}
+                                />
+                                <Button
+                                  asChild
+                                  size="sm"
+                                  variant="outline"
+                                  className="gap-1"
+                                  disabled={isUploading}
+                                >
+                                  <label htmlFor={`upload_${line.id}`} className="cursor-pointer">
+                                    {isUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                                    {hasCustom ? 'Erstat eget billede' : 'Upload eget billede'}
+                                  </label>
+                                </Button>
+                                {hasCustom && (
+                                  <Button size="sm" variant="ghost" className="gap-1 text-destructive" onClick={() => deleteCustomImage(line.id)}>
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                    Slet
+                                  </Button>
+                                )}
+                              </div>
+                              {hasCustom && (
+                                <Input
+                                  placeholder="Caption (valgfri)"
+                                  value={captionValue}
+                                  onChange={(e) => setLineFieldLocal(line.id, 'customImageCaption', e.target.value)}
+                                  onBlur={() => saveLineTextField(line.id, 'customImageCaption', 'custom_image_caption')}
+                                />
+                              )}
+                            </div>
+
+                            {/* Generér AI-render */}
+                            <div className="space-y-2">
+                              <Label className="text-xs uppercase tracking-wide text-muted-foreground">Generér AI-render</Label>
+                              <Textarea
+                                placeholder='Fx "Privat bolig, lyst stuerum, egetræsgulv, sydvendte vinduer"'
+                                rows={2}
+                                value={ctxValue}
+                                onChange={(e) => setLineFieldLocal(line.id, 'renderContext', e.target.value)}
+                                onBlur={() => saveLineTextField(line.id, 'renderContext', 'render_context')}
+                              />
+                              <div className="flex items-center justify-between flex-wrap gap-2">
+                                <div className="text-xs text-muted-foreground">
+                                  {renderStatus === 'none' && 'Ingen render endnu'}
+                                  {isInFlight && (
+                                    <span className="inline-flex items-center gap-1 text-blue-600">
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                      {renderStatus === 'pending' ? 'I kø…' : 'Genererer…'}
+                                    </span>
+                                  )}
+                                  {renderStatus === 'ready' && (
+                                    <span>
+                                      Genereret {line.renderGeneratedAt ? new Date(line.renderGeneratedAt).toLocaleString('da-DK') : ''}
+                                      {line.renderModel ? ` · ${line.renderModel}` : ''}
+                                    </span>
+                                  )}
+                                  {renderStatus === 'failed' && (
+                                    <span className="text-red-600">Fejlede: {line.renderError || 'ukendt fejl'}</span>
+                                  )}
+                                </div>
+                                <Button
+                                  size="sm"
+                                  onClick={() => triggerRenderGeneration(line.id)}
+                                  disabled={isInFlight}
+                                  className="gap-1"
+                                >
+                                  {isInFlight ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                                  {renderStatus === 'ready' ? 'Generér igen' : renderStatus === 'failed' ? 'Prøv igen' : 'Generér'}
+                                </Button>
+                              </div>
+                              {/* Power-user: redigér prompt direkte */}
+                              <Collapsible>
+                                <CollapsibleTrigger asChild>
+                                  <button type="button" className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline">
+                                    Vis/redigér prompt (avanceret)
+                                  </button>
+                                </CollapsibleTrigger>
+                                <CollapsibleContent>
+                                  <Textarea
+                                    rows={3}
+                                    placeholder="Auto-genereres fra titel + beskrivelse + kontekst"
+                                    value={promptValue}
+                                    onChange={(e) => setLineFieldLocal(line.id, 'renderPrompt', e.target.value)}
+                                    onBlur={() => saveLineTextField(line.id, 'renderPrompt', 'render_prompt')}
+                                    className="mt-2 font-mono text-xs"
+                                  />
+                                </CollapsibleContent>
+                              </Collapsible>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Levende beskrivelse */}
+                      {(() => {
+                        const ldLocal = lineFieldEdits[line.id]?.livingDescription;
+                        const ldValue = ldLocal !== undefined ? ldLocal : (line.livingDescription ?? '');
+                        const isEdited = !!line.livingDescriptionEdited;
+                        const wasGenerated = !!line.livingDescriptionGeneratedAt;
+                        return (
+                          <div className="mt-4 rounded-lg border bg-muted/20 p-4 space-y-2">
+                            <div className="flex items-center justify-between flex-wrap gap-2">
+                              <div className="flex items-center gap-2">
+                                <Label className="font-semibold text-base">Levende beskrivelse</Label>
+                                {isEdited && <Badge variant="secondary" className="text-xs">Redigeret</Badge>}
+                                {!isEdited && wasGenerated && <Badge className="text-xs bg-blue-100 text-blue-800 hover:bg-blue-100">Auto-genereret</Badge>}
+                              </div>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled
+                                title="AI-generering kommer snart"
+                                className="gap-1"
+                              >
+                                <RefreshCw className="h-3.5 w-3.5" />
+                                Generér (kommer snart)
+                              </Button>
+                            </div>
+                            <Textarea
+                              rows={5}
+                              placeholder="Sælgende beskrivelse til kundebilag — fx 'Skræddersyede omklædningsbænke i lyst birk skaber et roligt, indbydende rum, hvor materialernes naturlige struktur understreger…'"
+                              value={ldValue}
+                              onChange={(e) => setLineFieldLocal(line.id, 'livingDescription', e.target.value)}
+                              onBlur={() => saveLineTextField(line.id, 'livingDescription', 'living_description', { living_description_edited: true })}
+                            />
+                          </div>
+                        );
+                      })()}
 
                       {/* Line Items */}
                       <div className="mt-6">
