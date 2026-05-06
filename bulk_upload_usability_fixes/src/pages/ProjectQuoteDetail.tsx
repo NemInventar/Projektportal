@@ -231,7 +231,7 @@ const ProjectQuoteDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { activeProject } = useProject();
+  const { activeProject, projects, setActiveProject } = useProject();
   const { products, calculateProductCost } = useProjectProducts();
   const { companies, addCompany, updateCompany } = useCompanies();
   const { settings: companySettings } = useCompanySettings();
@@ -398,10 +398,19 @@ const ProjectQuoteDetail = () => {
   });
 
   useEffect(() => {
-    if (id && activeProject) {
+    if (id) {
       loadQuoteData();
     }
-  }, [id, activeProject]);
+  }, [id]);
+
+  // Sync activeProject til tilbuddets faktiske projekt.
+  // Forhindrer bug hvor PDF/header viser et andet projekt end det tilbuddet hører til.
+  useEffect(() => {
+    if (!quote?.project_id || !projects.length) return;
+    if (activeProject?.id === quote.project_id) return;
+    const target = projects.find(p => p.id === quote.project_id);
+    if (target) setActiveProject(target);
+  }, [quote?.project_id, projects, activeProject?.id, setActiveProject]);
 
   // Tjek for produktopdateringer når data er indlæst
   useEffect(() => {
@@ -2587,8 +2596,8 @@ const ProjectQuoteDetail = () => {
     );
   }
 
-  const handleDownloadPDF = async () => {
-    if (!quote || !activeProject) return;
+  const buildQuotePdfBlob = async (): Promise<Blob | null> => {
+    if (!quote || !activeProject) return null;
     const pdfLines = lines.map(line => {
       const totals = calculateLineTotals(line);
       return {
@@ -2605,7 +2614,6 @@ const ProjectQuoteDetail = () => {
     const date = formatDk(quote.created_at);
     const validUntil = quote.valid_until ? formatDk(quote.valid_until) : null;
     const linkedCompany = quote.company_id ? companies.find(c => c.id === quote.company_id) : undefined;
-    // Foretræk view'ets resolved-felter (FK-joins), fald tilbage til text-snapshots.
     const recipientName = quote.recipient_name ?? quote.customer_contact_name ?? linkedCompany?.defaultContactName ?? null;
     const customer = linkedCompany
       ? {
@@ -2619,11 +2627,8 @@ const ProjectQuoteDetail = () => {
       : activeProject.customer
         ? { name: activeProject.customer, contactName: recipientName }
         : { contactName: recipientName };
-    // Tilbudsdato: brug resolved_quote_date hvis sat (override eller fallback til created_at).
-    const quoteDateStr = quote.resolved_quote_date
-      ? formatDk(quote.resolved_quote_date)
-      : date;
-    const blob = await pdf(
+    const quoteDateStr = quote.resolved_quote_date ? formatDk(quote.resolved_quote_date) : date;
+    return await pdf(
       <QuotePDF
         projectName={activeProject.name}
         quoteTitle={quote.title}
@@ -2642,6 +2647,21 @@ const ProjectQuoteDetail = () => {
         }}
       />
     ).toBlob();
+  };
+
+  const handlePreviewPDF = async () => {
+    const blob = await buildQuotePdfBlob();
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+    // Fri object-URL'en efter et minut — browseren har den indlæst i tab'en på det tidspunkt.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  };
+
+  const handleDownloadPDF = async () => {
+    if (!quote || !activeProject) return;
+    const blob = await buildQuotePdfBlob();
+    if (!blob) return;
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -2924,6 +2944,17 @@ const ProjectQuoteDetail = () => {
             )}
 
             {/* Faste primære knapper */}
+            <Button
+              onClick={handlePreviewPDF}
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              disabled={lines.length === 0}
+              title="Åbn tilbuds-PDF i ny fane uden at downloade"
+            >
+              <ExternalLink className="h-4 w-4" />
+              Preview
+            </Button>
             <Button
               onClick={handleDownloadPDF}
               variant="outline"
