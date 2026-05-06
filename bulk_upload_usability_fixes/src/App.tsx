@@ -14,6 +14,7 @@ import { PurchaseOrdersProvider } from "@/contexts/PurchaseOrdersContext";
 import { TransportProvider } from "@/contexts/TransportContext";
 import { ProjectProductsProvider } from "@/contexts/ProjectProductsContext";
 import { CompaniesProvider } from "@/contexts/CompaniesContext";
+import { CompanySettingsProvider } from "@/contexts/CompanySettingsContext";
 import {
   PurchasingProvider,
   PurchasingOverview,
@@ -43,6 +44,8 @@ import BOM from "./pages/BOM";
 import PurchaseOrders from "./pages/PurchaseOrders";
 import PurchaseOrderDetail from "./pages/PurchaseOrderDetail";
 import Companies from "./pages/Companies";
+import Contacts from "./pages/Contacts";
+import Settings from "./pages/Settings";
 import StandardSuppliers from "./pages/StandardSuppliers";
 import StandardSupplierDetail from "./pages/StandardSupplierDetail";
 import StandardMaterials from "./pages/StandardMaterials";
@@ -65,6 +68,7 @@ function AppProviders({ children }: { children: React.ReactNode }) {
               <TransportProvider>
                 <ProjectProductsProvider>
                   <CompaniesProvider>
+                    <CompanySettingsProvider>
                     <PurchasingProvider>
                       <LeadsProvider>
                       <TooltipProvider>
@@ -74,6 +78,7 @@ function AppProviders({ children }: { children: React.ReactNode }) {
                       </TooltipProvider>
                       </LeadsProvider>
                     </PurchasingProvider>
+                    </CompanySettingsProvider>
                   </CompaniesProvider>
                 </ProjectProductsProvider>
               </TransportProvider>
@@ -132,6 +137,12 @@ const App = () => (
 
           {/* Firmaer (kunder, leverandører, partnere) */}
           <Route path="/firmaer" element={<ProtectedRoute><AppProviders><Companies /></AppProviders></ProtectedRoute>} />
+
+          {/* Kontakter (crm_contacts) */}
+          <Route path="/kontakter" element={<ProtectedRoute><AppProviders><Contacts /></AppProviders></ProtectedRoute>} />
+
+          {/* Indstillinger */}
+          <Route path="/indstillinger" element={<ProtectedRoute><AppProviders><Settings /></AppProviders></ProtectedRoute>} />
 
           {/* Leads (CRM) */}
           <Route path="/leads" element={<ProtectedRoute><AppProviders><LeadsInbox /></AppProviders></ProtectedRoute>} />

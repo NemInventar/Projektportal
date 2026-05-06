@@ -21,7 +21,8 @@ import {
   Database,
   DollarSign,
   Inbox,
-  Building2
+  Building2,
+  Contact
 } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -65,6 +66,18 @@ const Sidebar = () => {
       icon: Building2,
       path: '/firmaer',
       active: isActive('/firmaer') || location.pathname.startsWith('/firmaer/'),
+    },
+    {
+      label: 'Kontakter',
+      icon: Contact,
+      path: '/kontakter',
+      active: isActive('/kontakter') || location.pathname.startsWith('/kontakter/'),
+    },
+    {
+      label: 'Indstillinger',
+      icon: Settings,
+      path: '/indstillinger',
+      active: isActive('/indstillinger'),
     },
   ];
 

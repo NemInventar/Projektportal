@@ -2,6 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useProject, Project } from '@/contexts/ProjectContext';
+import { useCompanies, Company } from '@/contexts/CompaniesContext';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
@@ -136,6 +137,7 @@ function ProjectForm({ project, onSubmit, onCancel }: {
   onSubmit: (data: FormData) => void;
   onCancel: () => void;
 }) {
+  const { companies } = useCompanies();
   const [f, setF] = useState<FormData>({
     name:            project?.name            || '',
     customer:        project?.customer        || '',
@@ -150,6 +152,8 @@ function ProjectForm({ project, onSubmit, onCancel }: {
     architect:       project?.architect       || '',
     contractor:      project?.contractor      || '',
     owner:           project?.owner           || '',
+    customerCompanyId: project?.customerCompanyId ?? null,
+    customerContactId: project?.customerContactId ?? null,
     customerContact: project?.customerContact || '',
     customerEmail:   project?.customerEmail   || '',
     customerPhone:   project?.customerPhone   || '',
@@ -161,6 +165,23 @@ function ProjectForm({ project, onSubmit, onCancel }: {
     source:          project?.source          || '',
     sharepointUrl:   project?.sharepointUrl   || '',
   });
+
+  // Hent kontakter for valgt kunde-firma. Tom liste hvis intet firma er valgt.
+  const [companyContacts, setCompanyContacts] = useState<Array<{id: string; name: string; email: string | null; phone: string | null; role: string | null}>>([]);
+  useEffect(() => {
+    if (!f.customerCompanyId) {
+      setCompanyContacts([]);
+      return;
+    }
+    (async () => {
+      const { data } = await supabase
+        .from('crm_contacts_2026_04_12')
+        .select('id, name, email, phone, role')
+        .eq('company_id', f.customerCompanyId)
+        .order('name');
+      if (data) setCompanyContacts(data as any);
+    })();
+  }, [f.customerCompanyId]);
 
   const set = (k: keyof FormData, v: any) => setF(p => ({ ...p, [k]: v }));
   const inp = (k: keyof FormData) => ({ value: (f[k] as string) || '', onChange: (e: any) => set(k, e.target.value) });
@@ -199,8 +220,39 @@ function ProjectForm({ project, onSubmit, onCancel }: {
       </Section>
 
       <Section title="Parter">
-        <Field label="Kunde">
-          <Input {...inp('customer')} />
+        <Field label="Kunde-firma" full>
+          <Select
+            value={f.customerCompanyId ?? ''}
+            onValueChange={(v) => {
+              const company = companies.find(c => c.id === v);
+              setF(p => ({
+                ...p,
+                customerCompanyId: v || null,
+                customer: company?.name ?? p.customer,
+                // Skift firma → ryd kontakt-FK (tilhørte gammelt firma).
+                customerContactId: v !== p.customerCompanyId ? null : p.customerContactId,
+              }));
+            }}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Vælg firma fra kartoteket" />
+            </SelectTrigger>
+            <SelectContent>
+              {companies
+                .filter((c: Company) => c.isCustomer)
+                .map((c: Company) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}{c.cvr ? ` · CVR ${c.cvr}` : ''}
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field label="Kunde (text — fallback)" full>
+          <Input
+            {...inp('customer')}
+            placeholder={f.customerCompanyId ? 'Auto-udfyldt fra firma' : 'Skriv her hvis kunden ikke er i kartoteket'}
+          />
         </Field>
         <Field label="Bygherre / klient">
           <Input {...inp('client')} />
@@ -217,7 +269,39 @@ function ProjectForm({ project, onSubmit, onCancel }: {
       </Section>
 
       <Section title="Kontakt & adresse">
-        <Field label="Kontaktperson">
+        <Field label="Kontaktperson (vælg)" full>
+          <Select
+            value={f.customerContactId ?? ''}
+            onValueChange={(v) => {
+              const contact = companyContacts.find(c => c.id === v);
+              if (!contact) return;
+              setF(p => ({
+                ...p,
+                customerContactId: contact.id,
+                customerContact: contact.name,
+                customerEmail: contact.email ?? p.customerEmail,
+                customerPhone: contact.phone ?? p.customerPhone,
+              }));
+            }}
+            disabled={!f.customerCompanyId}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder={f.customerCompanyId ? 'Vælg kontakt fra firmaet' : 'Vælg firma først'} />
+            </SelectTrigger>
+            <SelectContent>
+              {companyContacts.length === 0 ? (
+                <div className="px-2 py-1.5 text-sm text-muted-foreground">Ingen kontakter på dette firma endnu</div>
+              ) : (
+                companyContacts.map(c => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}{c.role ? ` · ${c.role}` : ''}{c.email ? ` · ${c.email}` : ''}
+                  </SelectItem>
+                ))
+              )}
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field label="Kontaktperson (text)">
           <Input {...inp('customerContact')} />
         </Field>
         <Field label="Email">

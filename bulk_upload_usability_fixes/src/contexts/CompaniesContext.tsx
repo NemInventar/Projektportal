@@ -12,18 +12,24 @@ export interface Company {
   addressLine2?: string;
   addressZip?: string;
   addressCity?: string;
+  country?: string;
   defaultContactName?: string;
   defaultContactEmail?: string;
   defaultContactPhone?: string;
   isCustomer: boolean;
   isSupplier: boolean;
   isPartner: boolean;
+  isStandard?: boolean;
+  status?: string;
+  website?: string;
+  tags?: string[];
+  legacySupplierId?: string;
   notes?: string;
   createdAt: Date;
   updatedAt: Date;
 }
 
-export type CompanyInput = Omit<Company, 'id' | 'createdAt' | 'updatedAt'>;
+export type CompanyInput = Omit<Company, 'id' | 'createdAt' | 'updatedAt' | 'legacySupplierId'>;
 
 interface CompaniesContextType {
   companies: Company[];
@@ -47,32 +53,47 @@ const rowToCompany = (r: any): Company => ({
   addressLine2: r.address_line2 ?? undefined,
   addressZip: r.address_zip ?? undefined,
   addressCity: r.address_city ?? undefined,
+  country: r.country ?? undefined,
   defaultContactName: r.default_contact_name ?? undefined,
   defaultContactEmail: r.default_contact_email ?? undefined,
   defaultContactPhone: r.default_contact_phone ?? undefined,
   isCustomer: !!r.is_customer,
   isSupplier: !!r.is_supplier,
   isPartner: !!r.is_partner,
+  isStandard: r.is_standard ?? undefined,
+  status: r.status ?? undefined,
+  website: r.website ?? undefined,
+  tags: Array.isArray(r.tags) ? r.tags : undefined,
+  legacySupplierId: r.legacy_supplier_id ?? undefined,
   notes: r.notes ?? undefined,
   createdAt: new Date(r.created_at),
   updatedAt: new Date(r.updated_at),
 });
 
-const inputToRow = (input: Partial<CompanyInput>) => ({
-  name: input.name,
-  cvr: input.cvr ?? null,
-  address_line1: input.addressLine1 ?? null,
-  address_line2: input.addressLine2 ?? null,
-  address_zip: input.addressZip ?? null,
-  address_city: input.addressCity ?? null,
-  default_contact_name: input.defaultContactName ?? null,
-  default_contact_email: input.defaultContactEmail ?? null,
-  default_contact_phone: input.defaultContactPhone ?? null,
-  is_customer: input.isCustomer ?? false,
-  is_supplier: input.isSupplier ?? false,
-  is_partner: input.isPartner ?? false,
-  notes: input.notes ?? null,
-});
+// Patch-builder: kun felter der eksplicit er med i input bliver mappet til DB.
+// Forhindrer at en partial update overskriver eksisterende værdier med null.
+const inputToRow = (input: Partial<CompanyInput>): Record<string, any> => {
+  const out: Record<string, any> = {};
+  if ('name' in input) out.name = input.name;
+  if ('cvr' in input) out.cvr = input.cvr ?? null;
+  if ('addressLine1' in input) out.address_line1 = input.addressLine1 ?? null;
+  if ('addressLine2' in input) out.address_line2 = input.addressLine2 ?? null;
+  if ('addressZip' in input) out.address_zip = input.addressZip ?? null;
+  if ('addressCity' in input) out.address_city = input.addressCity ?? null;
+  if ('country' in input) out.country = input.country ?? null;
+  if ('defaultContactName' in input) out.default_contact_name = input.defaultContactName ?? null;
+  if ('defaultContactEmail' in input) out.default_contact_email = input.defaultContactEmail ?? null;
+  if ('defaultContactPhone' in input) out.default_contact_phone = input.defaultContactPhone ?? null;
+  if ('isCustomer' in input) out.is_customer = input.isCustomer ?? false;
+  if ('isSupplier' in input) out.is_supplier = input.isSupplier ?? false;
+  if ('isPartner' in input) out.is_partner = input.isPartner ?? false;
+  if ('isStandard' in input) out.is_standard = input.isStandard ?? null;
+  if ('status' in input) out.status = input.status ?? null;
+  if ('website' in input) out.website = input.website ?? null;
+  if ('tags' in input) out.tags = input.tags ?? null;
+  if ('notes' in input) out.notes = input.notes ?? null;
+  return out;
+};
 
 export const CompaniesProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [companies, setCompanies] = useState<Company[]>([]);

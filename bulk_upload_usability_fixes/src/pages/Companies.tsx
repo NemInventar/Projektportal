@@ -1,5 +1,7 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import Layout from '@/components/Layout';
+import { useNavigate } from 'react-router-dom';
+import { supabase } from '@/integrations/supabase/client';
 import { useCompanies, Company, CompanyInput } from '@/contexts/CompaniesContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,7 +16,10 @@ import {
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
-import { Plus, Search, Pencil, Trash2, Building2 } from 'lucide-react';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+import { Plus, Search, Pencil, Trash2, Building2, X } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 // TODO (V2): Overvej at merge companies_2026_04_27 og crm_contacts (leads)
@@ -27,12 +32,17 @@ const emptyForm: CompanyInput = {
   addressLine2: '',
   addressZip: '',
   addressCity: '',
+  country: 'Danmark',
   defaultContactName: '',
   defaultContactEmail: '',
   defaultContactPhone: '',
   isCustomer: true,
   isSupplier: false,
   isPartner: false,
+  isStandard: false,
+  status: 'Aktiv',
+  website: '',
+  tags: [],
   notes: '',
 };
 
@@ -41,12 +51,30 @@ const formatCompanyAddress = (c: Company): string => {
   return [c.addressLine1, cityZip].filter(Boolean).join(', ');
 };
 
+interface CompanyRefs {
+  contacts: Array<{ id: string; name: string }>;
+  quotes: Array<{ id: string; quote_number: string; title: string }>;
+  projects: Array<{ id: string; name: string }>;
+  deals: Array<{ id: string; title: string }>;
+}
+
+const emptyRefs: CompanyRefs = { contacts: [], quotes: [], projects: [], deals: [] };
+
 const Companies: React.FC = () => {
-  const { companies, loading, addCompany, updateCompany, removeCompany, countQuotesUsing } = useCompanies();
+  const { companies, loading, addCompany, updateCompany, removeCompany } = useCompanies();
   const { toast } = useToast();
+  const navigate = useNavigate();
 
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | 'customer' | 'supplier' | 'partner'>('all');
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
+
+  // Saml alle distincte tags fra companies — vises som filter-chips ovenover tabellen.
+  const allTags = useMemo(() => {
+    const set = new Set<string>();
+    companies.forEach(c => (c.tags || []).forEach(t => set.add(t)));
+    return Array.from(set).sort();
+  }, [companies]);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -54,8 +82,40 @@ const Companies: React.FC = () => {
   const [saving, setSaving] = useState(false);
 
   const [deleteTarget, setDeleteTarget] = useState<Company | null>(null);
-  const [deleteUsageCount, setDeleteUsageCount] = useState<number | null>(null);
+  const [deleteRefs, setDeleteRefs] = useState<CompanyRefs | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Linkede entiteter for det firma der er åbent i edit-dialog
+  const [editingRefs, setEditingRefs] = useState<CompanyRefs>(emptyRefs);
+  const [refsLoading, setRefsLoading] = useState(false);
+
+  const fetchCompanyRefs = async (companyId: string): Promise<CompanyRefs> => {
+    const [contacts, quotes, projects, deals] = await Promise.all([
+      supabase.from('crm_contacts_2026_04_12').select('id, name').eq('company_id', companyId).order('name'),
+      supabase.from('project_quotes_2026_01_16_23_00').select('id, quote_number, title').eq('company_id', companyId).order('created_at', { ascending: false }),
+      supabase.from('projects_2026_01_15_06_45').select('id, name').eq('customer_company_id', companyId).order('name'),
+      supabase.from('crm_deals_2026_04_12').select('id, title').eq('company_id', companyId).order('updated_at', { ascending: false }),
+    ]);
+    return {
+      contacts: (contacts.data ?? []) as any,
+      quotes: (quotes.data ?? []) as any,
+      projects: (projects.data ?? []) as any,
+      deals: (deals.data ?? []) as any,
+    };
+  };
+
+  // Hent linkede entiteter når dialog åbnes for et eksisterende firma
+  useEffect(() => {
+    if (!dialogOpen || !editingId) {
+      setEditingRefs(emptyRefs);
+      return;
+    }
+    setRefsLoading(true);
+    fetchCompanyRefs(editingId)
+      .then(setEditingRefs)
+      .catch((err) => console.error('Could not load company references:', err))
+      .finally(() => setRefsLoading(false));
+  }, [dialogOpen, editingId]);
 
   const filtered = useMemo(() => {
     let list = companies;
@@ -65,6 +125,9 @@ const Companies: React.FC = () => {
         roleFilter === 'supplier' ? c.isSupplier :
         c.isPartner,
       );
+    }
+    if (tagFilter) {
+      list = list.filter(c => (c.tags || []).includes(tagFilter));
     }
     const q = search.trim().toLowerCase();
     if (q) {
@@ -76,7 +139,7 @@ const Companies: React.FC = () => {
       );
     }
     return list;
-  }, [companies, search, roleFilter]);
+  }, [companies, search, roleFilter, tagFilter]);
 
   const openNew = () => {
     setEditingId(null);
@@ -93,12 +156,17 @@ const Companies: React.FC = () => {
       addressLine2: c.addressLine2 ?? '',
       addressZip: c.addressZip ?? '',
       addressCity: c.addressCity ?? '',
+      country: c.country ?? 'Danmark',
       defaultContactName: c.defaultContactName ?? '',
       defaultContactEmail: c.defaultContactEmail ?? '',
       defaultContactPhone: c.defaultContactPhone ?? '',
       isCustomer: c.isCustomer,
       isSupplier: c.isSupplier,
       isPartner: c.isPartner,
+      isStandard: c.isStandard ?? false,
+      status: c.status ?? 'Aktiv',
+      website: c.website ?? '',
+      tags: c.tags ?? [],
       notes: c.notes ?? '',
     });
     setDialogOpen(true);
@@ -123,9 +191,12 @@ const Companies: React.FC = () => {
         addressLine2: form.addressLine2?.trim() || undefined,
         addressZip: form.addressZip?.trim() || undefined,
         addressCity: form.addressCity?.trim() || undefined,
+        country: form.country?.trim() || undefined,
         defaultContactName: form.defaultContactName?.trim() || undefined,
         defaultContactEmail: form.defaultContactEmail?.trim() || undefined,
         defaultContactPhone: form.defaultContactPhone?.trim() || undefined,
+        website: form.website?.trim() || undefined,
+        tags: form.tags && form.tags.length > 0 ? form.tags : undefined,
         notes: form.notes?.trim() || undefined,
       };
       if (editingId) {
@@ -146,18 +217,21 @@ const Companies: React.FC = () => {
 
   const openDelete = async (c: Company) => {
     setDeleteTarget(c);
-    setDeleteUsageCount(null);
+    setDeleteRefs(null);
     try {
-      const count = await countQuotesUsing(c.id);
-      setDeleteUsageCount(count);
+      const refs = await fetchCompanyRefs(c.id);
+      setDeleteRefs(refs);
     } catch {
-      setDeleteUsageCount(null);
+      setDeleteRefs(null);
     }
   };
 
+  const totalRefs = (r: CompanyRefs | null) =>
+    r ? r.contacts.length + r.quotes.length + r.projects.length + r.deals.length : 0;
+
   const handleDelete = async () => {
-    if (!deleteTarget) return;
-    if ((deleteUsageCount ?? 0) > 0) return;
+    if (!deleteTarget || !deleteRefs) return;
+    if (totalRefs(deleteRefs) > 0) return;
     try {
       setDeleting(true);
       await removeCompany(deleteTarget.id);
@@ -216,6 +290,31 @@ const Companies: React.FC = () => {
                 </div>
               </div>
             </div>
+            {allTags.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 pt-3">
+                <span className="text-xs text-muted-foreground mr-1">Tags:</span>
+                {allTags.map(tag => (
+                  <Badge
+                    key={tag}
+                    variant={tagFilter === tag ? 'default' : 'outline'}
+                    className="cursor-pointer hover:bg-muted"
+                    onClick={() => setTagFilter(prev => (prev === tag ? null : tag))}
+                  >
+                    {tag}
+                  </Badge>
+                ))}
+                {tagFilter && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-2 text-xs"
+                    onClick={() => setTagFilter(null)}
+                  >
+                    <X className="h-3 w-3 mr-1" /> Ryd
+                  </Button>
+                )}
+              </div>
+            )}
           </CardHeader>
           <CardContent>
             {loading ? (
@@ -253,6 +352,10 @@ const Companies: React.FC = () => {
                           {c.isCustomer && <Badge variant="secondary">Kunde</Badge>}
                           {c.isSupplier && <Badge variant="secondary">Leverandør</Badge>}
                           {c.isPartner && <Badge variant="secondary">Partner</Badge>}
+                          {c.status === 'Arkiveret' && <Badge variant="outline" className="text-muted-foreground">Arkiveret</Badge>}
+                          {(c.tags || []).map(t => (
+                            <Badge key={t} variant="outline" className="text-xs font-normal">{t}</Badge>
+                          ))}
                         </div>
                       </TableCell>
                       <TableCell className="text-right">
@@ -295,7 +398,7 @@ const Companies: React.FC = () => {
               </div>
               <div className="space-y-1">
                 <Label>Roller *</Label>
-                <div className="flex gap-3 pt-2">
+                <div className="flex gap-3 pt-2 flex-wrap">
                   <label className="flex items-center gap-1.5 text-sm">
                     <Checkbox checked={form.isCustomer} onCheckedChange={(v) => setForm(p => ({ ...p, isCustomer: !!v }))} />
                     Kunde
@@ -309,6 +412,100 @@ const Companies: React.FC = () => {
                     Partner
                   </label>
                 </div>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="co_status">Status</Label>
+                <Select
+                  value={form.status ?? 'Aktiv'}
+                  onValueChange={(v) => setForm(p => ({ ...p, status: v }))}
+                >
+                  <SelectTrigger id="co_status">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Aktiv">Aktiv</SelectItem>
+                    <SelectItem value="Arkiveret">Arkiveret</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="co_country">Land</Label>
+                <Input
+                  id="co_country"
+                  value={form.country || ''}
+                  onChange={(e) => setForm(p => ({ ...p, country: e.target.value }))}
+                  placeholder="Danmark"
+                />
+              </div>
+              <div className="space-y-1 md:col-span-2">
+                <Label htmlFor="co_website">Hjemmeside</Label>
+                <Input
+                  id="co_website"
+                  type="url"
+                  value={form.website || ''}
+                  onChange={(e) => setForm(p => ({ ...p, website: e.target.value }))}
+                  placeholder="https://..."
+                />
+              </div>
+              <div className="space-y-1 md:col-span-2">
+                <Label>Tags</Label>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {(form.tags ?? []).map(t => (
+                    <Badge key={t} variant="secondary" className="gap-1">
+                      {t}
+                      <button
+                        type="button"
+                        onClick={() => setForm(p => ({ ...p, tags: (p.tags ?? []).filter(x => x !== t) }))}
+                        className="hover:text-destructive"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </Badge>
+                  ))}
+                </div>
+                <Input
+                  placeholder="Skriv tag og tryk Enter (fx hovedentreprenør, arkitekt, bygherre)"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const v = (e.currentTarget.value || '').trim().toLowerCase();
+                      if (!v) return;
+                      setForm(p => {
+                        const existing = p.tags ?? [];
+                        if (existing.includes(v)) return p;
+                        return { ...p, tags: [...existing, v] };
+                      });
+                      e.currentTarget.value = '';
+                    }
+                  }}
+                />
+                {allTags.length > 0 && (
+                  <div className="flex flex-wrap gap-1 pt-1">
+                    <span className="text-xs text-muted-foreground">Eksisterende:</span>
+                    {allTags
+                      .filter(t => !(form.tags ?? []).includes(t))
+                      .slice(0, 12)
+                      .map(t => (
+                        <Badge
+                          key={t}
+                          variant="outline"
+                          className="cursor-pointer text-xs font-normal hover:bg-muted"
+                          onClick={() => setForm(p => ({ ...p, tags: [...(p.tags ?? []), t] }))}
+                        >
+                          + {t}
+                        </Badge>
+                      ))}
+                  </div>
+                )}
+              </div>
+              <div className="space-y-1 md:col-span-2">
+                <label className="flex items-center gap-1.5 text-sm">
+                  <Checkbox
+                    checked={form.isStandard ?? false}
+                    onCheckedChange={(v) => setForm(p => ({ ...p, isStandard: !!v }))}
+                  />
+                  Standard-firma (vises i quick-pickers og lister)
+                </label>
               </div>
               <div className="space-y-1 md:col-span-2">
                 <Label htmlFor="co_addr1">Adresse</Label>
@@ -342,6 +539,100 @@ const Companies: React.FC = () => {
                 <Label htmlFor="co_notes">Noter</Label>
                 <Textarea id="co_notes" rows={2} value={form.notes || ''} onChange={(e) => setForm(p => ({ ...p, notes: e.target.value }))} />
               </div>
+              {editingId && (
+                <div className="md:col-span-2 border-t pt-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-semibold">Linkede entiteter</h4>
+                    {refsLoading && <span className="text-xs text-muted-foreground">Indlæser…</span>}
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                    {/* Kontakter */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Kontakter ({editingRefs.contacts.length})</span>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 text-xs px-2"
+                          onClick={() => navigate(`/kontakter?company=${editingId}&new=1`)}
+                        >
+                          <Plus className="h-3 w-3 mr-1" /> Opret kontakt
+                        </Button>
+                      </div>
+                      {editingRefs.contacts.slice(0, 3).map(c => (
+                        <div key={c.id} className="text-xs">
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/kontakter?company=${editingId}`)}
+                            className="text-left hover:underline"
+                          >
+                            {c.name}
+                          </button>
+                        </div>
+                      ))}
+                      {editingRefs.contacts.length > 3 && (
+                        <div className="text-xs text-muted-foreground">+ {editingRefs.contacts.length - 3} flere</div>
+                      )}
+                      {editingRefs.contacts.length === 0 && !refsLoading && (
+                        <div className="text-xs text-muted-foreground italic">Ingen kontakter endnu</div>
+                      )}
+                    </div>
+
+                    {/* Tilbud */}
+                    <div className="space-y-1.5">
+                      <span className="text-muted-foreground">Tilbud ({editingRefs.quotes.length})</span>
+                      {editingRefs.quotes.slice(0, 3).map(q => (
+                        <div key={q.id} className="text-xs truncate">
+                          <span className="font-mono">{q.quote_number}</span> · {q.title}
+                        </div>
+                      ))}
+                      {editingRefs.quotes.length > 3 && (
+                        <div className="text-xs text-muted-foreground">+ {editingRefs.quotes.length - 3} flere</div>
+                      )}
+                      {editingRefs.quotes.length === 0 && !refsLoading && (
+                        <div className="text-xs text-muted-foreground italic">Ingen tilbud</div>
+                      )}
+                    </div>
+
+                    {/* Projekter */}
+                    <div className="space-y-1.5">
+                      <span className="text-muted-foreground">Projekter ({editingRefs.projects.length})</span>
+                      {editingRefs.projects.slice(0, 3).map(p => (
+                        <div key={p.id} className="text-xs truncate">{p.name}</div>
+                      ))}
+                      {editingRefs.projects.length > 3 && (
+                        <div className="text-xs text-muted-foreground">+ {editingRefs.projects.length - 3} flere</div>
+                      )}
+                      {editingRefs.projects.length === 0 && !refsLoading && (
+                        <div className="text-xs text-muted-foreground italic">Ingen projekter</div>
+                      )}
+                    </div>
+
+                    {/* Deals */}
+                    <div className="space-y-1.5">
+                      <span className="text-muted-foreground">Deals ({editingRefs.deals.length})</span>
+                      {editingRefs.deals.slice(0, 3).map(d => (
+                        <div key={d.id} className="text-xs truncate">{d.title}</div>
+                      ))}
+                      {editingRefs.deals.length > 3 && (
+                        <div className="text-xs text-muted-foreground">+ {editingRefs.deals.length - 3} flere</div>
+                      )}
+                      {editingRefs.deals.length === 0 && !refsLoading && (
+                        <div className="text-xs text-muted-foreground italic">Ingen deals</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+              {editingId && (() => {
+                const editing = companies.find(c => c.id === editingId);
+                if (!editing?.legacySupplierId) return null;
+                return (
+                  <div className="md:col-span-2 text-xs text-muted-foreground border-t pt-2">
+                    Migreret fra <code className="text-xs bg-muted px-1 py-0.5 rounded">standard_suppliers.id = {editing.legacySupplierId}</code>
+                  </div>
+                );
+              })()}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>Annullér</Button>
@@ -359,19 +650,27 @@ const Companies: React.FC = () => {
               <DialogTitle>Slet firma</DialogTitle>
               <DialogDescription>
                 {deleteTarget && (
-                  deleteUsageCount === null
-                    ? `Tjekker om "${deleteTarget.name}" bruges på tilbud…`
-                    : deleteUsageCount > 0
-                      ? `"${deleteTarget.name}" er linket til ${deleteUsageCount} tilbud og kan ikke slettes. Fjern referencen fra tilbuddene først.`
+                  deleteRefs === null
+                    ? `Tjekker referencer for "${deleteTarget.name}"…`
+                    : totalRefs(deleteRefs) > 0
+                      ? `"${deleteTarget.name}" er linket til andre data og kan ikke slettes. Fjern eller flyt referencerne først:`
                       : `Er du sikker på at du vil slette "${deleteTarget.name}"? Handlingen kan ikke fortrydes.`
                 )}
               </DialogDescription>
             </DialogHeader>
+            {deleteRefs && totalRefs(deleteRefs) > 0 && (
+              <div className="text-sm space-y-1 bg-muted/50 rounded p-3">
+                {deleteRefs.contacts.length > 0 && <div>· {deleteRefs.contacts.length} kontakt{deleteRefs.contacts.length > 1 ? 'er' : ''}</div>}
+                {deleteRefs.quotes.length > 0 && <div>· {deleteRefs.quotes.length} tilbud</div>}
+                {deleteRefs.projects.length > 0 && <div>· {deleteRefs.projects.length} projekt{deleteRefs.projects.length > 1 ? 'er' : ''}</div>}
+                {deleteRefs.deals.length > 0 && <div>· {deleteRefs.deals.length} deal{deleteRefs.deals.length > 1 ? 's' : ''}</div>}
+              </div>
+            )}
             <DialogFooter>
               <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleting}>
-                {(deleteUsageCount ?? 0) > 0 ? 'Luk' : 'Annullér'}
+                {deleteRefs && totalRefs(deleteRefs) > 0 ? 'Luk' : 'Annullér'}
               </Button>
-              {(deleteUsageCount ?? 0) === 0 && deleteUsageCount !== null && (
+              {deleteRefs && totalRefs(deleteRefs) === 0 && (
                 <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
                   {deleting ? 'Sletter…' : 'Slet'}
                 </Button>

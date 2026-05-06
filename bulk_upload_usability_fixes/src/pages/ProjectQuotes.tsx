@@ -44,6 +44,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useProject } from '@/contexts/ProjectContext';
+import { useCompanySettings } from '@/contexts/CompanySettingsContext';
 
 interface ProjectQuote {
   id: string;
@@ -62,6 +63,7 @@ const ProjectQuotes = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { activeProject } = useProject();
+  const { settings: companySettings } = useCompanySettings();
   
   // Render table for a specific status
   const renderQuoteTable = (statusQuotes: ProjectQuote[], statusKey: string) => {
@@ -433,13 +435,23 @@ const ProjectQuotes = () => {
     }
 
     try {
-      const quoteData = {
+      // Auto-udfyld defaults fra firma-indstillinger (snapshot — gamle tilbud påvirkes ikke)
+      const validityDays = companySettings?.defaultValidityDays ?? 30;
+      const autoValidUntil = formData.validUntil
+        ? formData.validUntil
+        : new Date(Date.now() + validityDays * 86400_000).toISOString().split('T')[0];
+
+      const quoteData: Record<string, any> = {
         project_id: activeProject.id,
         quote_number: generateQuoteNumber(),
         title: formData.title,
         status: formData.status,
-        valid_until: formData.validUntil || null,
-        notes: formData.notes || null
+        valid_until: autoValidUntil || null,
+        notes: formData.notes || null,
+        payment_terms: companySettings?.defaultPaymentTerms ?? null,
+        delivery_period: companySettings?.defaultDeliveryPeriod ?? null,
+        reservations: companySettings?.defaultReservations ?? null,
+        recipient_profile: companySettings?.defaultRecipientProfile ?? 'mixed',
       };
 
       const { data, error } = await supabase

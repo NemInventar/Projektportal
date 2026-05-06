@@ -53,14 +53,16 @@ import {
   RefreshCw,
   Loader2,
   Download,
-  MoreHorizontal
+  MoreHorizontal,
+  Lock,
+  Unlock
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useProject } from '@/contexts/ProjectContext';
 import { useProjectProducts } from '@/contexts/ProjectProductsContext';
 import { useCompanies, type Company } from '@/contexts/CompaniesContext';
+import { useCompanySettings } from '@/contexts/CompanySettingsContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { EMPLOYEES, findEmployeeByEmail } from '@/config/company';
 
 // Quick-add cost-kategorier (mapper til cost_breakdown_json slot)
 type QuickCategory = 'material' | 'transport' | 'production' | 'montage' | 'intern';
@@ -101,6 +103,61 @@ const COST_SLOT_BADGE_CLASSES: Record<string, string> = {
 const getActiveCostSlots = (breakdown: any): string[] => {
   if (!breakdown) return [];
   return Object.keys(breakdown).filter(k => (breakdown[k] || 0) > 0);
+};
+
+// Lille indikator + reset/override-knap pr. tekstfelt der kan trække live mod company_settings.
+// Tre states:
+//   - isLocked: grå badge "Låst", ingen knap (banner ovenfor håndterer oplåsning)
+//   - !isLocked && isNull: grøn badge "Live", knap "Override"
+//   - !isLocked && !isNull: amber badge "Override", knap "Reset til standard"
+const FieldIndicator: React.FC<{
+  isNull: boolean;
+  isLocked: boolean;
+  lockedAt?: string | null;
+  onReset: () => void;
+  onOverride: () => void;
+}> = ({ isNull, isLocked, lockedAt, onReset, onOverride }) => {
+  if (isLocked) {
+    return (
+      <Badge variant="secondary" className="text-xs font-normal">
+        Låst{lockedAt ? ` d. ${new Date(lockedAt).toLocaleDateString('da-DK')}` : ''}
+      </Badge>
+    );
+  }
+  if (isNull) {
+    return (
+      <div className="flex items-center gap-2">
+        <Badge variant="outline" className="text-xs font-normal bg-emerald-50 text-emerald-800 border-emerald-200">
+          Live fra firma-indstillinger
+        </Badge>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-6 text-xs px-2"
+          onClick={onOverride}
+          title="Lav et override for dette tilbud — kopierer standardteksten ind så du kan redigere"
+        >
+          Override
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <Badge variant="outline" className="text-xs font-normal bg-amber-50 text-amber-800 border-amber-200">
+        Override (bundet til tilbud)
+      </Badge>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="h-6 text-xs px-2"
+        onClick={onReset}
+        title="Reset til standard — feltet trækker derefter live fra firma-indstillinger"
+      >
+        Reset til standard
+      </Button>
+    </div>
+  );
 };
 
 type RenderStatus = 'none' | 'pending' | 'generating' | 'ready' | 'failed';
@@ -177,6 +234,7 @@ const ProjectQuoteDetail = () => {
   const { activeProject } = useProject();
   const { products, calculateProductCost } = useProjectProducts();
   const { companies, addCompany, updateCompany } = useCompanies();
+  const { settings: companySettings } = useCompanySettings();
   const { user } = useAuth();
   
   // Utility function for currency formatting
@@ -192,6 +250,11 @@ const ProjectQuoteDetail = () => {
   // State
   const [quote, setQuote] = useState<any>(null);
   const [savingMetadata, setSavingMetadata] = useState(false);
+  // Sandheden for redigerbarhed: lås-state. Når true er hele tilbuddet read-only.
+  const isReadOnly = !!quote?.is_locked;
+  // Employees + crm_contacts til FK-dropdowns
+  const [employees, setEmployees] = useState<Array<{id: string; full_name: string; email: string | null; phone: string | null}>>([]);
+  const [companyContacts, setCompanyContacts] = useState<Array<{id: string; name: string; email: string | null; phone: string | null; role: string | null}>>([]);
   const [transferringToBudget, setTransferringToBudget] = useState(false);
   const [relatedBudgets, setRelatedBudgets] = useState<any[]>([]);
   const [lines, setLines] = useState<QuoteLine[]>([]);
@@ -222,6 +285,14 @@ const ProjectQuoteDetail = () => {
   const [quickAddForm, setQuickAddForm] = useState({ title: '', qty: 1, unit: 'stk', pricePerUnit: 0 });
   // Hvilke items er foldet ud (compact rendering)
   const [expandedItemIds, setExpandedItemIds] = useState<Set<string>>(new Set());
+  // Hvilke linjer har billede- og levende-beskrivelse-sektioner foldet ud (default collapsed)
+  const [expandedImageLines, setExpandedImageLines] = useState<Set<string>>(new Set());
+  const [expandedDescLines, setExpandedDescLines] = useState<Set<string>>(new Set());
+  const toggleSetItem = (s: Set<string>, id: string): Set<string> => {
+    const next = new Set(s);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  };
   // Lokal state for inline qty-edit
   const [itemQtyEdits, setItemQtyEdits] = useState<Record<string, number>>({});
   const [showNewCompanyDialog, setShowNewCompanyDialog] = useState(false);
@@ -247,6 +318,7 @@ const ProjectQuoteDetail = () => {
     payment_terms: '',
     delivery_period: '',
     reservations: '',
+    special_reservations: '',
     created_by_name: '',
     created_by_email: '',
     created_by_phone: '',
@@ -356,19 +428,48 @@ const ProjectQuoteDetail = () => {
     }
   }, [lines]);
 
-  // Auto-prefill tilbudsgiver fra indlogget bruger ved første load (kun hvis alle 3 felter er tomme)
+  // Load aktive medarbejdere én gang
   useEffect(() => {
-    if (!quote?.id || !user?.email) return;
-    if (quote.created_by_name || quote.created_by_email || quote.created_by_phone) return;
-    const emp = findEmployeeByEmail(user.email);
+    (async () => {
+      const { data, error } = await supabase
+        .from('employees')
+        .select('id, full_name, email, phone')
+        .eq('active', true)
+        .order('full_name');
+      if (!error && data) setEmployees(data);
+    })();
+  }, []);
+
+  // Load crm_contacts for tilbuddets company. Genindlæs når company_id ændres.
+  useEffect(() => {
+    if (!quote?.company_id) {
+      setCompanyContacts([]);
+      return;
+    }
+    (async () => {
+      const { data, error } = await supabase
+        .from('crm_contacts_2026_04_12')
+        .select('id, name, email, phone, role')
+        .eq('company_id', quote.company_id)
+        .order('name');
+      if (!error && data) setCompanyContacts(data as any);
+    })();
+  }, [quote?.company_id]);
+
+  // Auto-prefill tilbudsgiver fra indlogget bruger ved første load (kun hvis FK ikke er sat)
+  useEffect(() => {
+    if (!quote?.id || !user?.email || employees.length === 0) return;
+    if (quote.created_by_employee_id) return;
+    const emp = employees.find(e => e.email && e.email.toLowerCase() === user.email!.toLowerCase());
     if (!emp) return;
     updateQuoteMetadata({
-      created_by_name: emp.name,
+      created_by_employee_id: emp.id,
+      created_by_name: emp.full_name,
       created_by_email: emp.email,
       created_by_phone: emp.phone,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quote?.id, user?.email]);
+  }, [quote?.id, user?.email, employees.length]);
 
   // Synkronisér lokal detailsForm når quote ændres (id-skift eller eksternt save)
   useEffect(() => {
@@ -378,6 +479,7 @@ const ProjectQuoteDetail = () => {
       payment_terms: quote.payment_terms ?? '',
       delivery_period: quote.delivery_period ?? '',
       reservations: quote.reservations ?? '',
+      special_reservations: quote.special_reservations ?? '',
       created_by_name: quote.created_by_name ?? '',
       created_by_email: quote.created_by_email ?? '',
       created_by_phone: quote.created_by_phone ?? '',
@@ -389,6 +491,7 @@ const ProjectQuoteDetail = () => {
     quote?.payment_terms,
     quote?.delivery_period,
     quote?.reservations,
+    quote?.special_reservations,
     quote?.created_by_name,
     quote?.created_by_email,
     quote?.created_by_phone,
@@ -410,9 +513,10 @@ const ProjectQuoteDetail = () => {
     try {
       setLoading(true);
       
-      // Load quote
+      // Load quote — fra v_quotes_resolved for at få resolved_* tekster.
+      // INSERT/UPDATE går stadig mod project_quotes_2026_01_16_23_00 direkte.
       const { data: quoteData, error: quoteError } = await supabase
-        .from('project_quotes_2026_01_16_23_00')
+        .from('v_quotes_resolved')
         .select('*')
         .eq('id', id)
         .single();
@@ -592,10 +696,10 @@ const ProjectQuoteDetail = () => {
   // Update quote metadata
   const updateQuoteMetadata = async (updates: any) => {
     if (!quote?.id) return;
-    
+
     try {
       setSavingMetadata(true);
-      
+
       const { error } = await supabase
         .from('project_quotes_2026_01_16_23_00')
         .update(updates)
@@ -603,9 +707,22 @@ const ProjectQuoteDetail = () => {
 
       if (error) throw error;
 
-      // Update local state
-      setQuote((prev: any) => ({ ...prev, ...updates }));
-      
+      // Hvis et af felterne triggerer DB-side ændringer eller joins, reload fra view'et
+      // så vi fanger trigger-output (sent_at, locked_at, snapshot) og opdaterede joins
+      // (company_*, recipient_*, created_by_*_resolved).
+      const triggerKeys = ['status', 'is_locked', 'payment_terms', 'delivery_period', 'reservations', 'special_reservations', 'company_id', 'recipient_contact_id', 'created_by_employee_id', 'quote_date'];
+      const needsReload = Object.keys(updates).some(k => triggerKeys.includes(k));
+      if (needsReload) {
+        const { data: fresh } = await supabase
+          .from('v_quotes_resolved')
+          .select('*')
+          .eq('id', quote.id)
+          .single();
+        if (fresh) setQuote(fresh);
+      } else {
+        setQuote((prev: any) => ({ ...prev, ...updates }));
+      }
+
       toast({
         title: "Metadata opdateret",
         description: "Tilbuddets metadata er blevet gemt",
@@ -1638,6 +1755,47 @@ const ProjectQuoteDetail = () => {
     }
   };
 
+  // Living description AI-generation
+  const [generatingLivingDesc, setGeneratingLivingDesc] = useState<string | null>(null);
+  const generateLivingDescription = async (lineId: string) => {
+    try {
+      setGeneratingLivingDesc(lineId);
+      const { data, error } = await supabase.functions.invoke('generate-living-description', {
+        body: { quote_line_id: lineId },
+      });
+      if (error) throw error;
+      const generated = (data as any)?.living_description;
+      if (!generated) throw new Error('Tomt svar fra edge function');
+      setLines(prev => prev.map(l => l.id === lineId ? {
+        ...l,
+        livingDescription: generated,
+        livingDescriptionGeneratedAt: (data as any)?.generated_at ?? new Date().toISOString(),
+        livingDescriptionEdited: false,
+      } : l));
+      // Ryd lokal edit-state så den nye værdi bliver vist
+      setLineFieldEdits(prev => {
+        const next = { ...prev };
+        if (next[lineId]) {
+          const lineEdits = { ...next[lineId] };
+          delete lineEdits.livingDescription;
+          if (Object.keys(lineEdits).length === 0) delete next[lineId];
+          else next[lineId] = lineEdits;
+        }
+        return next;
+      });
+      toast({ title: 'Levende beskrivelse genereret' });
+    } catch (err: any) {
+      console.error(err);
+      toast({
+        title: 'Fejl',
+        description: err?.message || 'Kunne ikke generere beskrivelse — er edge function deployet og GEMINI_API_KEY sat?',
+        variant: 'destructive',
+      });
+    } finally {
+      setGeneratingLivingDesc(null);
+    }
+  };
+
   const triggerRenderGeneration = async (lineId: string) => {
     try {
       await updateLineFields(lineId, { render_status: 'pending', render_error: null });
@@ -2447,6 +2605,8 @@ const ProjectQuoteDetail = () => {
     const date = formatDk(quote.created_at);
     const validUntil = quote.valid_until ? formatDk(quote.valid_until) : null;
     const linkedCompany = quote.company_id ? companies.find(c => c.id === quote.company_id) : undefined;
+    // Foretræk view'ets resolved-felter (FK-joins), fald tilbage til text-snapshots.
+    const recipientName = quote.recipient_name ?? quote.customer_contact_name ?? linkedCompany?.defaultContactName ?? null;
     const customer = linkedCompany
       ? {
           name: linkedCompany.name,
@@ -2454,27 +2614,31 @@ const ProjectQuoteDetail = () => {
           addressLine1: linkedCompany.addressLine1 ?? null,
           addressZip: linkedCompany.addressZip ?? null,
           addressCity: linkedCompany.addressCity ?? null,
-          contactName: quote.customer_contact_name ?? linkedCompany.defaultContactName ?? null,
+          contactName: recipientName,
         }
       : activeProject.customer
-        ? { name: activeProject.customer, contactName: quote.customer_contact_name ?? null }
-        : { contactName: quote.customer_contact_name ?? null };
+        ? { name: activeProject.customer, contactName: recipientName }
+        : { contactName: recipientName };
+    // Tilbudsdato: brug resolved_quote_date hvis sat (override eller fallback til created_at).
+    const quoteDateStr = quote.resolved_quote_date
+      ? formatDk(quote.resolved_quote_date)
+      : date;
     const blob = await pdf(
       <QuotePDF
         projectName={activeProject.name}
         quoteTitle={quote.title}
         quoteNumber={quote.quote_number}
-        quoteDate={date}
+        quoteDate={quoteDateStr}
         validUntil={validUntil}
         lines={pdfLines}
         customer={customer}
-        paymentTerms={quote.payment_terms ?? null}
-        deliveryPeriod={quote.delivery_period ?? null}
-        reservations={quote.reservations ?? null}
+        paymentTerms={quote.resolved_payment_terms ?? null}
+        deliveryPeriod={quote.resolved_delivery_period ?? null}
+        reservations={quote.resolved_reservations ?? null}
         createdBy={{
-          name: quote.created_by_name ?? null,
-          email: quote.created_by_email ?? null,
-          phone: quote.created_by_phone ?? null,
+          name: quote.created_by_name_resolved ?? quote.created_by_name ?? null,
+          email: quote.created_by_email_resolved ?? quote.created_by_email ?? null,
+          phone: quote.created_by_phone_resolved ?? quote.created_by_phone ?? null,
         }}
       />
     ).toBlob();
@@ -2781,7 +2945,7 @@ const ProjectQuoteDetail = () => {
               <Download className="h-4 w-4" />
               Bilag
             </Button>
-            <Button onClick={() => setShowAddLineModal(true)} className="gap-2">
+            <Button onClick={() => setShowAddLineModal(true)} className="gap-2" disabled={isReadOnly}>
               <Plus className="h-4 w-4" />
               Tilføj linje
             </Button>
@@ -2815,6 +2979,34 @@ const ProjectQuoteDetail = () => {
           </div>
         </div>
 
+        {/* Låst-banner */}
+        {isReadOnly && (
+          <div className="flex items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3">
+            <div className="flex items-center gap-2 text-sm text-amber-900">
+              <Lock className="h-4 w-4" />
+              <span className="font-medium">Tilbuddet er låst</span>
+              {quote?.locked_at && (
+                <span className="text-amber-700">
+                  · {new Date(quote.locked_at).toLocaleDateString('da-DK')}
+                </span>
+              )}
+              <span className="text-amber-700">— alle felter er read-only.</span>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                if (confirm('Lås tilbuddet op? Tekstfelter forbliver som de er — brug "Reset til standard" pr. felt hvis du vil have dem live igen.')) {
+                  updateQuoteMetadata({ is_locked: false });
+                }
+              }}
+              disabled={savingMetadata}
+            >
+              <Unlock className="h-3 w-3 mr-1" /> Lås op
+            </Button>
+          </div>
+        )}
+
         {/* Sticky totals-bar */}
         <div className="sticky top-0 z-20 -mx-6 px-6 py-3 bg-background/95 backdrop-blur border-b">
           <div className="flex flex-wrap items-center justify-between gap-4">
@@ -2826,6 +3018,11 @@ const ProjectQuoteDetail = () => {
                  quote?.status === 'accepted' ? 'Accepteret' :
                  quote?.status === 'rejected' ? 'Afvist' : quote?.status}
               </Badge>
+              {quote?.is_locked && (
+                <Badge variant="destructive" className="gap-1">
+                  <Lock className="h-3 w-3" /> Låst
+                </Badge>
+              )}
               {(() => {
                 const linkedCo = quote?.company_id ? companies.find(c => c.id === quote.company_id) : null;
                 const customerName = linkedCo?.name || activeProject?.customer;
@@ -2865,7 +3062,7 @@ const ProjectQuoteDetail = () => {
                       const fmtDk = (iso?: string | null) => iso ? new Date(iso).toLocaleDateString('da-DK') : '';
                       const parts = [
                         co?.name,
-                        quote?.payment_terms,
+                        quote?.resolved_payment_terms,
                         quote?.valid_until ? `Gyldig til ${fmtDk(quote.valid_until)}` : null,
                         quote?.created_by_name,
                       ].filter(Boolean);
@@ -2895,12 +3092,18 @@ const ProjectQuoteDetail = () => {
                       value={quote?.company_id || ''}
                       onValueChange={(v) => {
                         const company = companies.find(c => c.id === v);
-                        updateQuoteMetadata({
-                          company_id: v || null,
+                        const newCompanyId = v || null;
+                        // Skift firma → ryd recipient_contact_id (kontakten tilhørte gammelt firma).
+                        const updates: Record<string, any> = {
+                          company_id: newCompanyId,
                           customer_contact_name: quote?.customer_contact_name || company?.defaultContactName || null,
-                        });
+                        };
+                        if (newCompanyId !== quote?.company_id) {
+                          updates.recipient_contact_id = null;
+                        }
+                        updateQuoteMetadata(updates);
                       }}
-                      disabled={savingMetadata}
+                      disabled={savingMetadata || isReadOnly}
                     >
                       <SelectTrigger className="flex-1">
                         <SelectValue placeholder="Vælg kunde" />
@@ -2920,7 +3123,7 @@ const ProjectQuoteDetail = () => {
                         variant="outline"
                         size="icon"
                         onClick={openEditCompanyDialog}
-                        disabled={savingMetadata}
+                        disabled={savingMetadata || isReadOnly}
                         title="Rediger valgte kunde"
                       >
                         <Edit className="h-4 w-4" />
@@ -2930,7 +3133,7 @@ const ProjectQuoteDetail = () => {
                       variant="outline"
                       size="icon"
                       onClick={openNewCompanyDialog}
-                      disabled={savingMetadata}
+                      disabled={savingMetadata || isReadOnly}
                       title="Opret ny kunde"
                     >
                       <Plus className="h-4 w-4" />
@@ -2950,14 +3153,49 @@ const ProjectQuoteDetail = () => {
                   })()}
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="customer_contact_name">Att. / kontaktperson</Label>
-                  <Input
-                    id="customer_contact_name"
-                    placeholder="Fx Lena Andersen"
-                    value={detailsForm.customer_contact_name}
-                    onChange={(e) => setDetailsForm(p => ({ ...p, customer_contact_name: e.target.value }))}
-                    onBlur={() => saveDetailField('customer_contact_name')}
-                  />
+                  <Label htmlFor="recipient_contact_id">Modtager-kontakt</Label>
+                  <Select
+                    value={quote?.recipient_contact_id ?? ''}
+                    onValueChange={(contactId) => {
+                      const contact = companyContacts.find(c => c.id === contactId);
+                      if (!contact) return;
+                      updateQuoteMetadata({
+                        recipient_contact_id: contact.id,
+                        customer_contact_name: contact.name,
+                      });
+                    }}
+                    disabled={savingMetadata || isReadOnly || !quote?.company_id}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder={quote?.company_id ? 'Vælg kontaktperson' : 'Vælg firma først'} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {companyContacts.length === 0 ? (
+                        <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                          Ingen kontakter på dette firma endnu
+                        </div>
+                      ) : (
+                        companyContacts.map(c => (
+                          <SelectItem key={c.id} value={c.id}>
+                            {c.name}{c.role ? ` · ${c.role}` : ''}{c.email ? ` · ${c.email}` : ''}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                  <div className="space-y-1 pt-1">
+                    <Label htmlFor="customer_contact_name" className="text-xs text-muted-foreground">
+                      Eller skriv ad-hoc att.-tekst (override)
+                    </Label>
+                    <Input
+                      id="customer_contact_name"
+                      placeholder="Fx Lena Andersen"
+                      value={detailsForm.customer_contact_name}
+                      onChange={(e) => setDetailsForm(p => ({ ...p, customer_contact_name: e.target.value }))}
+                      onBlur={() => saveDetailField('customer_contact_name')}
+                      disabled={isReadOnly}
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -2967,45 +3205,128 @@ const ProjectQuoteDetail = () => {
               <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Vilkår</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
+                  <Label htmlFor="quote_date">Tilbudsdato</Label>
+                  <Input
+                    id="quote_date"
+                    type="date"
+                    value={quote?.quote_date || (quote?.created_at ? new Date(quote.created_at).toISOString().split('T')[0] : '')}
+                    onChange={(e) => updateQuoteMetadata({ quote_date: e.target.value || null })}
+                    disabled={savingMetadata || isReadOnly}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Vises på PDF'en. Default = oprettelsesdato. Kan overstyres her.
+                  </p>
+                </div>
+                <div className="space-y-2">
                   <Label htmlFor="valid_until">Gyldig til</Label>
                   <Input
                     id="valid_until"
                     type="date"
                     value={quote?.valid_until || ''}
                     onChange={(e) => updateQuoteMetadata({ valid_until: e.target.value || null })}
-                    disabled={savingMetadata}
+                    disabled={savingMetadata || isReadOnly}
                   />
                 </div>
+                {/* Betalingsbetingelser */}
                 <div className="space-y-2">
-                  <Label htmlFor="payment_terms">Betalingsbetingelser</Label>
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <Label htmlFor="payment_terms">Betalingsbetingelser</Label>
+                    <FieldIndicator
+                      isNull={quote?.payment_terms === null || quote?.payment_terms === undefined || quote?.payment_terms === ''}
+                      isLocked={isReadOnly}
+                      lockedAt={quote?.locked_at}
+                      onReset={() => updateQuoteMetadata({ payment_terms: null })}
+                      onOverride={() => {
+                        const seed = quote?.resolved_payment_terms ?? '';
+                        setDetailsForm(p => ({ ...p, payment_terms: seed }));
+                        updateQuoteMetadata({ payment_terms: seed });
+                      }}
+                    />
+                  </div>
                   <Input
                     id="payment_terms"
-                    placeholder="Fx Netto 14 dage fra fakturadato"
+                    placeholder={quote?.resolved_payment_terms ?? 'Fx Netto 14 dage fra fakturadato'}
                     value={detailsForm.payment_terms}
                     onChange={(e) => setDetailsForm(p => ({ ...p, payment_terms: e.target.value }))}
                     onBlur={() => saveDetailField('payment_terms')}
+                    disabled={isReadOnly || quote?.payment_terms === null || quote?.payment_terms === undefined || quote?.payment_terms === ''}
                   />
                 </div>
+
+                {/* Leveringstid */}
                 <div className="space-y-2 md:col-span-2">
-                  <Label htmlFor="delivery_period">Leveringstid / udførelsesperiode</Label>
-                  <Input
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <Label htmlFor="delivery_period">Leveringstid / udførelsesperiode</Label>
+                    <FieldIndicator
+                      isNull={quote?.delivery_period === null || quote?.delivery_period === undefined || quote?.delivery_period === ''}
+                      isLocked={isReadOnly}
+                      lockedAt={quote?.locked_at}
+                      onReset={() => updateQuoteMetadata({ delivery_period: null })}
+                      onOverride={() => {
+                        const seed = quote?.resolved_delivery_period ?? '';
+                        setDetailsForm(p => ({ ...p, delivery_period: seed }));
+                        updateQuoteMetadata({ delivery_period: seed });
+                      }}
+                    />
+                  </div>
+                  <Textarea
                     id="delivery_period"
-                    placeholder='Fx "Uge 32-34, 2026" eller "6 uger efter ordrebekræftelse"'
+                    placeholder={quote?.resolved_delivery_period ?? 'Fx "Uge 32-34, 2026" eller "6 uger efter ordrebekræftelse"'}
                     value={detailsForm.delivery_period}
                     onChange={(e) => setDetailsForm(p => ({ ...p, delivery_period: e.target.value }))}
                     onBlur={() => saveDetailField('delivery_period')}
+                    rows={4}
+                    disabled={isReadOnly || quote?.delivery_period === null || quote?.delivery_period === undefined || quote?.delivery_period === ''}
                   />
                 </div>
+
+                {/* Standardforbehold */}
                 <div className="space-y-2 md:col-span-2">
-                  <Label htmlFor="reservations">Forbehold</Label>
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <Label htmlFor="reservations">Standardforbehold</Label>
+                    <FieldIndicator
+                      isNull={quote?.reservations === null || quote?.reservations === undefined || quote?.reservations === ''}
+                      isLocked={isReadOnly}
+                      lockedAt={quote?.locked_at}
+                      onReset={() => updateQuoteMetadata({ reservations: null })}
+                      onOverride={() => {
+                        const seed = companySettings?.defaultReservations ?? '';
+                        setDetailsForm(p => ({ ...p, reservations: seed }));
+                        updateQuoteMetadata({ reservations: seed });
+                      }}
+                    />
+                  </div>
                   <Textarea
                     id="reservations"
-                    placeholder="Fx prisregulering ved materialestigning >5%, forudsætter uhindret adgang..."
+                    placeholder={companySettings?.defaultReservations ?? 'Fx prisregulering ved materialestigning >5%, forudsætter uhindret adgang...'}
                     value={detailsForm.reservations}
                     onChange={(e) => setDetailsForm(p => ({ ...p, reservations: e.target.value }))}
                     onBlur={() => saveDetailField('reservations')}
+                    rows={4}
+                    disabled={isReadOnly || quote?.reservations === null || quote?.reservations === undefined || quote?.reservations === ''}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Override af standardforbeholdet er en ekstrem case. De fleste projektspecifikke ting hører hjemme i feltet nedenfor.
+                  </p>
+                </div>
+
+                {/* Projektspecifikke forbehold — altid brugerens, røres aldrig automatisk */}
+                <div className="space-y-2 md:col-span-2">
+                  <Label htmlFor="special_reservations">
+                    Projektspecifikke forbehold <span className="text-muted-foreground font-normal">(valgfri)</span>
+                  </Label>
+                  <Textarea
+                    id="special_reservations"
+                    placeholder="Fx farveforbehold, særlige montageforhold, asbest osv."
+                    value={detailsForm.special_reservations}
+                    onChange={(e) => setDetailsForm(p => ({ ...p, special_reservations: e.target.value }))}
+                    onBlur={() => saveDetailField('special_reservations')}
+                    disabled={isReadOnly}
                     rows={3}
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Vises i tilbuddet under standardforbeholdet. Forbliver brugerens — røres aldrig automatisk af systemet.
+                  </p>
                 </div>
               </div>
             </div>
@@ -3017,26 +3338,26 @@ const ProjectQuoteDetail = () => {
                 <div className="space-y-2 md:col-span-3">
                   <Label>Hurtigvalg medarbejder</Label>
                   <Select
-                    value={quote?.created_by_email && EMPLOYEES.find(e => e.email === quote.created_by_email) ? quote.created_by_email : ''}
-                    onValueChange={(email) => {
-                      const emp = EMPLOYEES.find(e => e.email === email);
-                      if (emp) {
-                        updateQuoteMetadata({
-                          created_by_name: emp.name,
-                          created_by_email: emp.email,
-                          created_by_phone: emp.phone,
-                        });
-                      }
+                    value={quote?.created_by_employee_id ?? ''}
+                    onValueChange={(empId) => {
+                      const emp = employees.find(e => e.id === empId);
+                      if (!emp) return;
+                      updateQuoteMetadata({
+                        created_by_employee_id: emp.id,
+                        created_by_name: emp.full_name,
+                        created_by_email: emp.email,
+                        created_by_phone: emp.phone,
+                      });
                     }}
-                    disabled={savingMetadata}
+                    disabled={savingMetadata || isReadOnly}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Vælg for at autoudfylde felterne nedenfor" />
+                      <SelectValue placeholder="Vælg medarbejder for at autoudfylde felterne nedenfor" />
                     </SelectTrigger>
                     <SelectContent>
-                      {EMPLOYEES.map(emp => (
-                        <SelectItem key={emp.email} value={emp.email}>
-                          {emp.name}
+                      {employees.map(emp => (
+                        <SelectItem key={emp.id} value={emp.id}>
+                          {emp.full_name}{emp.email ? ` · ${emp.email}` : ''}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -3049,6 +3370,7 @@ const ProjectQuoteDetail = () => {
                     value={detailsForm.created_by_name}
                     onChange={(e) => setDetailsForm(p => ({ ...p, created_by_name: e.target.value }))}
                     onBlur={() => saveDetailField('created_by_name')}
+                    disabled={isReadOnly}
                   />
                 </div>
                 <div className="space-y-2">
@@ -3059,6 +3381,7 @@ const ProjectQuoteDetail = () => {
                     value={detailsForm.created_by_email}
                     onChange={(e) => setDetailsForm(p => ({ ...p, created_by_email: e.target.value }))}
                     onBlur={() => saveDetailField('created_by_email')}
+                    disabled={isReadOnly}
                   />
                 </div>
                 <div className="space-y-2">
@@ -3068,6 +3391,7 @@ const ProjectQuoteDetail = () => {
                     value={detailsForm.created_by_phone}
                     onChange={(e) => setDetailsForm(p => ({ ...p, created_by_phone: e.target.value }))}
                     onBlur={() => saveDetailField('created_by_phone')}
+                    disabled={isReadOnly}
                   />
                 </div>
               </div>
@@ -3083,7 +3407,7 @@ const ProjectQuoteDetail = () => {
                   <Select
                     value={quote?.recipient_profile || 'mixed'}
                     onValueChange={(v) => updateQuoteMetadata({ recipient_profile: v })}
-                    disabled={savingMetadata}
+                    disabled={savingMetadata || isReadOnly}
                   >
                     <SelectTrigger>
                       <SelectValue />
@@ -3104,6 +3428,7 @@ const ProjectQuoteDetail = () => {
                     value={detailsForm.recipient_notes}
                     onChange={(e) => setDetailsForm(p => ({ ...p, recipient_notes: e.target.value }))}
                     onBlur={() => saveDetailField('recipient_notes')}
+                    disabled={isReadOnly}
                   />
                 </div>
               </div>
@@ -3241,7 +3566,7 @@ const ProjectQuoteDetail = () => {
                   type="date"
                   value={quote?.next_delivery_date || ''}
                   onChange={(e) => updateQuoteMetadata({ next_delivery_date: e.target.value || null })}
-                  disabled={savingMetadata}
+                  disabled={savingMetadata || isReadOnly}
                 />
               </div>
               
@@ -3250,7 +3575,7 @@ const ProjectQuoteDetail = () => {
                 <Select 
                   value={quote?.priority?.toString() || '2'} 
                   onValueChange={(value) => updateQuoteMetadata({ priority: parseInt(value) })}
-                  disabled={savingMetadata}
+                  disabled={savingMetadata || isReadOnly}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -3270,7 +3595,7 @@ const ProjectQuoteDetail = () => {
                   placeholder="Bruger ID (placeholder)"
                   value={quote?.owner_user_id || ''}
                   onChange={(e) => updateQuoteMetadata({ owner_user_id: e.target.value || null })}
-                  disabled={savingMetadata}
+                  disabled={savingMetadata || isReadOnly}
                 />
               </div>
               
@@ -3281,7 +3606,7 @@ const ProjectQuoteDetail = () => {
                   placeholder="Beskriv næste handling"
                   value={quote?.next_action || ''}
                   onChange={(e) => updateQuoteMetadata({ next_action: e.target.value || null })}
-                  disabled={savingMetadata}
+                  disabled={savingMetadata || isReadOnly}
                 />
               </div>
               
@@ -3292,22 +3617,34 @@ const ProjectQuoteDetail = () => {
                   placeholder="Noter om levering"
                   value={quote?.delivery_note || ''}
                   onChange={(e) => updateQuoteMetadata({ delivery_note: e.target.value || null })}
-                  disabled={savingMetadata}
+                  disabled={savingMetadata || isReadOnly}
                   rows={2}
                 />
               </div>
               
-              {/* Read-only felter */}
               <div className="space-y-2">
-                <Label>Status</Label>
-                <div className="p-2 bg-muted rounded">
-                  <Badge variant={quote?.status === 'sent' ? 'default' : 'secondary'}>
-                    {quote?.status === 'draft' ? 'Kladde' : 
-                     quote?.status === 'sent' ? 'Sendt' : 
-                     quote?.status === 'accepted' ? 'Accepteret' : 
-                     quote?.status === 'rejected' ? 'Afvist' : quote?.status}
-                  </Badge>
-                </div>
+                <Label htmlFor="status">Status</Label>
+                <Select
+                  value={quote?.status ?? 'draft'}
+                  onValueChange={(v) => updateQuoteMetadata({ status: v })}
+                  disabled={savingMetadata || isReadOnly}
+                >
+                  <SelectTrigger id="status">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="draft">Kladde</SelectItem>
+                    <SelectItem value="sent">Sendt</SelectItem>
+                    <SelectItem value="accepted">Accepteret</SelectItem>
+                    <SelectItem value="rejected">Afvist</SelectItem>
+                    <SelectItem value="archived">Arkiveret</SelectItem>
+                  </SelectContent>
+                </Select>
+                {quote?.status === 'sent' && !quote?.is_locked && (
+                  <p className="text-xs text-muted-foreground">
+                    Bemærk: Status='sent' låser normalt automatisk. Tilbuddet er aktuelt ulåst — ændringer kan stadig foretages.
+                  </p>
+                )}
               </div>
               
               <div className="space-y-2">
@@ -3325,15 +3662,46 @@ const ProjectQuoteDetail = () => {
               </div>
               
               <div className="space-y-2">
-                <Label>Låst</Label>
-                <div className="p-2 bg-muted rounded">
-                  <Badge variant={quote?.is_locked ? 'destructive' : 'secondary'}>
-                    {quote?.is_locked ? 'Låst' : 'Ulåst'}
-                  </Badge>
-                  {quote?.locked_at && (
-                    <div className="text-xs text-muted-foreground mt-1">
-                      {new Date(quote.locked_at).toLocaleDateString('da-DK')}
+                <Label>Lås</Label>
+                <div className="p-2 bg-muted rounded flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    {quote?.is_locked ? (
+                      <Lock className="h-4 w-4 text-destructive" />
+                    ) : (
+                      <Unlock className="h-4 w-4 text-muted-foreground" />
+                    )}
+                    <div>
+                      <Badge variant={quote?.is_locked ? 'destructive' : 'secondary'}>
+                        {quote?.is_locked ? 'Låst' : 'Ulåst'}
+                      </Badge>
+                      {quote?.locked_at && (
+                        <div className="text-xs text-muted-foreground mt-1">
+                          {new Date(quote.locked_at).toLocaleDateString('da-DK')}
+                        </div>
+                      )}
                     </div>
+                  </div>
+                  {quote?.is_locked ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        if (confirm('Lås tilbuddet op? Tekstfelter forbliver som de er — brug "Reset til standard" pr. felt hvis du vil have dem live mod firma-indstillinger igen.')) {
+                          updateQuoteMetadata({ is_locked: false });
+                        }
+                      }}
+                      disabled={savingMetadata}
+                    >
+                      <Unlock className="h-3 w-3 mr-1" /> Lås op
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      onClick={() => updateQuoteMetadata({ is_locked: true })}
+                      disabled={savingMetadata}
+                    >
+                      <Lock className="h-3 w-3 mr-1" /> Lås tilbud
+                    </Button>
                   )}
                 </div>
               </div>
@@ -3364,18 +3732,18 @@ const ProjectQuoteDetail = () => {
             const isExpanded = expandedLines.has(line.id);
             
             return (
-              <Card 
+              <Card
                 key={line.id}
                 className={`transition-all duration-200 ${
                   dragOverLineId === line.id ? 'border-primary border-2 bg-primary/5' : ''
                 } ${
                   draggedLineId === line.id ? 'opacity-50' : ''
                 }`}
-                draggable
-                onDragStart={(e) => handleDragStart(e, line.id)}
-                onDragOver={(e) => handleDragOver(e, line.id)}
+                draggable={!isReadOnly}
+                onDragStart={(e) => !isReadOnly && handleDragStart(e, line.id)}
+                onDragOver={(e) => !isReadOnly && handleDragOver(e, line.id)}
                 onDragLeave={handleDragLeave}
-                onDrop={(e) => handleDrop(e, line.id)}
+                onDrop={(e) => !isReadOnly && handleDrop(e, line.id)}
               >
                 <Collapsible open={isExpanded} onOpenChange={() => toggleLineExpansion(line.id)}>
                   <CollapsibleTrigger asChild>
@@ -3484,6 +3852,7 @@ const ProjectQuoteDetail = () => {
                                 startEditLine(line);
                               }}
                               title="Redigér linje"
+                              disabled={isReadOnly}
                             >
                               <Edit className="h-4 w-4" />
                             </Button>
@@ -3495,6 +3864,7 @@ const ProjectQuoteDetail = () => {
                                 handleArchiveLine(line.id);
                               }}
                               title="Arkivér linje"
+                              disabled={isReadOnly}
                             >
                               <Archive className="h-4 w-4" />
                             </Button>
@@ -3506,6 +3876,7 @@ const ProjectQuoteDetail = () => {
                                 handleDeleteLine(line.id);
                               }}
                               title="Slet linje"
+                              disabled={isReadOnly}
                             >
                               <Trash2 className="h-4 w-4" />
                             </Button>
@@ -4110,10 +4481,37 @@ const ProjectQuoteDetail = () => {
                         const captionLocal = lineFieldEdits[line.id]?.customImageCaption;
                         const captionValue = captionLocal !== undefined ? captionLocal : (line.customImageCaption ?? '');
                         const isUploading = uploadingImageLineId === line.id;
+                        const imageOpen = expandedImageLines.has(line.id);
+                        const imageSummary = (() => {
+                          const parts = [];
+                          if (line.activeImageSource === 'custom' && hasCustom) parts.push('Eget billede');
+                          else if (line.activeImageSource === 'render' && hasRender) parts.push('Render');
+                          else if (line.activeImageSource === 'none') parts.push('Skjult på bilag');
+                          else parts.push('Intet billede');
+                          if (renderStatus === 'pending' || renderStatus === 'generating') parts.push('genererer…');
+                          if (renderStatus === 'failed') parts.push('render fejlede');
+                          return parts.join(' · ');
+                        })();
                         return (
-                          <div className="mt-6 rounded-lg border bg-muted/20 p-4 space-y-4">
+                          <Collapsible
+                            open={imageOpen}
+                            onOpenChange={() => setExpandedImageLines(prev => toggleSetItem(prev, line.id))}
+                          >
+                            <CollapsibleTrigger asChild>
+                              <div className="mt-6 rounded-lg border bg-muted/20 px-4 py-3 cursor-pointer hover:bg-muted/30 flex items-center justify-between gap-3">
+                                <div className="flex items-center gap-2 min-w-0 flex-1">
+                                  {imageOpen ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+                                  <h4 className="font-semibold shrink-0">Billede</h4>
+                                  {!imageOpen && (
+                                    <span className="text-sm text-muted-foreground truncate">▸ {imageSummary}</span>
+                                  )}
+                                </div>
+                              </div>
+                            </CollapsibleTrigger>
+                            <CollapsibleContent>
+                          <div className="mt-2 rounded-lg border bg-muted/20 p-4 space-y-4">
                             <div className="flex items-center justify-between flex-wrap gap-2">
-                              <h4 className="font-semibold">Billede</h4>
+                              <span className="text-xs uppercase tracking-wide text-muted-foreground">Vælg kilde</span>
                               <div className="flex rounded-md border overflow-hidden text-xs">
                                 <button
                                   type="button"
@@ -4259,6 +4657,8 @@ const ProjectQuoteDetail = () => {
                               </Collapsible>
                             </div>
                           </div>
+                            </CollapsibleContent>
+                          </Collapsible>
                         );
                       })()}
 
@@ -4268,33 +4668,55 @@ const ProjectQuoteDetail = () => {
                         const ldValue = ldLocal !== undefined ? ldLocal : (line.livingDescription ?? '');
                         const isEdited = !!line.livingDescriptionEdited;
                         const wasGenerated = !!line.livingDescriptionGeneratedAt;
+                        const descOpen = expandedDescLines.has(line.id);
+                        const summaryText = ldValue
+                          ? (ldValue.length > 80 ? ldValue.slice(0, 80).trim() + '…' : ldValue)
+                          : 'Ingen tekst endnu';
                         return (
-                          <div className="mt-4 rounded-lg border bg-muted/20 p-4 space-y-2">
-                            <div className="flex items-center justify-between flex-wrap gap-2">
-                              <div className="flex items-center gap-2">
-                                <Label className="font-semibold text-base">Levende beskrivelse</Label>
-                                {isEdited && <Badge variant="secondary" className="text-xs">Redigeret</Badge>}
-                                {!isEdited && wasGenerated && <Badge className="text-xs bg-blue-100 text-blue-800 hover:bg-blue-100">Auto-genereret</Badge>}
+                          <Collapsible
+                            open={descOpen}
+                            onOpenChange={() => setExpandedDescLines(prev => toggleSetItem(prev, line.id))}
+                          >
+                            <CollapsibleTrigger asChild>
+                              <div className="mt-4 rounded-lg border bg-muted/20 px-4 py-3 cursor-pointer hover:bg-muted/30 flex items-center justify-between gap-3">
+                                <div className="flex items-center gap-2 min-w-0 flex-1">
+                                  {descOpen ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+                                  <h4 className="font-semibold shrink-0">Levende beskrivelse</h4>
+                                  {isEdited && <Badge variant="secondary" className="text-xs shrink-0">Redigeret</Badge>}
+                                  {!isEdited && wasGenerated && <Badge className="text-xs shrink-0 bg-blue-100 text-blue-800 hover:bg-blue-100">Auto-genereret</Badge>}
+                                  {!descOpen && (
+                                    <span className="text-sm text-muted-foreground truncate italic">▸ {summaryText}</span>
+                                  )}
+                                </div>
                               </div>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                disabled
-                                title="AI-generering kommer snart"
-                                className="gap-1"
-                              >
-                                <RefreshCw className="h-3.5 w-3.5" />
-                                Generér (kommer snart)
-                              </Button>
-                            </div>
-                            <Textarea
-                              rows={5}
-                              placeholder="Sælgende beskrivelse til kundebilag — fx 'Skræddersyede omklædningsbænke i lyst birk skaber et roligt, indbydende rum, hvor materialernes naturlige struktur understreger…'"
-                              value={ldValue}
-                              onChange={(e) => setLineFieldLocal(line.id, 'livingDescription', e.target.value)}
-                              onBlur={() => saveLineTextField(line.id, 'livingDescription', 'living_description', { living_description_edited: true })}
-                            />
-                          </div>
+                            </CollapsibleTrigger>
+                            <CollapsibleContent>
+                              <div className="mt-2 rounded-lg border bg-muted/20 p-4 space-y-2">
+                                <div className="flex items-center justify-end">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={generatingLivingDesc === line.id}
+                                    title="Genererer sælgende tekst med Gemini ud fra titel + beskrivelse + modtagerprofil"
+                                    onClick={() => generateLivingDescription(line.id)}
+                                    className="gap-1"
+                                  >
+                                    {generatingLivingDesc === line.id
+                                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                      : <RefreshCw className="h-3.5 w-3.5" />}
+                                    {generatingLivingDesc === line.id ? 'Genererer…' : (wasGenerated ? 'Generér igen' : 'Generér')}
+                                  </Button>
+                                </div>
+                                <Textarea
+                                  rows={5}
+                                  placeholder="Sælgende beskrivelse til kundebilag — fx 'Skræddersyede omklædningsbænke i lyst birk skaber et roligt, indbydende rum, hvor materialernes naturlige struktur understreger…'"
+                                  value={ldValue}
+                                  onChange={(e) => setLineFieldLocal(line.id, 'livingDescription', e.target.value)}
+                                  onBlur={() => saveLineTextField(line.id, 'livingDescription', 'living_description', { living_description_edited: true })}
+                                />
+                              </div>
+                            </CollapsibleContent>
+                          </Collapsible>
                         );
                       })()}
 

@@ -1,86 +1,167 @@
 import { Document, Page, Text, View, Image, StyleSheet } from '@react-pdf/renderer';
 import { COMPANY_INFO } from '@/config/company';
 
+// Designguide (delt med QuotePDF)
+const PALETTE = {
+  ink: '#1a1a1a',
+  muted: '#6b6b6b',
+  line: '#d4d0c7',
+  bg: '#f7f5f0',
+  accent: '#3d4a3d',
+};
+
+const MARGIN = 62; // 22mm
+
 const styles = StyleSheet.create({
   page: {
     fontFamily: 'Helvetica',
     fontSize: 10,
-    paddingTop: 40,
-    paddingBottom: 80,
-    paddingHorizontal: 48,
-    color: '#111',
+    paddingTop: MARGIN,
+    paddingBottom: MARGIN,
+    paddingHorizontal: MARGIN,
+    color: PALETTE.ink,
   },
-  // Cover
-  coverPage: {
-    fontFamily: 'Helvetica',
-    fontSize: 11,
-    padding: 60,
-    color: '#111',
+  // Page-header (på hver side)
+  pageHeader: {
+    position: 'absolute',
+    top: 22,
+    left: MARGIN,
+    right: MARGIN,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    paddingBottom: 6,
+    borderBottomWidth: 0.5,
+    borderBottomColor: PALETTE.line,
   },
-  coverHeader: {
-    fontSize: 12,
-    color: '#6b7280',
-    marginBottom: 8,
-  },
-  coverCompany: {
-    fontSize: 20,
+  pageHeaderBrand: {
+    fontSize: 8,
     fontFamily: 'Helvetica-Bold',
+    color: PALETTE.ink,
+    letterSpacing: 1,
+  },
+  pageHeaderMeta: {
+    fontSize: 8,
+    color: PALETTE.muted,
+  },
+  // Page-footer
+  pageFooter: {
+    position: 'absolute',
+    bottom: 22,
+    left: MARGIN,
+    right: MARGIN,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    paddingTop: 6,
+    borderTopWidth: 0.5,
+    borderTopColor: PALETTE.line,
+    fontSize: 7,
+    color: PALETTE.muted,
+  },
+  pageFooterCenter: { textAlign: 'center', flex: 1 },
+
+  // Cover page
+  coverBrand: {
+    fontSize: 11,
+    fontFamily: 'Helvetica-Bold',
+    color: PALETTE.ink,
+    letterSpacing: 1.5,
     marginBottom: 4,
   },
-  coverProject: {
-    fontSize: 14,
-    color: '#374151',
+  coverTagline: {
+    fontSize: 8,
+    color: PALETTE.muted,
+    letterSpacing: 0.5,
     marginBottom: 60,
+  },
+  coverLabel: {
+    fontSize: 8,
+    fontFamily: 'Helvetica-Bold',
+    color: PALETTE.muted,
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+    marginBottom: 8,
   },
   coverTitle: {
     fontSize: 26,
     fontFamily: 'Helvetica-Bold',
+    color: PALETTE.ink,
+    lineHeight: 1.15,
     marginBottom: 12,
   },
-  coverSubtitle: {
-    fontSize: 13,
-    color: '#374151',
-    lineHeight: 1.5,
-    marginBottom: 30,
+  coverAccentLine: {
+    width: 85,
+    height: 2,
+    backgroundColor: PALETTE.accent,
+    marginTop: 4,
+    marginBottom: 24,
+  },
+  coverIntro: {
+    fontSize: 11,
+    color: PALETTE.muted,
+    lineHeight: 1.6,
+    marginBottom: 60,
   },
   coverMetaBlock: {
-    marginTop: 80,
-    paddingTop: 20,
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
-  },
-  coverMetaRow: {
+    paddingTop: 14,
+    paddingBottom: 14,
+    borderTopWidth: 0.5,
+    borderTopColor: PALETTE.line,
+    borderBottomWidth: 0.5,
+    borderBottomColor: PALETTE.line,
     flexDirection: 'row',
+  },
+  coverMetaCol: { flex: 1, paddingRight: 12 },
+  coverMetaLabel: {
+    fontSize: 7,
+    fontFamily: 'Helvetica-Bold',
+    color: PALETTE.muted,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
     marginBottom: 6,
   },
-  coverMetaLabel: { width: 130, color: '#6b7280', fontSize: 10 },
-  coverMetaValue: { flex: 1, fontSize: 11 },
+  coverMetaValue: {
+    fontSize: 9,
+    color: PALETTE.ink,
+    lineHeight: 1.45,
+  },
+  coverMetaValueBold: {
+    fontSize: 9,
+    fontFamily: 'Helvetica-Bold',
+    color: PALETTE.ink,
+  },
+
   // Per-line page
-  lineHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-    marginBottom: 14,
-    paddingBottom: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
+  lineHeaderBlock: {
+    marginBottom: 18,
+  },
+  lineLabel: {
+    fontSize: 7,
+    fontFamily: 'Helvetica-Bold',
+    color: PALETTE.muted,
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+    marginBottom: 6,
   },
   lineTitle: {
     fontSize: 18,
     fontFamily: 'Helvetica-Bold',
-    flex: 1,
-    paddingRight: 16,
+    color: PALETTE.ink,
+    lineHeight: 1.25,
   },
-  lineMetaRight: {
-    alignItems: 'flex-end',
+  lineAccentLine: {
+    width: 60,
+    height: 2,
+    backgroundColor: PALETTE.accent,
+    marginTop: 8,
   },
-  lineMetaLabel: { color: '#6b7280', fontSize: 8 },
-  lineMetaValue: { fontSize: 10 },
+
   imageBox: {
     width: '100%',
     height: 280,
-    backgroundColor: '#f3f4f6',
-    marginBottom: 14,
+    backgroundColor: PALETTE.bg,
+    marginBottom: 6,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -91,73 +172,57 @@ const styles = StyleSheet.create({
   },
   imageCaption: {
     fontSize: 8,
-    color: '#6b7280',
-    textAlign: 'center',
+    color: PALETTE.muted,
+    fontStyle: 'italic',
     marginTop: 4,
-    marginBottom: 10,
+    marginBottom: 14,
   },
   imagePlaceholder: {
-    color: '#9ca3af',
-    fontSize: 10,
+    color: PALETTE.muted,
+    fontSize: 9,
+    fontStyle: 'italic',
+  },
+
+  bodyBlock: {
+    marginTop: 10,
   },
   bodyRow: {
     flexDirection: 'row',
-    gap: 18,
+    gap: 22,
+    marginTop: 6,
   },
   bodyMain: {
     flex: 2,
   },
   bodySide: {
     flex: 1,
-    paddingLeft: 12,
-    borderLeftWidth: 1,
-    borderLeftColor: '#e5e7eb',
+    paddingLeft: 18,
+    borderLeftWidth: 0.5,
+    borderLeftColor: PALETTE.line,
   },
-  livingTitle: {
-    fontSize: 11,
+  blockLabel: {
+    fontSize: 7,
     fontFamily: 'Helvetica-Bold',
-    color: '#1f2937',
+    color: PALETTE.muted,
+    letterSpacing: 1,
     textTransform: 'uppercase',
     marginBottom: 6,
-    letterSpacing: 0.5,
   },
   livingText: {
     fontSize: 11,
+    color: PALETTE.ink,
     lineHeight: 1.6,
-    color: '#1f2937',
-  },
-  specTitle: {
-    fontSize: 9,
-    fontFamily: 'Helvetica-Bold',
-    color: '#6b7280',
-    textTransform: 'uppercase',
-    marginBottom: 6,
-    letterSpacing: 0.5,
   },
   specText: {
     fontSize: 9,
+    color: PALETTE.ink,
     lineHeight: 1.5,
-    color: '#374151',
   },
   emptyNote: {
-    fontSize: 10,
+    fontSize: 9,
     fontStyle: 'italic',
-    color: '#9ca3af',
+    color: PALETTE.muted,
   },
-  // Footer
-  footer: {
-    position: 'absolute',
-    bottom: 28,
-    left: 48,
-    right: 48,
-    color: '#9ca3af',
-    fontSize: 7,
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
-    paddingTop: 8,
-  },
-  footerLine: { textAlign: 'center', lineHeight: 1.35, marginBottom: 1 },
-  footerPage: { textAlign: 'right', marginTop: 3 },
 });
 
 export interface AppendixLine {
@@ -183,8 +248,6 @@ interface QuoteAppendixPDFProps {
   lines: AppendixLine[];
 }
 
-const FOOTER_LINE = `${COMPANY_INFO.name} · CVR ${COMPANY_INFO.cvr} · ${COMPANY_INFO.address.line2}, ${COMPANY_INFO.address.zip} ${COMPANY_INFO.address.city} · ${COMPANY_INFO.phone} · ${COMPANY_INFO.email}`;
-
 export function QuoteAppendixPDF({
   projectName,
   quoteTitle,
@@ -193,78 +256,101 @@ export function QuoteAppendixPDF({
   customer,
   lines,
 }: QuoteAppendixPDFProps) {
-  // Vis kun linjer der har enten billede, levende beskrivelse, eller teknisk beskrivelse.
-  // En linje uden noget indhold er ikke værd at vise i bilaget.
   const visibleLines = lines.filter(l => l.imageUrl || l.livingDescription || l.description);
+  const headerMeta = `Bilag · ${quoteNumber || ''}${quoteNumber && projectName ? ' · ' : ''}${projectName || ''}`;
 
   return (
     <Document>
       {/* Cover */}
-      <Page size="A4" style={styles.coverPage}>
-        <Text style={styles.coverHeader}>BILAG TIL TILBUD</Text>
-        <Text style={styles.coverCompany}>{COMPANY_INFO.name}</Text>
-        <Text style={styles.coverProject}>{projectName}</Text>
+      <Page size="A4" style={styles.page}>
+        {/* Page-header (fixed) */}
+        <View style={styles.pageHeader} fixed>
+          <Text style={styles.pageHeaderBrand}>NEM INVENTAR</Text>
+          <Text style={styles.pageHeaderMeta}>{headerMeta}</Text>
+        </View>
 
+        {/* Brand */}
+        <Text style={styles.coverBrand}>NEM INVENTAR</Text>
+        <Text style={styles.coverTagline}>Snedker · Inventar · Specialopgaver</Text>
+
+        {/* Hero */}
+        <Text style={styles.coverLabel}>Bilag til tilbud</Text>
         <Text style={styles.coverTitle}>{quoteTitle}</Text>
-        <Text style={styles.coverSubtitle}>
-          Visuelle illustrationer og beskrivelser af de enkelte poster i tilbuddet.
-          Tilhører tilbudsdokument {quoteNumber}.
+        <View style={styles.coverAccentLine} />
+
+        <Text style={styles.coverIntro}>
+          Visuelle illustrationer og levende beskrivelser af de enkelte poster i tilbuddet.
+          Bilaget hører til tilbudsdokument {quoteNumber || '—'} og bør sendes med dette.
         </Text>
 
+        {/* Meta */}
         <View style={styles.coverMetaBlock}>
-          {customer?.name ? (
-            <View style={styles.coverMetaRow}>
-              <Text style={styles.coverMetaLabel}>Til</Text>
-              <Text style={styles.coverMetaValue}>{customer.name}</Text>
-            </View>
-          ) : null}
-          {customer?.cvr ? (
-            <View style={styles.coverMetaRow}>
-              <Text style={styles.coverMetaLabel}>CVR</Text>
-              <Text style={styles.coverMetaValue}>{customer.cvr}</Text>
-            </View>
-          ) : null}
-          {customer?.contactName ? (
-            <View style={styles.coverMetaRow}>
-              <Text style={styles.coverMetaLabel}>Att.</Text>
-              <Text style={styles.coverMetaValue}>{customer.contactName}</Text>
-            </View>
-          ) : null}
-          <View style={styles.coverMetaRow}>
-            <Text style={styles.coverMetaLabel}>Tilbudsnr.</Text>
-            <Text style={styles.coverMetaValue}>{quoteNumber}</Text>
+          <View style={styles.coverMetaCol}>
+            <Text style={styles.coverMetaLabel}>Kunde</Text>
+            {customer?.name ? <Text style={styles.coverMetaValueBold}>{customer.name}</Text> : <Text style={styles.coverMetaValue}>—</Text>}
+            {customer?.cvr ? <Text style={styles.coverMetaValue}>CVR {customer.cvr}</Text> : null}
+            {customer?.contactName ? <Text style={styles.coverMetaValue}>Att. {customer.contactName}</Text> : null}
           </View>
-          <View style={styles.coverMetaRow}>
-            <Text style={styles.coverMetaLabel}>Dato</Text>
-            <Text style={styles.coverMetaValue}>{quoteDate}</Text>
+          <View style={styles.coverMetaCol}>
+            <Text style={styles.coverMetaLabel}>Tilbud</Text>
+            <Text style={styles.coverMetaValueBold}>{quoteNumber || '—'}</Text>
+            <Text style={styles.coverMetaValue}>Dato: {quoteDate}</Text>
           </View>
+          <View style={[styles.coverMetaCol, { paddingRight: 0 }]}>
+            <Text style={styles.coverMetaLabel}>Afsender</Text>
+            <Text style={styles.coverMetaValueBold}>{COMPANY_INFO.name}</Text>
+            <Text style={styles.coverMetaValue}>CVR {COMPANY_INFO.cvr}</Text>
+            <Text style={styles.coverMetaValue}>{COMPANY_INFO.email}</Text>
+          </View>
+        </View>
+
+        {/* Footer (fixed) */}
+        <View style={styles.pageFooter} fixed>
+          <Text>{quoteDate}</Text>
+          <Text style={styles.pageFooterCenter}>
+            {COMPANY_INFO.name} · {COMPANY_INFO.email} · {COMPANY_INFO.phone}
+          </Text>
+          <Text render={({ pageNumber }) => `Side ${pageNumber}`} />
         </View>
       </Page>
 
       {/* Per-line pages */}
       {visibleLines.length === 0 ? (
         <Page size="A4" style={styles.page}>
-          <View style={styles.lineHeader}>
+          <View style={styles.pageHeader} fixed>
+            <Text style={styles.pageHeaderBrand}>NEM INVENTAR</Text>
+            <Text style={styles.pageHeaderMeta}>{headerMeta}</Text>
+          </View>
+          <View style={styles.lineHeaderBlock}>
+            <Text style={styles.lineLabel}>Bilag</Text>
             <Text style={styles.lineTitle}>Ingen indhold</Text>
+            <View style={styles.lineAccentLine} />
           </View>
           <Text style={styles.emptyNote}>
             Tilbuddet har ingen linjer med billeder eller levende beskrivelser.
             Tilføj dem i tilbuds-editoren for at fylde dette bilag.
           </Text>
-          <View style={styles.footer} fixed>
-            <Text style={styles.footerLine}>{FOOTER_LINE}</Text>
-            <Text style={styles.footerPage} render={({ pageNumber, totalPages }) => `Side ${pageNumber} / ${totalPages}`} />
+          <View style={styles.pageFooter} fixed>
+            <Text>{quoteDate}</Text>
+            <Text style={styles.pageFooterCenter}>
+              {COMPANY_INFO.name} · {COMPANY_INFO.email} · {COMPANY_INFO.phone}
+            </Text>
+            <Text render={({ pageNumber }) => `Side ${pageNumber}`} />
           </View>
         </Page>
       ) : (
         visibleLines.map((line, i) => (
           <Page key={i} size="A4" style={styles.page}>
-            <View style={styles.lineHeader}>
+            <View style={styles.pageHeader} fixed>
+              <Text style={styles.pageHeaderBrand}>NEM INVENTAR</Text>
+              <Text style={styles.pageHeaderMeta}>{headerMeta}</Text>
+            </View>
+
+            {/* Hero per linje */}
+            <View style={styles.lineHeaderBlock}>
+              <Text style={styles.lineLabel}>Post {i + 1} af {visibleLines.length}</Text>
               <Text style={styles.lineTitle}>{line.title}</Text>
-              <View style={styles.lineMetaRight}>
-                <Text style={styles.lineMetaLabel}>Bilagspost</Text>
-                <Text style={styles.lineMetaValue}>{i + 1} af {visibleLines.length}</Text>
-              </View>
+              <View style={styles.lineAccentLine} />
             </View>
 
             {/* Billede */}
@@ -280,29 +366,33 @@ export function QuoteAppendixPDF({
             )}
 
             {/* Body: levende beskrivelse + teknisk spec */}
-            {line.livingDescription || line.description ? (
-              <View style={styles.bodyRow}>
-                <View style={styles.bodyMain}>
-                  <Text style={styles.livingTitle}>Beskrivelse</Text>
-                  {line.livingDescription ? (
-                    <Text style={styles.livingText}>{line.livingDescription}</Text>
-                  ) : (
-                    <Text style={styles.emptyNote}>Levende beskrivelse mangler.</Text>
-                  )}
-                </View>
-                {line.description ? (
-                  <View style={styles.bodySide}>
-                    <Text style={styles.specTitle}>Teknisk spec</Text>
-                    <Text style={styles.specText}>{line.description}</Text>
+            {(line.livingDescription || line.description) ? (
+              <View style={styles.bodyBlock}>
+                <View style={styles.bodyRow}>
+                  <View style={styles.bodyMain}>
+                    <Text style={styles.blockLabel}>Beskrivelse</Text>
+                    {line.livingDescription ? (
+                      <Text style={styles.livingText}>{line.livingDescription}</Text>
+                    ) : (
+                      <Text style={styles.emptyNote}>Levende beskrivelse mangler.</Text>
+                    )}
                   </View>
-                ) : null}
+                  {line.description ? (
+                    <View style={styles.bodySide}>
+                      <Text style={styles.blockLabel}>Teknisk spec</Text>
+                      <Text style={styles.specText}>{line.description}</Text>
+                    </View>
+                  ) : null}
+                </View>
               </View>
             ) : null}
 
-            {/* Footer */}
-            <View style={styles.footer} fixed>
-              <Text style={styles.footerLine}>{FOOTER_LINE}</Text>
-              <Text style={styles.footerPage} render={({ pageNumber, totalPages }) => `Side ${pageNumber} / ${totalPages}`} />
+            <View style={styles.pageFooter} fixed>
+              <Text>{quoteDate}</Text>
+              <Text style={styles.pageFooterCenter}>
+                {COMPANY_INFO.name} · {COMPANY_INFO.email} · {COMPANY_INFO.phone}
+              </Text>
+              <Text render={({ pageNumber }) => `Side ${pageNumber}`} />
             </View>
           </Page>
         ))

@@ -27,6 +27,10 @@ export interface Project {
   architect?: string;
   contractor?: string;
   owner?: string;
+  // Kunde-FK'er — peger på companies + crm_contacts.
+  // customer-text-feltet bevares som fallback / display.
+  customerCompanyId?: string | null;
+  customerContactId?: string | null;
   // Kontakt
   customerContact?: string;
   customerEmail?: string;
@@ -193,6 +197,8 @@ export const ProjectProvider: React.FC<{ children: ReactNode }> = ({ children })
           architect: p.architect,
           contractor: p.contractor,
           owner: p.owner,
+          customerCompanyId: p.customer_company_id ?? null,
+          customerContactId: p.customer_contact_id ?? null,
           customerContact: p.customer_contact,
           customerEmail: p.customer_email,
           customerPhone: p.customer_phone,
@@ -252,7 +258,26 @@ export const ProjectProvider: React.FC<{ children: ReactNode }> = ({ children })
           name: projectData.name,
           customer: projectData.customer,
           project_number: projectData.projectNumber,
-          phase: projectData.phase
+          phase: projectData.phase,
+          customer_company_id: projectData.customerCompanyId ?? null,
+          customer_contact_id: projectData.customerContactId ?? null,
+          customer_contact: projectData.customerContact,
+          customer_email: projectData.customerEmail,
+          customer_phone: projectData.customerPhone,
+          client: projectData.client,
+          architect: projectData.architect,
+          contractor: projectData.contractor,
+          owner: projectData.owner,
+          project_type: projectData.projectType,
+          contract_type: projectData.contractType,
+          description: projectData.description,
+          delivery_address: projectData.deliveryAddress,
+          start_date: projectData.startDate || null,
+          end_date: projectData.endDate || null,
+          delivery_date: projectData.deliveryDate || null,
+          budget_amount: projectData.budgetAmount || null,
+          source: projectData.source,
+          sharepoint_url: projectData.sharepointUrl,
         })
         .select()
         .single();
@@ -270,6 +295,8 @@ export const ProjectProvider: React.FC<{ children: ReactNode }> = ({ children })
         customer: data.customer,
         projectNumber: data.project_number,
         phase: data.phase,
+        customerCompanyId: data.customer_company_id ?? null,
+        customerContactId: data.customer_contact_id ?? null,
         createdAt: new Date(data.created_at),
         updatedAt: new Date(data.updated_at)
       };
@@ -284,33 +311,36 @@ export const ProjectProvider: React.FC<{ children: ReactNode }> = ({ children })
     try {
       console.log('Updating project in Supabase:', id, updates);
       
-      // Update in Supabase
+      // Byg patch — kun felter der eksplicit er med i updates inkluderes,
+      // så partial-updates ikke nuller eksisterende værdier.
+      const patch: Record<string, any> = { updated_at: new Date().toISOString() };
+      if ('name' in updates) patch.name = updates.name;
+      if ('customer' in updates) patch.customer = updates.customer;
+      if ('projectNumber' in updates) patch.project_number = updates.projectNumber;
+      if ('phase' in updates) patch.phase = updates.phase;
+      if ('projectType' in updates) patch.project_type = updates.projectType;
+      if ('contractType' in updates) patch.contract_type = updates.contractType;
+      if ('description' in updates) patch.description = updates.description;
+      if ('client' in updates) patch.client = updates.client;
+      if ('architect' in updates) patch.architect = updates.architect;
+      if ('contractor' in updates) patch.contractor = updates.contractor;
+      if ('owner' in updates) patch.owner = updates.owner;
+      if ('customerCompanyId' in updates) patch.customer_company_id = updates.customerCompanyId ?? null;
+      if ('customerContactId' in updates) patch.customer_contact_id = updates.customerContactId ?? null;
+      if ('customerContact' in updates) patch.customer_contact = updates.customerContact;
+      if ('customerEmail' in updates) patch.customer_email = updates.customerEmail;
+      if ('customerPhone' in updates) patch.customer_phone = updates.customerPhone;
+      if ('deliveryAddress' in updates) patch.delivery_address = updates.deliveryAddress;
+      if ('startDate' in updates) patch.start_date = updates.startDate || null;
+      if ('endDate' in updates) patch.end_date = updates.endDate || null;
+      if ('deliveryDate' in updates) patch.delivery_date = updates.deliveryDate || null;
+      if ('budgetAmount' in updates) patch.budget_amount = updates.budgetAmount || null;
+      if ('source' in updates) patch.source = updates.source;
+      if ('sharepointUrl' in updates) patch.sharepoint_url = updates.sharepointUrl;
+
       const { error } = await supabase
         .from('projects_2026_01_15_06_45')
-        .update({
-          name: updates.name,
-          customer: updates.customer,
-          project_number: updates.projectNumber,
-          phase: updates.phase,
-          project_type: updates.projectType,
-          contract_type: updates.contractType,
-          description: updates.description,
-          client: updates.client,
-          architect: updates.architect,
-          contractor: updates.contractor,
-          owner: updates.owner,
-          customer_contact: updates.customerContact,
-          customer_email: updates.customerEmail,
-          customer_phone: updates.customerPhone,
-          delivery_address: updates.deliveryAddress,
-          start_date: updates.startDate || null,
-          end_date: updates.endDate || null,
-          delivery_date: updates.deliveryDate || null,
-          budget_amount: updates.budgetAmount || null,
-          source: updates.source,
-          sharepoint_url: updates.sharepointUrl,
-          updated_at: new Date().toISOString()
-        })
+        .update(patch)
         .eq('id', id);
 
       if (error) {
