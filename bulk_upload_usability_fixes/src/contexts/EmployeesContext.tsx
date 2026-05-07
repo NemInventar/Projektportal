@@ -92,9 +92,10 @@ const rowToEmployee = (r: any): Employee => ({
 
 // Patch-builder — kun felter der eksplicit er med i input bliver mappet til DB,
 // så partial updates ikke nuller eksisterende værdier.
+// BEMÆRK: full_name er en GENERATED kolonne (first_name || ' ' || last_name) i DB
+// og kan derfor ikke skrives direkte — den udelades med vilje.
 const inputToRow = (input: Partial<EmployeeInput>): Record<string, any> => {
   const out: Record<string, any> = {};
-  if ('fullName' in input) out.full_name = input.fullName;
   if ('firstName' in input) out.first_name = input.firstName ?? null;
   if ('lastName' in input) out.last_name = input.lastName ?? null;
   if ('initials' in input) out.initials = input.initials ?? null;

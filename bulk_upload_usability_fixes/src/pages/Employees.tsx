@@ -135,17 +135,20 @@ const Employees: React.FC = () => {
   }, [employees.length]);
 
   const handleSubmit = async () => {
-    if (!form.fullName.trim()) {
-      toast({ title: 'Fejl', description: 'Fulde navn er påkrævet', variant: 'destructive' });
+    const firstName = form.firstName?.trim() ?? '';
+    const lastName = form.lastName?.trim() ?? '';
+    if (!firstName) {
+      toast({ title: 'Fejl', description: 'Fornavn er påkrævet', variant: 'destructive' });
       return;
     }
     try {
       setSaving(true);
       const payload: EmployeeInput = {
         ...form,
-        fullName: form.fullName.trim(),
-        firstName: form.firstName?.trim() || null,
-        lastName: form.lastName?.trim() || null,
+        // full_name beregnes i DB — sendes ikke
+        fullName: `${firstName} ${lastName}`.trim(),
+        firstName: firstName || null,
+        lastName: lastName || null,
         initials: form.initials?.trim() || null,
         nickname: form.nickname?.trim() || null,
         email: form.email?.trim() || null,
@@ -326,17 +329,16 @@ const Employees: React.FC = () => {
 
             {/* Basale felter */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="space-y-1 md:col-span-2">
-                <Label htmlFor="emp_full">Fulde navn *</Label>
-                <Input id="emp_full" value={form.fullName} onChange={(e) => setField('fullName', e.target.value)} />
-              </div>
               <div className="space-y-1">
-                <Label htmlFor="emp_first">Fornavn</Label>
+                <Label htmlFor="emp_first">Fornavn *</Label>
                 <Input id="emp_first" value={form.firstName ?? ''} onChange={(e) => setField('firstName', e.target.value)} />
               </div>
               <div className="space-y-1">
                 <Label htmlFor="emp_last">Efternavn</Label>
                 <Input id="emp_last" value={form.lastName ?? ''} onChange={(e) => setField('lastName', e.target.value)} />
+              </div>
+              <div className="space-y-1 md:col-span-2 text-xs text-muted-foreground">
+                Fulde navn beregnes automatisk: <span className="font-medium text-foreground">{`${form.firstName ?? ''} ${form.lastName ?? ''}`.trim() || '—'}</span>
               </div>
               <div className="space-y-1">
                 <Label htmlFor="emp_init">Initialer</Label>
@@ -485,7 +487,7 @@ const Employees: React.FC = () => {
 
             <DialogFooter>
               <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>Annullér</Button>
-              <Button onClick={handleSubmit} disabled={saving || !form.fullName.trim()}>
+              <Button onClick={handleSubmit} disabled={saving || !(form.firstName ?? '').trim()}>
                 {saving ? 'Gemmer…' : editingId ? 'Gem ændringer' : 'Opret'}
               </Button>
             </DialogFooter>
