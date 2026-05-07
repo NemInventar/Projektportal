@@ -32,6 +32,12 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible';
 import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from '@/components/ui/tabs';
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -55,7 +61,9 @@ import {
   Download,
   MoreHorizontal,
   Lock,
-  Unlock
+  Unlock,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useProject } from '@/contexts/ProjectContext';
@@ -104,6 +112,15 @@ const getActiveCostSlots = (breakdown: any): string[] => {
   if (!breakdown) return [];
   return Object.keys(breakdown).filter(k => (breakdown[k] || 0) > 0);
 };
+
+// Dev-mode flag: vis DB-kolonnenavn i parentes efter label-tekster.
+// Slå fra ved at sætte til false når UI'et går i produktion.
+const DEV_SHOW_COLUMN_NAMES = true;
+
+const ColHint: React.FC<{ name: string }> = ({ name }) =>
+  DEV_SHOW_COLUMN_NAMES ? (
+    <span className="text-xs font-normal text-muted-foreground/70 ml-1.5">({name})</span>
+  ) : null;
 
 // Lille indikator + reset/override-knap pr. tekstfelt der kan trække live mod company_settings.
 // Tre states:
@@ -190,6 +207,10 @@ interface QuoteLine {
   livingDescription?: string | null;
   livingDescriptionGeneratedAt?: string | null;
   livingDescriptionEdited?: boolean;
+  // Teknisk spec (vises i bilag — separat fra description)
+  technicalSpec?: string | null;
+  // Bilag-toggle
+  includeInAppendix?: boolean;
 }
 
 interface QuoteLineItem {
@@ -325,6 +346,7 @@ const ProjectQuoteDetail = () => {
     recipient_notes: '',
     intro_text: '',
     notes: '',
+    appendix_intro_text: '',
   });
   const [editingPricing, setEditingPricing] = useState<string | null>(null);
   const [selectedLineForItems, setSelectedLineForItems] = useState<string | null>(null);
@@ -355,7 +377,8 @@ const ProjectQuoteDetail = () => {
     title: '',
     description: '',
     quantity: 1,
-    unit: 'stk'
+    unit: 'stk',
+    technicalSpec: '',
   });
 
   // Form data for pricing
@@ -388,7 +411,8 @@ const ProjectQuoteDetail = () => {
     title: '',
     description: '',
     quantity: 1,
-    unit: 'stk'
+    unit: 'stk',
+    technicalSpec: '',
   });
 
   // Form data for editing item
@@ -497,6 +521,7 @@ const ProjectQuoteDetail = () => {
       recipient_notes: quote.recipient_notes ?? '',
       intro_text: quote.intro_text ?? '',
       notes: quote.notes ?? '',
+      appendix_intro_text: quote.appendix_intro_text ?? '',
     });
   }, [
     quote?.id,
@@ -511,6 +536,7 @@ const ProjectQuoteDetail = () => {
     quote?.recipient_notes,
     quote?.intro_text,
     quote?.notes,
+    quote?.appendix_intro_text,
   ]);
 
   // Gem ét tekstfelt hvis det har ændret sig (kaldes onBlur)
@@ -615,6 +641,10 @@ const ProjectQuoteDetail = () => {
           livingDescription: line.living_description ?? null,
           livingDescriptionGeneratedAt: line.living_description_generated_at ?? null,
           livingDescriptionEdited: !!line.living_description_edited,
+          // Teknisk spec
+          technicalSpec: line.technical_spec ?? null,
+          // Bilag-toggle (default true for eksisterende rækker)
+          includeInAppendix: line.include_in_appendix !== false,
           };
         });
         setLines(formattedLines);
@@ -1244,7 +1274,8 @@ const ProjectQuoteDetail = () => {
         quantity: lineFormData.quantity,
         unit: lineFormData.unit,
         sort_order: lines.length,
-        display_order: maxDisplayOrder + 1
+        display_order: maxDisplayOrder + 1,
+        technical_spec: lineFormData.technicalSpec || null,
       };
 
       const { error: lineError } = await supabase
@@ -1259,7 +1290,7 @@ const ProjectQuoteDetail = () => {
       });
 
       setShowAddLineModal(false);
-      setLineFormData({ title: '', description: '', quantity: 1, unit: 'stk' });
+      setLineFormData({ title: '', description: '', quantity: 1, unit: 'stk', technicalSpec: '' });
       loadQuoteData();
     } catch (error) {
       console.error('Error adding line:', error);
@@ -1684,6 +1715,17 @@ const ProjectQuoteDetail = () => {
     if (error) throw error;
   };
 
+  const toggleAppendixInclude = async (lineId: string, currentlyIncluded: boolean) => {
+    const next = !currentlyIncluded;
+    try {
+      await updateLineFields(lineId, { include_in_appendix: next });
+      setLines(prev => prev.map(l => l.id === lineId ? { ...l, includeInAppendix: next } : l));
+    } catch (err) {
+      console.error('Could not toggle appendix-inclusion:', err);
+      toast({ title: 'Fejl', description: 'Kunne ikke skifte bilag-status', variant: 'destructive' });
+    }
+  };
+
   const setLineImageSource = async (lineId: string, source: ImageSource) => {
     try {
       await updateLineFields(lineId, { active_image_source: source });
@@ -2104,7 +2146,8 @@ const ProjectQuoteDetail = () => {
       title: line.title,
       description: line.description || '',
       quantity: line.quantity,
-      unit: line.unit
+      unit: line.unit,
+      technicalSpec: line.technicalSpec || '',
     });
     setEditingLine(line.id);
   };
@@ -2143,7 +2186,8 @@ const ProjectQuoteDetail = () => {
         title: editLineFormData.title,
         description: editLineFormData.description || null,
         quantity: editLineFormData.quantity,
-        unit: editLineFormData.unit
+        unit: editLineFormData.unit,
+        technical_spec: editLineFormData.technicalSpec || null,
       };
 
       const { error } = await supabase
@@ -2696,29 +2740,35 @@ const ProjectQuoteDetail = () => {
         ? { name: activeProject.customer, contactName: quote.customer_contact_name ?? null }
         : { contactName: quote.customer_contact_name ?? null };
 
-    const sortedLines = [...lines].sort((a, b) => {
-      if (a.displayOrder !== undefined && b.displayOrder !== undefined) return a.displayOrder - b.displayOrder;
-      if (a.displayOrder !== undefined) return -1;
-      if (b.displayOrder !== undefined) return 1;
-      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-    });
+    const sortedLines = [...lines]
+      .filter(l => l.includeInAppendix !== false) // Filtrér linjer fra hvis brugeren har slået dem fra i bilaget
+      .sort((a, b) => {
+        if (a.displayOrder !== undefined && b.displayOrder !== undefined) return a.displayOrder - b.displayOrder;
+        if (a.displayOrder !== undefined) return -1;
+        if (b.displayOrder !== undefined) return 1;
+        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      });
 
     const appendixLines = sortedLines.map(line => ({
       title: line.title,
       description: line.description ?? null,
       livingDescription: line.livingDescription ?? null,
+      technicalSpec: line.technicalSpec ?? null,
       imageUrl: lineEffectiveImageUrl(line),
       imageCaption: line.activeImageSource === 'custom' ? (line.customImageCaption ?? null) : null,
     }));
+
+    const quoteDateStr = quote.resolved_quote_date ? formatDk(quote.resolved_quote_date) : date;
 
     const blob = await pdf(
       <QuoteAppendixPDF
         projectName={activeProject.name}
         quoteTitle={quote.title}
         quoteNumber={quote.quote_number}
-        quoteDate={date}
+        quoteDate={quoteDateStr}
         customer={customer}
         lines={appendixLines}
+        introText={quote.appendix_intro_text ?? null}
       />
     ).toBlob();
     const url = URL.createObjectURL(blob);
@@ -3122,12 +3172,20 @@ const ProjectQuoteDetail = () => {
             </CollapsibleTrigger>
             <CollapsibleContent>
           <CardContent className="space-y-6">
+            <Tabs defaultValue="detaljer">
+              <TabsList className="mb-4">
+                <TabsTrigger value="detaljer">Detaljer</TabsTrigger>
+                <TabsTrigger value="tilbud">Tilbuds-PDF</TabsTrigger>
+                <TabsTrigger value="bilag">Bilags-PDF</TabsTrigger>
+              </TabsList>
+
+            <TabsContent value="detaljer" className="space-y-6 mt-0">
             {/* Kunde */}
             <div className="space-y-3">
               <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Kunde</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="company_id">Firma</Label>
+                  <Label htmlFor="company_id">Firma<ColHint name="company_id" /></Label>
                   <div className="flex gap-2">
                     <Select
                       value={quote?.company_id || ''}
@@ -3194,7 +3252,7 @@ const ProjectQuoteDetail = () => {
                   })()}
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="recipient_contact_id">Modtager-kontakt</Label>
+                  <Label htmlFor="recipient_contact_id">Modtager-kontakt<ColHint name="recipient_contact_id" /></Label>
                   <Select
                     value={quote?.recipient_contact_id ?? ''}
                     onValueChange={(contactId) => {
@@ -3241,12 +3299,15 @@ const ProjectQuoteDetail = () => {
               </div>
             </div>
 
+            </TabsContent>
+
+            <TabsContent value="tilbud" className="space-y-6 mt-0">
             {/* Indledning og bemærkninger */}
-            <div className="space-y-3 pt-4 border-t">
+            <div className="space-y-3">
               <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Indledning og bemærkninger</h3>
               <div className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="intro_text">Tilbudsindledning</Label>
+                  <Label htmlFor="intro_text">Tilbudsindledning<ColHint name="intro_text" /></Label>
                   <Textarea
                     id="intro_text"
                     placeholder={'Hermed vores tilbud på de beskrevne poster. Tilbuddet er udarbejdet på baggrund af det modtagne projektmateriale og forudsætninger angivet under vilkår.'}
@@ -3261,7 +3322,7 @@ const ProjectQuoteDetail = () => {
                   </p>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="notes">Bemærkninger</Label>
+                  <Label htmlFor="notes">Bemærkninger<ColHint name="notes" /></Label>
                   <Textarea
                     id="notes"
                     placeholder="Fx ekstra information til kunden, projekt-specifikke detaljer der ikke passer som forbehold."
@@ -3283,7 +3344,7 @@ const ProjectQuoteDetail = () => {
               <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Vilkår</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="quote_date">Tilbudsdato</Label>
+                  <Label htmlFor="quote_date">Tilbudsdato<ColHint name="quote_date" /></Label>
                   <Input
                     id="quote_date"
                     type="date"
@@ -3296,7 +3357,7 @@ const ProjectQuoteDetail = () => {
                   </p>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="valid_until">Gyldig til</Label>
+                  <Label htmlFor="valid_until">Gyldig til<ColHint name="valid_until" /></Label>
                   <Input
                     id="valid_until"
                     type="date"
@@ -3308,7 +3369,7 @@ const ProjectQuoteDetail = () => {
                 {/* Betalingsplan-template — fakturering-skema (separat fra payment_terms-tekst) */}
                 <div className="space-y-2 md:col-span-2">
                   <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <Label htmlFor="payment_terms_template">Betalingsplan</Label>
+                    <Label htmlFor="payment_terms_template">Betalingsplan<ColHint name="payment_terms_template" /></Label>
                     <FieldIndicator
                       isNull={quote?.payment_terms_template === null || quote?.payment_terms_template === undefined}
                       isLocked={isReadOnly}
@@ -3345,7 +3406,7 @@ const ProjectQuoteDetail = () => {
                 {/* Betalingsbetingelser */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <Label htmlFor="payment_terms">Betalingsbetingelser</Label>
+                    <Label htmlFor="payment_terms">Betalingsbetingelser<ColHint name="payment_terms" /></Label>
                     <FieldIndicator
                       isNull={quote?.payment_terms === null || quote?.payment_terms === undefined || quote?.payment_terms === ''}
                       isLocked={isReadOnly}
@@ -3371,7 +3432,7 @@ const ProjectQuoteDetail = () => {
                 {/* Leveringstid */}
                 <div className="space-y-2 md:col-span-2">
                   <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <Label htmlFor="delivery_period">Leveringstid / udførelsesperiode</Label>
+                    <Label htmlFor="delivery_period">Leveringstid / udførelsesperiode<ColHint name="delivery_period" /></Label>
                     <FieldIndicator
                       isNull={quote?.delivery_period === null || quote?.delivery_period === undefined || quote?.delivery_period === ''}
                       isLocked={isReadOnly}
@@ -3398,7 +3459,7 @@ const ProjectQuoteDetail = () => {
                 {/* Standardforbehold */}
                 <div className="space-y-2 md:col-span-2">
                   <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <Label htmlFor="reservations">Standardforbehold</Label>
+                    <Label htmlFor="reservations">Standardforbehold<ColHint name="reservations" /></Label>
                     <FieldIndicator
                       isNull={quote?.reservations === null || quote?.reservations === undefined || quote?.reservations === ''}
                       isLocked={isReadOnly}
@@ -3429,6 +3490,7 @@ const ProjectQuoteDetail = () => {
                 <div className="space-y-2 md:col-span-2">
                   <Label htmlFor="special_reservations">
                     Projektspecifikke forbehold <span className="text-muted-foreground font-normal">(valgfri)</span>
+                    <ColHint name="special_reservations" />
                   </Label>
                   <Textarea
                     id="special_reservations"
@@ -3446,13 +3508,16 @@ const ProjectQuoteDetail = () => {
               </div>
             </div>
 
+            </TabsContent>
+
+            <TabsContent value="detaljer" className="space-y-6 mt-0">
             {/* Tilbudsgiver */}
-            <div className="space-y-3 pt-4 border-t">
+            <div className="space-y-3">
               <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Tilbudsgiver</h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="space-y-2 md:col-span-3">
                   <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <Label>Hurtigvalg medarbejder</Label>
+                    <Label>Hurtigvalg medarbejder<ColHint name="created_by_employee_id" /></Label>
                     {quote?.created_by_employee_id && (
                       <Button
                         type="button"
@@ -3561,6 +3626,34 @@ const ProjectQuoteDetail = () => {
                 </div>
               </div>
             </div>
+            </TabsContent>
+
+            <TabsContent value="bilag" className="space-y-6 mt-0">
+              <div className="space-y-3">
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                  Bilags-PDF — indledning
+                </h3>
+                <div className="space-y-2">
+                  <Label htmlFor="appendix_intro_text">Bilag-indledning<ColHint name="appendix_intro_text" /></Label>
+                  <Textarea
+                    id="appendix_intro_text"
+                    placeholder={`Visuelle illustrationer og levende beskrivelser af de enkelte poster i tilbuddet. Bilaget hører til tilbudsdokument ${quote?.quote_number ?? '—'} og bør sendes med dette.`}
+                    value={detailsForm.appendix_intro_text}
+                    onChange={(e) => setDetailsForm(p => ({ ...p, appendix_intro_text: e.target.value }))}
+                    onBlur={() => saveDetailField('appendix_intro_text')}
+                    disabled={isReadOnly}
+                    rows={4}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Vises på forsiden af bilags-PDF'en. Tom = brug standardteksten ovenfor som placeholder.
+                  </p>
+                </div>
+                <div className="text-xs text-muted-foreground border-t pt-3">
+                  Hvilke linjer der medtages i bilaget styres pr. linje via toggle-knappen i tilbudslinje-listen nedenfor.
+                </div>
+              </div>
+            </TabsContent>
+            </Tabs>
           </CardContent>
             </CollapsibleContent>
           </Collapsible>
@@ -3888,7 +3981,14 @@ const ProjectQuoteDetail = () => {
                             <ChevronRight className="h-4 w-4" />
                           )}
                           <div>
-                            <CardTitle className="text-lg">{line.title}</CardTitle>
+                            <CardTitle className="text-lg flex items-center gap-2">
+                              {line.title}
+                              {line.includeInAppendix === false && (
+                                <Badge variant="outline" className="text-xs font-normal gap-1 text-muted-foreground">
+                                  <EyeOff className="h-3 w-3" /> Ikke i bilag
+                                </Badge>
+                              )}
+                            </CardTitle>
                             {!isExpanded && (
                               <div className="text-sm font-medium text-foreground mt-1">
                                 {line.quantity} {line.unit} • {formatCurrency(totals.sellingPricePerUnit)} kr/{line.unit}
@@ -3983,6 +4083,22 @@ const ProjectQuoteDetail = () => {
                               disabled={isReadOnly}
                             >
                               <Edit className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleAppendixInclude(line.id, line.includeInAppendix !== false);
+                              }}
+                              title={line.includeInAppendix !== false ? 'Skjul fra bilag' : 'Inkludér i bilag'}
+                              disabled={isReadOnly}
+                            >
+                              {line.includeInAppendix !== false ? (
+                                <Eye className="h-4 w-4" />
+                              ) : (
+                                <EyeOff className="h-4 w-4 text-muted-foreground" />
+                              )}
                             </Button>
                             <Button
                               size="sm"
@@ -5488,13 +5604,31 @@ const ProjectQuoteDetail = () => {
               </div>
 
               <div>
-                <Label htmlFor="lineDescription">Beskrivelse</Label>
+                <Label htmlFor="lineDescription">Linje-tekst (tilbuds-PDF)<ColHint name="description" /></Label>
                 <Textarea
                   id="lineDescription"
                   value={lineFormData.description}
                   onChange={(e) => setLineFormData(prev => ({ ...prev, description: e.target.value }))}
-                  placeholder="Beskrivelse af linjen"
+                  placeholder="Kort kontekst, fx 'Til omklædning R3.07'"
+                  rows={2}
                 />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Vises kort under linjetitlen i tilbuds-PDF'en.
+                </p>
+              </div>
+
+              <div>
+                <Label htmlFor="lineTechnicalSpec">Teknisk spec (bilags-PDF)<ColHint name="technical_spec" /></Label>
+                <Textarea
+                  id="lineTechnicalSpec"
+                  value={lineFormData.technicalSpec}
+                  onChange={(e) => setLineFormData(prev => ({ ...prev, technicalSpec: e.target.value }))}
+                  placeholder={`Mål: 1200 × 90 mm\nMateriale: 6mm hærdet glas, ramme i hvidpigmenteret eg\nOverflade: Oil+2C\nMontage: Vægbeslag i syrefast stål\nInkluderet: levering, montering`}
+                  rows={6}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Vises i højre kolonne på bilags-PDF'en. Tal-tungt: dimensioner, materialer, certificeringer.
+                </p>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -5827,13 +5961,31 @@ const ProjectQuoteDetail = () => {
               </div>
 
               <div>
-                <Label htmlFor="editLineDescription">Beskrivelse</Label>
+                <Label htmlFor="editLineDescription">Linje-tekst (tilbuds-PDF)<ColHint name="description" /></Label>
                 <Textarea
                   id="editLineDescription"
                   value={editLineFormData.description}
                   onChange={(e) => setEditLineFormData(prev => ({ ...prev, description: e.target.value }))}
-                  placeholder="Beskrivelse af linjen"
+                  placeholder="Kort kontekst, fx 'Til omklædning R3.07'"
+                  rows={2}
                 />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Vises kort under linjetitlen i tilbuds-PDF'en. Holdes typisk kort.
+                </p>
+              </div>
+
+              <div>
+                <Label htmlFor="editLineTechnicalSpec">Teknisk spec (bilags-PDF)<ColHint name="technical_spec" /></Label>
+                <Textarea
+                  id="editLineTechnicalSpec"
+                  value={editLineFormData.technicalSpec}
+                  onChange={(e) => setEditLineFormData(prev => ({ ...prev, technicalSpec: e.target.value }))}
+                  placeholder={`Mål: 1200 × 90 mm\nMateriale: 6mm hærdet glas, ramme i hvidpigmenteret eg\nOverflade: Oil+2C\nMontage: Vægbeslag i syrefast stål\nInkluderet: levering, montering`}
+                  rows={6}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Vises i højre kolonne på bilags-PDF'en. Tal-tungt: dimensioner, materialer, certificeringer, det inkluderede. Linjeskift bevares.
+                </p>
               </div>
 
               <div className="grid grid-cols-2 gap-4">

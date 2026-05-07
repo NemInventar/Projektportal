@@ -229,6 +229,7 @@ export interface AppendixLine {
   title: string;
   description?: string | null;
   livingDescription?: string | null;
+  technicalSpec?: string | null;
   imageUrl?: string | null;
   imageCaption?: string | null;
 }
@@ -246,6 +247,7 @@ interface QuoteAppendixPDFProps {
   quoteDate: string;
   customer?: AppendixCustomer;
   lines: AppendixLine[];
+  introText?: string | null;
 }
 
 export function QuoteAppendixPDF({
@@ -255,8 +257,11 @@ export function QuoteAppendixPDF({
   quoteDate,
   customer,
   lines,
+  introText,
 }: QuoteAppendixPDFProps) {
-  const visibleLines = lines.filter(l => l.imageUrl || l.livingDescription || l.description);
+  const intro = introText
+    || `Bilaget viser hver enkelt post i tilbuddet med billede og teknisk specifikation. Det giver et samlet overblik over materialer, mål og udførelse, og læses sammen med tilbudsdokument ${quoteNumber || '—'}.`;
+  const visibleLines = lines.filter(l => l.imageUrl || l.livingDescription || l.technicalSpec);
   const headerMeta = `Bilag · ${quoteNumber || ''}${quoteNumber && projectName ? ' · ' : ''}${projectName || ''}`;
 
   return (
@@ -278,10 +283,7 @@ export function QuoteAppendixPDF({
         <Text style={styles.coverTitle}>{quoteTitle}</Text>
         <View style={styles.coverAccentLine} />
 
-        <Text style={styles.coverIntro}>
-          Visuelle illustrationer og levende beskrivelser af de enkelte poster i tilbuddet.
-          Bilaget hører til tilbudsdokument {quoteNumber || '—'} og bør sendes med dette.
-        </Text>
+        <Text style={styles.coverIntro}>{intro}</Text>
 
         {/* Meta */}
         <View style={styles.coverMetaBlock}>
@@ -365,22 +367,22 @@ export function QuoteAppendixPDF({
               </View>
             )}
 
-            {/* Body: levende beskrivelse + teknisk spec */}
-            {(line.livingDescription || line.description) ? (
+            {/* Body: levende beskrivelse + teknisk spec.
+                Skjules helt hvis begge er tomme. Hvis kun én er udfyldt
+                rendres den i fuld bredde. */}
+            {(line.livingDescription || line.technicalSpec) ? (
               <View style={styles.bodyBlock}>
                 <View style={styles.bodyRow}>
-                  <View style={styles.bodyMain}>
-                    <Text style={styles.blockLabel}>Beskrivelse</Text>
-                    {line.livingDescription ? (
+                  {line.livingDescription ? (
+                    <View style={line.technicalSpec ? styles.bodyMain : { flex: 1 }}>
+                      <Text style={styles.blockLabel}>Beskrivelse</Text>
                       <Text style={styles.livingText}>{line.livingDescription}</Text>
-                    ) : (
-                      <Text style={styles.emptyNote}>Levende beskrivelse mangler.</Text>
-                    )}
-                  </View>
-                  {line.description ? (
-                    <View style={styles.bodySide}>
+                    </View>
+                  ) : null}
+                  {line.technicalSpec ? (
+                    <View style={line.livingDescription ? styles.bodySide : { flex: 1 }}>
                       <Text style={styles.blockLabel}>Teknisk spec</Text>
-                      <Text style={styles.specText}>{line.description}</Text>
+                      <Text style={styles.specText}>{line.technicalSpec}</Text>
                     </View>
                   ) : null}
                 </View>
