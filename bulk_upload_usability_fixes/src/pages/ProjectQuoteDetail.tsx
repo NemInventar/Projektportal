@@ -323,6 +323,8 @@ const ProjectQuoteDetail = () => {
     created_by_email: '',
     created_by_phone: '',
     recipient_notes: '',
+    intro_text: '',
+    notes: '',
   });
   const [editingPricing, setEditingPricing] = useState<string | null>(null);
   const [selectedLineForItems, setSelectedLineForItems] = useState<string | null>(null);
@@ -493,6 +495,8 @@ const ProjectQuoteDetail = () => {
       created_by_email: quote.created_by_email ?? '',
       created_by_phone: quote.created_by_phone ?? '',
       recipient_notes: quote.recipient_notes ?? '',
+      intro_text: quote.intro_text ?? '',
+      notes: quote.notes ?? '',
     });
   }, [
     quote?.id,
@@ -505,6 +509,8 @@ const ProjectQuoteDetail = () => {
     quote?.created_by_email,
     quote?.created_by_phone,
     quote?.recipient_notes,
+    quote?.intro_text,
+    quote?.notes,
   ]);
 
   // Gem ét tekstfelt hvis det har ændret sig (kaldes onBlur)
@@ -719,7 +725,7 @@ const ProjectQuoteDetail = () => {
       // Hvis et af felterne triggerer DB-side ændringer eller joins, reload fra view'et
       // så vi fanger trigger-output (sent_at, locked_at, snapshot) og opdaterede joins
       // (company_*, recipient_*, created_by_*_resolved).
-      const triggerKeys = ['status', 'is_locked', 'payment_terms', 'delivery_period', 'reservations', 'special_reservations', 'company_id', 'recipient_contact_id', 'created_by_employee_id', 'quote_date'];
+      const triggerKeys = ['status', 'is_locked', 'payment_terms', 'delivery_period', 'reservations', 'special_reservations', 'company_id', 'recipient_contact_id', 'created_by_employee_id', 'quote_date', 'payment_terms_template'];
       const needsReload = Object.keys(updates).some(k => triggerKeys.includes(k));
       if (needsReload) {
         const { data: fresh } = await supabase
@@ -2639,7 +2645,11 @@ const ProjectQuoteDetail = () => {
         customer={customer}
         paymentTerms={quote.resolved_payment_terms ?? null}
         deliveryPeriod={quote.resolved_delivery_period ?? null}
+        deliveryNote={quote.delivery_note ?? null}
         reservations={quote.resolved_reservations ?? null}
+        paymentTermsTemplate={quote.resolved_payment_terms_template ?? '50_50_levering'}
+        introText={quote.intro_text ?? null}
+        notes={quote.notes ?? null}
         createdBy={{
           name: quote.created_by_name_resolved ?? quote.created_by_name ?? null,
           email: quote.created_by_email_resolved ?? quote.created_by_email ?? null,
@@ -3231,6 +3241,43 @@ const ProjectQuoteDetail = () => {
               </div>
             </div>
 
+            {/* Indledning og bemærkninger */}
+            <div className="space-y-3 pt-4 border-t">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Indledning og bemærkninger</h3>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="intro_text">Tilbudsindledning</Label>
+                  <Textarea
+                    id="intro_text"
+                    placeholder={'Hermed vores tilbud på de beskrevne poster. Tilbuddet er udarbejdet på baggrund af det modtagne projektmateriale og forudsætninger angivet under vilkår.'}
+                    value={detailsForm.intro_text}
+                    onChange={(e) => setDetailsForm(p => ({ ...p, intro_text: e.target.value }))}
+                    onBlur={() => saveDetailField('intro_text')}
+                    disabled={isReadOnly}
+                    rows={3}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Vises øverst på PDF'en lige under metablokken. Tom = brug standardteksten ovenfor.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="notes">Bemærkninger</Label>
+                  <Textarea
+                    id="notes"
+                    placeholder="Fx ekstra information til kunden, projekt-specifikke detaljer der ikke passer som forbehold."
+                    value={detailsForm.notes}
+                    onChange={(e) => setDetailsForm(p => ({ ...p, notes: e.target.value }))}
+                    onBlur={() => saveDetailField('notes')}
+                    disabled={isReadOnly}
+                    rows={3}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Vises på PDF'en som "Bemærkninger"-sektion efter Vilkår. Skjules hvis tom.
+                  </p>
+                </div>
+              </div>
+            </div>
+
             {/* Vilkår */}
             <div className="space-y-3 pt-4 border-t">
               <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Vilkår</h3>
@@ -3257,6 +3304,43 @@ const ProjectQuoteDetail = () => {
                     onChange={(e) => updateQuoteMetadata({ valid_until: e.target.value || null })}
                     disabled={savingMetadata || isReadOnly}
                   />
+                </div>
+                {/* Betalingsplan-template — fakturering-skema (separat fra payment_terms-tekst) */}
+                <div className="space-y-2 md:col-span-2">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <Label htmlFor="payment_terms_template">Betalingsplan</Label>
+                    <FieldIndicator
+                      isNull={quote?.payment_terms_template === null || quote?.payment_terms_template === undefined}
+                      isLocked={isReadOnly}
+                      lockedAt={quote?.locked_at}
+                      onReset={() => updateQuoteMetadata({ payment_terms_template: null })}
+                      onOverride={() => {
+                        // Override = lås den nuværende resolved-værdi ind på tilbuddet.
+                        const seed = quote?.resolved_payment_terms_template ?? '50_50_levering';
+                        updateQuoteMetadata({ payment_terms_template: seed });
+                      }}
+                    />
+                  </div>
+                  <Select
+                    value={quote?.resolved_payment_terms_template ?? '50_50_levering'}
+                    onValueChange={(v) => updateQuoteMetadata({ payment_terms_template: v })}
+                    disabled={savingMetadata || isReadOnly}
+                  >
+                    <SelectTrigger id="payment_terms_template">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="50_50_levering">50% ved accept, 50% ved levering</SelectItem>
+                      <SelectItem value="40_60">40% ved accept, 60% ved levering</SelectItem>
+                      <SelectItem value="30_70">30% ved accept, 70% ved levering</SelectItem>
+                      <SelectItem value="20_80">20% ved accept, 80% ved levering</SelectItem>
+                      <SelectItem value="per_levering">Faktureres pr. delleverance</SelectItem>
+                      <SelectItem value="custom">Aftales individuelt</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Styrer Betalingsplan-tabellen i tilbuds-PDF'en. Adskilt fra "Betalingsbetingelser" nedenfor (der angiver fakturafrist).
+                  </p>
                 </div>
                 {/* Betalingsbetingelser */}
                 <div className="space-y-2">
@@ -3367,7 +3451,20 @@ const ProjectQuoteDetail = () => {
               <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Tilbudsgiver</h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="space-y-2 md:col-span-3">
-                  <Label>Hurtigvalg medarbejder</Label>
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <Label>Hurtigvalg medarbejder</Label>
+                    {quote?.created_by_employee_id && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 text-xs px-2"
+                        onClick={() => navigate(`/medarbejdere?edit=${quote.created_by_employee_id}`)}
+                      >
+                        <Edit className="h-3 w-3 mr-1" /> Rediger medarbejder
+                      </Button>
+                    )}
+                  </div>
                   <Select
                     value={quote?.created_by_employee_id ?? ''}
                     onValueChange={(empId) => {

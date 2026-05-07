@@ -199,15 +199,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: PALETTE.muted,
   },
-  // Bemærk-note (når der er upricede linjer)
-  pendingNote: {
-    fontSize: 9,
-    fontStyle: 'italic',
-    color: PALETTE.muted,
-    marginTop: 14,
-    marginBottom: 6,
-    lineHeight: 1.4,
-  },
   // Total-blok
   totalBlock: {
     marginTop: 14,
@@ -258,6 +249,51 @@ const styles = StyleSheet.create({
     color: PALETTE.ink,
     width: 100,
     textAlign: 'right',
+  },
+  // Betalingsplan
+  paymentPlanBlock: {
+    marginTop: 22,
+  },
+  paymentPlanHeader: {
+    flexDirection: 'row',
+    backgroundColor: PALETTE.bg,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderTopWidth: 0.5,
+    borderTopColor: PALETTE.line,
+    borderBottomWidth: 0.5,
+    borderBottomColor: PALETTE.line,
+  },
+  paymentPlanHeaderText: {
+    fontSize: 7,
+    fontFamily: 'Helvetica-Bold',
+    color: PALETTE.muted,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  paymentPlanRow: {
+    flexDirection: 'row',
+    paddingVertical: 7,
+    paddingHorizontal: 8,
+    borderBottomWidth: 0.3,
+    borderBottomColor: PALETTE.line,
+  },
+  paymentPlanColWhen: { flex: 2.5, fontSize: 10, color: PALETTE.ink },
+  paymentPlanColAmount: { flex: 1.5, fontSize: 10, color: PALETTE.ink, textAlign: 'right' },
+  paymentPlanFallback: {
+    fontSize: 10,
+    fontStyle: 'italic',
+    color: PALETTE.muted,
+    paddingTop: 4,
+  },
+  // Bemærkninger (notes)
+  notesBlock: {
+    marginTop: 22,
+  },
+  notesText: {
+    fontSize: 10,
+    color: PALETTE.ink,
+    lineHeight: 1.5,
   },
   // Vilkår
   termsBlock: {
@@ -342,6 +378,8 @@ interface PDFCreatedBy {
   phone?: string | null;
 }
 
+export type PaymentTermsTemplate = '50_50_levering' | '40_60' | '30_70' | '20_80' | 'per_levering' | 'custom';
+
 interface QuotePDFProps {
   projectName: string;
   quoteTitle: string;
@@ -352,9 +390,12 @@ interface QuotePDFProps {
   customer?: PDFCustomer;
   paymentTerms?: string | null;
   deliveryPeriod?: string | null;
+  deliveryNote?: string | null;
   reservations?: string | null;
+  paymentTermsTemplate?: PaymentTermsTemplate | null;
   createdBy?: PDFCreatedBy;
   introText?: string | null;
+  notes?: string | null;
 }
 
 const fmt = (n: number) =>
@@ -380,15 +421,17 @@ export function QuotePDF({
   customer,
   paymentTerms,
   deliveryPeriod,
+  deliveryNote,
   reservations,
+  paymentTermsTemplate,
   createdBy,
   introText,
+  notes,
 }: QuotePDFProps) {
   // Subtotal og moms beregnes kun ud fra prissatte linjer
   const subtotal = lines.reduce((sum, l) => sum + (l.totalSellingPrice || 0), 0);
   const vat = Math.round(subtotal * 0.25);
   const grandTotal = subtotal + vat;
-  const hasUnpriced = lines.some(l => !l.totalSellingPrice || l.totalSellingPrice <= 0);
 
   const customerAddress = formatCustomerAddress(customer);
 
@@ -487,13 +530,6 @@ export function QuotePDF({
           );
         })}
 
-        {/* Bemærk hvis upricede linjer */}
-        {hasUnpriced ? (
-          <Text style={styles.pendingNote}>
-            Bemærk: Enkelte poster afventer endelig prissætning og fremsendes som tillæg når underleverandørtilbud foreligger.
-          </Text>
-        ) : null}
-
         {/* Total-blok */}
         <View style={styles.totalBlock} wrap={false}>
           <View style={styles.totalRow}>
@@ -511,8 +547,55 @@ export function QuotePDF({
           </View>
         </View>
 
+        {/* Betalingsplan */}
+        {(() => {
+          const tmpl = paymentTermsTemplate ?? '50_50_levering';
+          const splitRows = (firstPct: number, secondPct: number, secondLabel: string) => {
+            const firstExcl = Math.round(subtotal * firstPct / 100);
+            const secondExcl = subtotal - firstExcl;
+            const firstIncl = Math.round(firstExcl * 1.25);
+            const secondIncl = Math.round(secondExcl * 1.25);
+            return [
+              { when: `Ved accept af tilbuddet (${firstPct}%)`, excl: firstExcl, incl: firstIncl },
+              { when: `${secondLabel} (${secondPct}%)`, excl: secondExcl, incl: secondIncl },
+            ];
+          };
+          let rows: Array<{ when: string; excl: number; incl: number }> | null = null;
+          let fallback: string | null = null;
+          if (tmpl === '50_50_levering') rows = splitRows(50, 50, 'Ved levering');
+          else if (tmpl === '40_60') rows = splitRows(40, 60, 'Ved levering');
+          else if (tmpl === '30_70') rows = splitRows(30, 70, 'Ved levering');
+          else if (tmpl === '20_80') rows = splitRows(20, 80, 'Ved levering');
+          else if (tmpl === 'per_levering') fallback = 'Faktureres pr. delleverance — se leveranceplan.';
+          else if (tmpl === 'custom') fallback = 'Betalingsbetingelser aftales individuelt.';
+
+          return (
+            <View style={styles.paymentPlanBlock} wrap={false}>
+              <Text style={styles.sectionHeader}>Betalingsplan</Text>
+              {rows ? (
+                <>
+                  <View style={styles.paymentPlanHeader}>
+                    <Text style={[styles.paymentPlanHeaderText, { flex: 2.5 }]}>Hvad</Text>
+                    <Text style={[styles.paymentPlanHeaderText, { flex: 1.5, textAlign: 'right' }]}>Ekskl. moms</Text>
+                    <Text style={[styles.paymentPlanHeaderText, { flex: 1.5, textAlign: 'right' }]}>Inkl. moms</Text>
+                  </View>
+                  {rows.map((r, i) => (
+                    <View key={i} style={styles.paymentPlanRow}>
+                      <Text style={styles.paymentPlanColWhen}>{r.when}</Text>
+                      <Text style={styles.paymentPlanColAmount}>{fmt(r.excl)}</Text>
+                      <Text style={styles.paymentPlanColAmount}>{fmt(r.incl)}</Text>
+                    </View>
+                  ))}
+                </>
+              ) : (
+                <Text style={styles.paymentPlanFallback}>{fallback}</Text>
+              )}
+            </View>
+          );
+        })()}
+
         {/* Vilkår */}
-        {(paymentTerms || deliveryPeriod || reservations) ? (
+        {(paymentTerms || deliveryPeriod || deliveryNote || reservations) ? (
           <View style={styles.termsBlock} wrap={false}>
             <Text style={styles.sectionHeader}>Vilkår</Text>
             {paymentTerms ? (
@@ -527,12 +610,26 @@ export function QuotePDF({
                 <Text style={styles.termsValue}>{deliveryPeriod}</Text>
               </View>
             ) : null}
+            {deliveryNote ? (
+              <View style={styles.termsRow}>
+                <Text style={styles.termsLabel}>Leveringsnote</Text>
+                <Text style={styles.termsValue}>{deliveryNote}</Text>
+              </View>
+            ) : null}
             {reservations ? (
               <View style={styles.termsRow}>
                 <Text style={styles.termsLabel}>Forbehold</Text>
                 <Text style={styles.termsValue}>{reservations}</Text>
               </View>
             ) : null}
+          </View>
+        ) : null}
+
+        {/* Bemærkninger */}
+        {notes ? (
+          <View style={styles.notesBlock} wrap={false}>
+            <Text style={styles.sectionHeader}>Bemærkninger</Text>
+            <Text style={styles.notesText}>{notes}</Text>
           </View>
         ) : null}
 

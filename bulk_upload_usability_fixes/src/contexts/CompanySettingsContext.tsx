@@ -24,6 +24,7 @@ export interface CompanySettings {
   defaultReservations?: string | null;
   defaultValidityDays?: number | null;
   defaultRecipientProfile?: string | null;
+  defaultPaymentTermsTemplate?: string | null;
 }
 
 export type CompanySettingsInput = Omit<CompanySettings, 'id'>;
@@ -59,6 +60,7 @@ const rowToSettings = (r: any): CompanySettings => ({
   defaultReservations: r.default_reservations ?? null,
   defaultValidityDays: r.default_validity_days ?? null,
   defaultRecipientProfile: r.default_recipient_profile ?? null,
+  defaultPaymentTermsTemplate: r.default_payment_terms_template ?? null,
 });
 
 const inputToRow = (input: Partial<CompanySettingsInput>): Record<string, any> => {
@@ -81,6 +83,7 @@ const inputToRow = (input: Partial<CompanySettingsInput>): Record<string, any> =
   if ('defaultReservations' in input) out.default_reservations = input.defaultReservations ?? null;
   if ('defaultValidityDays' in input) out.default_validity_days = input.defaultValidityDays ?? null;
   if ('defaultRecipientProfile' in input) out.default_recipient_profile = input.defaultRecipientProfile ?? null;
+  if ('defaultPaymentTermsTemplate' in input) out.default_payment_terms_template = input.defaultPaymentTermsTemplate ?? null;
   return out;
 };
 

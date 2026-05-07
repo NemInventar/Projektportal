@@ -74,6 +74,12 @@ const Sidebar = () => {
       active: isActive('/kontakter') || location.pathname.startsWith('/kontakter/'),
     },
     {
+      label: 'Medarbejdere',
+      icon: Users,
+      path: '/medarbejdere',
+      active: isActive('/medarbejdere') || location.pathname.startsWith('/medarbejdere/'),
+    },
+    {
       label: 'Indstillinger',
       icon: Settings,
       path: '/indstillinger',

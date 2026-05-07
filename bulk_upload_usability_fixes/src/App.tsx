@@ -14,6 +14,7 @@ import { PurchaseOrdersProvider } from "@/contexts/PurchaseOrdersContext";
 import { TransportProvider } from "@/contexts/TransportContext";
 import { ProjectProductsProvider } from "@/contexts/ProjectProductsContext";
 import { CompaniesProvider } from "@/contexts/CompaniesContext";
+import { EmployeesProvider } from "@/contexts/EmployeesContext";
 import { CompanySettingsProvider } from "@/contexts/CompanySettingsContext";
 import {
   PurchasingProvider,
@@ -45,6 +46,7 @@ import PurchaseOrders from "./pages/PurchaseOrders";
 import PurchaseOrderDetail from "./pages/PurchaseOrderDetail";
 import Companies from "./pages/Companies";
 import Contacts from "./pages/Contacts";
+import Employees from "./pages/Employees";
 import Settings from "./pages/Settings";
 import StandardSuppliers from "./pages/StandardSuppliers";
 import StandardSupplierDetail from "./pages/StandardSupplierDetail";
@@ -68,6 +70,7 @@ function AppProviders({ children }: { children: React.ReactNode }) {
               <TransportProvider>
                 <ProjectProductsProvider>
                   <CompaniesProvider>
+                    <EmployeesProvider>
                     <CompanySettingsProvider>
                     <PurchasingProvider>
                       <LeadsProvider>
@@ -79,6 +82,7 @@ function AppProviders({ children }: { children: React.ReactNode }) {
                       </LeadsProvider>
                     </PurchasingProvider>
                     </CompanySettingsProvider>
+                    </EmployeesProvider>
                   </CompaniesProvider>
                 </ProjectProductsProvider>
               </TransportProvider>
@@ -140,6 +144,9 @@ const App = () => (
 
           {/* Kontakter (crm_contacts) */}
           <Route path="/kontakter" element={<ProtectedRoute><AppProviders><Contacts /></AppProviders></ProtectedRoute>} />
+
+          {/* Medarbejdere (interne) */}
+          <Route path="/medarbejdere" element={<ProtectedRoute><AppProviders><Employees /></AppProviders></ProtectedRoute>} />
 
           {/* Indstillinger */}
           <Route path="/indstillinger" element={<ProtectedRoute><AppProviders><Settings /></AppProviders></ProtectedRoute>} />

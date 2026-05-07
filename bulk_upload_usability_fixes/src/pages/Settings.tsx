@@ -37,6 +37,7 @@ const Settings: React.FC = () => {
         defaultReservations: settings.defaultReservations ?? '',
         defaultValidityDays: settings.defaultValidityDays ?? 30,
         defaultRecipientProfile: settings.defaultRecipientProfile ?? 'mixed',
+        defaultPaymentTermsTemplate: settings.defaultPaymentTermsTemplate ?? '50_50_levering',
       });
     }
   }, [settings]);
@@ -275,6 +276,28 @@ const Settings: React.FC = () => {
                   <SelectItem value="mixed">Blandet</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <Label htmlFor="defaultPaymentTermsTemplate">Betalingsplan (default)</Label>
+              <Select
+                value={form.defaultPaymentTermsTemplate ?? '50_50_levering'}
+                onValueChange={(v) => { setField('defaultPaymentTermsTemplate', v); setTimeout(() => saveField('defaultPaymentTermsTemplate'), 0); }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="50_50_levering">50% ved accept, 50% ved levering</SelectItem>
+                  <SelectItem value="40_60">40% ved accept, 60% ved levering</SelectItem>
+                  <SelectItem value="30_70">30% ved accept, 70% ved levering</SelectItem>
+                  <SelectItem value="20_80">20% ved accept, 80% ved levering</SelectItem>
+                  <SelectItem value="per_levering">Faktureres pr. delleverance</SelectItem>
+                  <SelectItem value="custom">Aftales individuelt</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Bruges som default på nye tilbud. Kan overstyres pr. tilbud.
+              </p>
             </div>
             <div className="space-y-1 md:col-span-2">
               <Label htmlFor="defaultDeliveryPeriod">Standard leveringsbetingelser</Label>
