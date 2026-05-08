@@ -316,6 +316,32 @@ const ProjectQuoteDetail = () => {
   };
   // Lokal state for inline qty-edit
   const [itemQtyEdits, setItemQtyEdits] = useState<Record<string, number>>({});
+
+  // Globale section-visibility på tilbudslinje-kort. Persisteres i localStorage.
+  // Default: pricing + lineItems on (det du rører hele tiden), kalkulation/image/living off.
+  type LineSectionVisibility = {
+    kalkulation: boolean; // Kalkulations-summary tabellen (reality check, sjælden)
+    pricing: boolean;     // Prisfastsættelse-blokken
+    lineItems: boolean;   // Line Items — editable cost-rows
+    image: boolean;       // Billede + AI-render + custom upload
+    living: boolean;      // Levende beskrivelse
+  };
+  const LINE_VIS_KEY = 'nem_inventar_line_section_vis_v2';
+  const loadLineVisibility = (): LineSectionVisibility => {
+    const defaults: LineSectionVisibility = { kalkulation: false, pricing: true, lineItems: true, image: false, living: false };
+    try {
+      const raw = localStorage.getItem(LINE_VIS_KEY);
+      if (raw) return { ...defaults, ...JSON.parse(raw) };
+    } catch {}
+    return defaults;
+  };
+  const [lineSectionVis, setLineSectionVis] = useState<LineSectionVisibility>(loadLineVisibility);
+  useEffect(() => {
+    try { localStorage.setItem(LINE_VIS_KEY, JSON.stringify(lineSectionVis)); } catch {}
+  }, [lineSectionVis]);
+  const toggleLineSection = (key: keyof LineSectionVisibility) =>
+    setLineSectionVis(prev => ({ ...prev, [key]: !prev[key] }));
+  const hiddenSectionCount = Object.values(lineSectionVis).filter(v => !v).length;
   const [showNewCompanyDialog, setShowNewCompanyDialog] = useState(false);
   const [editingCompanyId, setEditingCompanyId] = useState<string | null>(null);
   const [savingNewCompany, setSavingNewCompany] = useState(false);
@@ -378,7 +404,6 @@ const ProjectQuoteDetail = () => {
     description: '',
     quantity: 1,
     unit: 'stk',
-    technicalSpec: '',
   });
 
   // Form data for pricing
@@ -412,7 +437,6 @@ const ProjectQuoteDetail = () => {
     description: '',
     quantity: 1,
     unit: 'stk',
-    technicalSpec: '',
   });
 
   // Form data for editing item
@@ -1275,7 +1299,6 @@ const ProjectQuoteDetail = () => {
         unit: lineFormData.unit,
         sort_order: lines.length,
         display_order: maxDisplayOrder + 1,
-        technical_spec: lineFormData.technicalSpec || null,
       };
 
       const { error: lineError } = await supabase
@@ -1290,7 +1313,7 @@ const ProjectQuoteDetail = () => {
       });
 
       setShowAddLineModal(false);
-      setLineFormData({ title: '', description: '', quantity: 1, unit: 'stk', technicalSpec: '' });
+      setLineFormData({ title: '', description: '', quantity: 1, unit: 'stk' });
       loadQuoteData();
     } catch (error) {
       console.error('Error adding line:', error);
@@ -2147,7 +2170,6 @@ const ProjectQuoteDetail = () => {
       description: line.description || '',
       quantity: line.quantity,
       unit: line.unit,
-      technicalSpec: line.technicalSpec || '',
     });
     setEditingLine(line.id);
   };
@@ -2187,7 +2209,6 @@ const ProjectQuoteDetail = () => {
         description: editLineFormData.description || null,
         quantity: editLineFormData.quantity,
         unit: editLineFormData.unit,
-        technical_spec: editLineFormData.technicalSpec || null,
       };
 
       const { error } = await supabase
@@ -2719,7 +2740,12 @@ const ProjectQuoteDetail = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `tilbud-${activeProject.name}-${quote.quote_number}.pdf`.replace(/\s+/g, '-');
+    const ts = (() => {
+      const d = new Date();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+    })();
+    a.download = `${ts}_tilbud-${activeProject.name}-${quote.quote_number}.pdf`.replace(/\s+/g, '-');
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -2774,7 +2800,12 @@ const ProjectQuoteDetail = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `bilag-${activeProject.name}-${quote.quote_number}.pdf`.replace(/\s+/g, '-');
+    const ts = (() => {
+      const d = new Date();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+    })();
+    a.download = `${ts}_bilag-${activeProject.name}-${quote.quote_number}.pdf`.replace(/\s+/g, '-');
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -3631,13 +3662,13 @@ const ProjectQuoteDetail = () => {
             <TabsContent value="bilag" className="space-y-6 mt-0">
               <div className="space-y-3">
                 <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-                  Bilags-PDF — indledning
+                  Indledning
                 </h3>
                 <div className="space-y-2">
                   <Label htmlFor="appendix_intro_text">Bilag-indledning<ColHint name="appendix_intro_text" /></Label>
                   <Textarea
                     id="appendix_intro_text"
-                    placeholder={`Visuelle illustrationer og levende beskrivelser af de enkelte poster i tilbuddet. Bilaget hører til tilbudsdokument ${quote?.quote_number ?? '—'} og bør sendes med dette.`}
+                    placeholder={`Bilaget viser hver enkelt post i tilbuddet med billede og teknisk specifikation. Det giver et samlet overblik over materialer, mål og udførelse, og læses sammen med tilbudsdokument ${quote?.quote_number ?? '—'}.`}
                     value={detailsForm.appendix_intro_text}
                     onChange={(e) => setDetailsForm(p => ({ ...p, appendix_intro_text: e.target.value }))}
                     onBlur={() => saveDetailField('appendix_intro_text')}
@@ -3645,12 +3676,92 @@ const ProjectQuoteDetail = () => {
                     rows={4}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Vises på forsiden af bilags-PDF'en. Tom = brug standardteksten ovenfor som placeholder.
+                    Vises på forsiden af bilags-PDF'en. Tom = brug standardteksten som placeholder.
                   </p>
                 </div>
-                <div className="text-xs text-muted-foreground border-t pt-3">
-                  Hvilke linjer der medtages i bilaget styres pr. linje via toggle-knappen i tilbudslinje-listen nedenfor.
-                </div>
+              </div>
+
+              <div className="space-y-3 pt-4 border-t">
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                  Per linje
+                </h3>
+                <p className="text-xs text-muted-foreground -mt-1">
+                  Toggle hvilke linjer der inkluderes, og udfyld den tekniske specifikation for hver. Levende beskrivelse + billede redigeres på selve linjen i tilbudslinje-listen nedenfor.
+                </p>
+                {lines.length === 0 ? (
+                  <p className="text-sm text-muted-foreground italic py-4">Ingen linjer på tilbuddet endnu.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {[...lines]
+                      .sort((a, b) => {
+                        if (a.displayOrder !== undefined && b.displayOrder !== undefined) return a.displayOrder - b.displayOrder;
+                        if (a.displayOrder !== undefined) return -1;
+                        if (b.displayOrder !== undefined) return 1;
+                        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+                      })
+                      .map(line => {
+                        const included = line.includeInAppendix !== false;
+                        return (
+                          <div
+                            key={line.id}
+                            className={`border rounded p-3 space-y-2 ${included ? '' : 'opacity-60 bg-muted/20'}`}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="flex items-center gap-2 min-w-0 flex-1">
+                                <span className="font-medium truncate">{line.title}</span>
+                                {!included && (
+                                  <Badge variant="outline" className="text-xs font-normal gap-1 text-muted-foreground shrink-0">
+                                    <EyeOff className="h-3 w-3" /> Ikke i bilag
+                                  </Badge>
+                                )}
+                              </div>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => toggleAppendixInclude(line.id, included)}
+                                disabled={isReadOnly}
+                                className="shrink-0"
+                              >
+                                {included ? (
+                                  <><Eye className="h-3 w-3 mr-1" /> Inkluderet</>
+                                ) : (
+                                  <><EyeOff className="h-3 w-3 mr-1" /> Skjult</>
+                                )}
+                              </Button>
+                            </div>
+                            {included && (
+                              <div className="space-y-1">
+                                <Label htmlFor={`tspec-${line.id}`} className="text-xs text-muted-foreground">
+                                  Teknisk spec<ColHint name="technical_spec" />
+                                </Label>
+                                <Textarea
+                                  id={`tspec-${line.id}`}
+                                  value={line.technicalSpec ?? ''}
+                                  placeholder={`Mål: 1200 × 90 mm\nMateriale: 6mm hærdet glas, ramme i hvidpigmenteret eg\nOverflade: Oil+2C\nMontage: Vægbeslag i syrefast stål\nInkluderet: levering, montering`}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    setLines(prev => prev.map(l => l.id === line.id ? { ...l, technicalSpec: v } : l));
+                                  }}
+                                  onBlur={async (e) => {
+                                    const v = e.target.value;
+                                    if ((line.technicalSpec ?? '') === v) return;
+                                    try {
+                                      await updateLineFields(line.id, { technical_spec: v || null });
+                                    } catch (err) {
+                                      console.error('Could not save technical_spec:', err);
+                                      toast({ title: 'Fejl', description: 'Kunne ikke gemme teknisk spec', variant: 'destructive' });
+                                    }
+                                  }}
+                                  disabled={isReadOnly}
+                                  rows={5}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
               </div>
             </TabsContent>
             </Tabs>
@@ -3933,8 +4044,32 @@ const ProjectQuoteDetail = () => {
         </Card>
 
         {/* Quote Lines */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-3">
           <h2 className="text-lg font-semibold">Tilbudslinjer · {lines.length}</h2>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs text-muted-foreground mr-1">Vis sektioner:</span>
+            {([
+              { key: 'pricing' as const, label: 'Prisfastsættelse' },
+              { key: 'lineItems' as const, label: 'Line Items' },
+              { key: 'kalkulation' as const, label: 'Kalkulation' },
+              { key: 'image' as const, label: 'Billede' },
+              { key: 'living' as const, label: 'Levende beskrivelse' },
+            ]).map(s => (
+              <Badge
+                key={s.key}
+                variant={lineSectionVis[s.key] ? 'default' : 'outline'}
+                className="cursor-pointer hover:bg-muted"
+                onClick={() => toggleLineSection(s.key)}
+              >
+                {lineSectionVis[s.key] ? '✓ ' : ''}{s.label}
+              </Badge>
+            ))}
+            {hiddenSectionCount > 0 && (
+              <span className="text-xs text-amber-700 ml-2">
+                {hiddenSectionCount} sektion{hiddenSectionCount === 1 ? '' : 'er'} skjult
+              </span>
+            )}
+          </div>
         </div>
         <div className="space-y-4">
           {lines
@@ -4124,16 +4259,6 @@ const ProjectQuoteDetail = () => {
                             >
                               <Trash2 className="h-4 w-4" />
                             </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                toggleLineExpansion(line.id);
-                              }}
-                            >
-                              {isExpanded ? 'Skjul kalkulation' : 'Vis kalkulation'}
-                            </Button>
                             </div>
                           )}
                           
@@ -4155,7 +4280,8 @@ const ProjectQuoteDetail = () => {
                   
                   <CollapsibleContent>
                     <CardContent className="pt-0">
-                      {/* Rækkebaseret Kalkulation */}
+                      {/* Rækkebaseret Kalkulation (summary — reality check) */}
+                      {lineSectionVis.kalkulation && (
                       <div className="mb-6">
                         <h4 className="font-semibold mb-3">Kalkulation</h4>
                         <div className="overflow-x-auto">
@@ -4312,8 +4438,10 @@ const ProjectQuoteDetail = () => {
                           </table>
                         </div>
                       </div>
+                      )}
 
                       {/* Pricing Settings */}
+                      {lineSectionVis.pricing && (
                       <div className="mt-6 p-4 bg-muted/30 rounded-lg">
                         <div className="flex justify-between items-center mb-3">
                           <h4 className="font-semibold">Prisfastsættelse</h4>
@@ -4710,9 +4838,10 @@ const ProjectQuoteDetail = () => {
                           </div>
                         )}
                       </div>
+                      )}
 
                       {/* Billede + AI-render */}
-                      {(() => {
+                      {lineSectionVis.image && (() => {
                         const effectiveUrl = lineEffectiveImageUrl(line);
                         const hasRender = !!line.renderImageUrl;
                         const hasCustom = !!line.customImageUrl;
@@ -4907,7 +5036,7 @@ const ProjectQuoteDetail = () => {
                       })()}
 
                       {/* Levende beskrivelse */}
-                      {(() => {
+                      {lineSectionVis.living && (() => {
                         const ldLocal = lineFieldEdits[line.id]?.livingDescription;
                         const ldValue = ldLocal !== undefined ? ldLocal : (line.livingDescription ?? '');
                         const isEdited = !!line.livingDescriptionEdited;
@@ -4964,7 +5093,8 @@ const ProjectQuoteDetail = () => {
                         );
                       })()}
 
-                      {/* Line Items */}
+                      {/* Line Items — editable cost-rows */}
+                      {lineSectionVis.lineItems && (
                       <div className="mt-6">
                         <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
                           <h4 className="font-semibold">Line Items</h4>
@@ -5210,6 +5340,7 @@ const ProjectQuoteDetail = () => {
                           </div>
                         )}
                       </div>
+                      )}
                     </CardContent>
                   </CollapsibleContent>
                 </Collapsible>
@@ -5604,7 +5735,7 @@ const ProjectQuoteDetail = () => {
               </div>
 
               <div>
-                <Label htmlFor="lineDescription">Linje-tekst (tilbuds-PDF)<ColHint name="description" /></Label>
+                <Label htmlFor="lineDescription">Linje-tekst<ColHint name="description" /></Label>
                 <Textarea
                   id="lineDescription"
                   value={lineFormData.description}
@@ -5613,21 +5744,7 @@ const ProjectQuoteDetail = () => {
                   rows={2}
                 />
                 <p className="text-xs text-muted-foreground mt-1">
-                  Vises kort under linjetitlen i tilbuds-PDF'en.
-                </p>
-              </div>
-
-              <div>
-                <Label htmlFor="lineTechnicalSpec">Teknisk spec (bilags-PDF)<ColHint name="technical_spec" /></Label>
-                <Textarea
-                  id="lineTechnicalSpec"
-                  value={lineFormData.technicalSpec}
-                  onChange={(e) => setLineFormData(prev => ({ ...prev, technicalSpec: e.target.value }))}
-                  placeholder={`Mål: 1200 × 90 mm\nMateriale: 6mm hærdet glas, ramme i hvidpigmenteret eg\nOverflade: Oil+2C\nMontage: Vægbeslag i syrefast stål\nInkluderet: levering, montering`}
-                  rows={6}
-                />
-                <p className="text-xs text-muted-foreground mt-1">
-                  Vises i højre kolonne på bilags-PDF'en. Tal-tungt: dimensioner, materialer, certificeringer.
+                  Vises kort under linjetitlen i tilbuds-PDF'en. Bilags-tekster redigeres på "Bilags-PDF"-fanen.
                 </p>
               </div>
 
@@ -5961,7 +6078,7 @@ const ProjectQuoteDetail = () => {
               </div>
 
               <div>
-                <Label htmlFor="editLineDescription">Linje-tekst (tilbuds-PDF)<ColHint name="description" /></Label>
+                <Label htmlFor="editLineDescription">Linje-tekst<ColHint name="description" /></Label>
                 <Textarea
                   id="editLineDescription"
                   value={editLineFormData.description}
@@ -5970,21 +6087,7 @@ const ProjectQuoteDetail = () => {
                   rows={2}
                 />
                 <p className="text-xs text-muted-foreground mt-1">
-                  Vises kort under linjetitlen i tilbuds-PDF'en. Holdes typisk kort.
-                </p>
-              </div>
-
-              <div>
-                <Label htmlFor="editLineTechnicalSpec">Teknisk spec (bilags-PDF)<ColHint name="technical_spec" /></Label>
-                <Textarea
-                  id="editLineTechnicalSpec"
-                  value={editLineFormData.technicalSpec}
-                  onChange={(e) => setEditLineFormData(prev => ({ ...prev, technicalSpec: e.target.value }))}
-                  placeholder={`Mål: 1200 × 90 mm\nMateriale: 6mm hærdet glas, ramme i hvidpigmenteret eg\nOverflade: Oil+2C\nMontage: Vægbeslag i syrefast stål\nInkluderet: levering, montering`}
-                  rows={6}
-                />
-                <p className="text-xs text-muted-foreground mt-1">
-                  Vises i højre kolonne på bilags-PDF'en. Tal-tungt: dimensioner, materialer, certificeringer, det inkluderede. Linjeskift bevares.
+                  Vises kort under linjetitlen i tilbuds-PDF'en. Bilags-tekster (teknisk spec, levende beskrivelse) redigeres på "Bilags-PDF"-fanen.
                 </p>
               </div>
 
