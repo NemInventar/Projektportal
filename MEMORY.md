@@ -11,7 +11,7 @@ NemInventar ERP er et projektportal-system til Nem Inventar ApS (dansk snedkervi
 - **Øvrigt**: PapaParse (CSV), Recharts, React Hook Form + Zod
 
 ## Kodebase
-Koden ligger i `bulk_upload_usability_fixes/`. 40+ Supabase-migrationer. Edge functions til prisforespørgsler.
+Koden ligger i `app/`. 40+ Supabase-migrationer. Edge functions til prisforespørgsler.
 
 ## Kerneentiteter
 - **Projects** – faser: Tilbud → Produktion → slutfaser: Garanti / Tabt / Arkiv

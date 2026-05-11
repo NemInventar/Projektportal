@@ -2750,9 +2750,8 @@ const ProjectQuoteDetail = () => {
     URL.revokeObjectURL(url);
   };
 
-  // Download bilags-PDF (kundevendt med billeder + levende beskrivelser)
-  const handleDownloadAppendix = async () => {
-    if (!quote || !activeProject) return;
+  const buildAppendixPdfBlob = async (): Promise<Blob | null> => {
+    if (!quote || !activeProject) return null;
     const formatDk = (iso?: string | null) => iso ? new Date(iso).toLocaleDateString('da-DK') : '';
     const date = formatDk(quote.created_at);
     const linkedCompany = quote.company_id ? companies.find(c => c.id === quote.company_id) : undefined;
@@ -2767,7 +2766,7 @@ const ProjectQuoteDetail = () => {
         : { contactName: quote.customer_contact_name ?? null };
 
     const sortedLines = [...lines]
-      .filter(l => l.includeInAppendix !== false) // Filtrér linjer fra hvis brugeren har slået dem fra i bilaget
+      .filter(l => l.includeInAppendix !== false)
       .sort((a, b) => {
         if (a.displayOrder !== undefined && b.displayOrder !== undefined) return a.displayOrder - b.displayOrder;
         if (a.displayOrder !== undefined) return -1;
@@ -2786,7 +2785,7 @@ const ProjectQuoteDetail = () => {
 
     const quoteDateStr = quote.resolved_quote_date ? formatDk(quote.resolved_quote_date) : date;
 
-    const blob = await pdf(
+    return await pdf(
       <QuoteAppendixPDF
         projectName={activeProject.name}
         quoteTitle={quote.title}
@@ -2797,15 +2796,67 @@ const ProjectQuoteDetail = () => {
         introText={quote.appendix_intro_text ?? null}
       />
     ).toBlob();
+  };
+
+  // Helper: timestamp for filnavn
+  const tsForFilename = () => {
+    const d = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+  };
+
+  // Download bilags-PDF (kundevendt med billeder + levende beskrivelser)
+  const handleDownloadAppendix = async () => {
+    if (!quote || !activeProject) return;
+    const blob = await buildAppendixPdfBlob();
+    if (!blob) return;
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    const ts = (() => {
-      const d = new Date();
-      const pad = (n: number) => String(n).padStart(2, '0');
-      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
-    })();
-    a.download = `${ts}_bilag-${activeProject.name}-${quote.quote_number}.pdf`.replace(/\s+/g, '-');
+    a.download = `${tsForFilename()}_bilag-${activeProject.name}-${quote.quote_number}.pdf`.replace(/\s+/g, '-');
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Flet tilbuds-PDF + bilag-PDF til ét PDF-dokument via pdf-lib
+  const buildCombinedPdfBlob = async (): Promise<Blob | null> => {
+    const [quoteBlob, appendixBlob] = await Promise.all([
+      buildQuotePdfBlob(),
+      buildAppendixPdfBlob(),
+    ]);
+    if (!quoteBlob) return null;
+    // Hvis ingen bilags-linjer er inkluderet, bilag-blob kan være "tom" — vi tager det med alligevel
+    // (cover-side skjules ikke automatisk hvis lines er tomme, men teksten dækker)
+    const { PDFDocument } = await import('pdf-lib');
+    const merged = await PDFDocument.create();
+    const quoteDoc = await PDFDocument.load(await quoteBlob.arrayBuffer());
+    const quotePages = await merged.copyPages(quoteDoc, quoteDoc.getPageIndices());
+    quotePages.forEach(p => merged.addPage(p));
+    if (appendixBlob) {
+      const appendixDoc = await PDFDocument.load(await appendixBlob.arrayBuffer());
+      const appendixPages = await merged.copyPages(appendixDoc, appendixDoc.getPageIndices());
+      appendixPages.forEach(p => merged.addPage(p));
+    }
+    const bytes = await merged.save();
+    return new Blob([bytes], { type: 'application/pdf' });
+  };
+
+  const handlePreviewCombined = async () => {
+    const blob = await buildCombinedPdfBlob();
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  };
+
+  const handleDownloadCombined = async () => {
+    if (!quote || !activeProject) return;
+    const blob = await buildCombinedPdfBlob();
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${tsForFilename()}_tilbud+bilag-${activeProject.name}-${quote.quote_number}.pdf`.replace(/\s+/g, '-');
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -3036,15 +3087,37 @@ const ProjectQuoteDetail = () => {
 
             {/* Faste primære knapper */}
             <Button
+              onClick={handlePreviewCombined}
+              variant="default"
+              size="sm"
+              className="gap-2"
+              disabled={lines.length === 0}
+              title="Åbn samlet PDF (tilbud + bilag) i ny fane"
+            >
+              <ExternalLink className="h-4 w-4" />
+              Preview samlet
+            </Button>
+            <Button
+              onClick={handleDownloadCombined}
+              variant="default"
+              size="sm"
+              className="gap-2"
+              disabled={lines.length === 0}
+              title="Download tilbud + bilag som ét samlet PDF-dokument"
+            >
+              <Download className="h-4 w-4" />
+              Tilbud + bilag
+            </Button>
+            <Button
               onClick={handlePreviewPDF}
               variant="outline"
               size="sm"
               className="gap-2"
               disabled={lines.length === 0}
-              title="Åbn tilbuds-PDF i ny fane uden at downloade"
+              title="Åbn KUN tilbuds-PDF i ny fane"
             >
               <ExternalLink className="h-4 w-4" />
-              Preview
+              Kun tilbud
             </Button>
             <Button
               onClick={handleDownloadPDF}
@@ -3052,9 +3125,10 @@ const ProjectQuoteDetail = () => {
               size="sm"
               className="gap-2"
               disabled={lines.length === 0}
+              title="Download KUN tilbuds-PDF (uden bilag)"
             >
               <Download className="h-4 w-4" />
-              Tilbuds-PDF
+              Kun tilbud
             </Button>
             <Button
               onClick={handleDownloadAppendix}

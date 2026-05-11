@@ -12,7 +12,7 @@ jobs:
       contents: write
     defaults:
       run:
-        working-directory: bulk_upload_usability_fixes
+        working-directory: app
     steps:
       - uses: actions/checkout@v4
 
@@ -20,7 +20,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: bulk_upload_usability_fixes/package-lock.json
+          cache-dependency-path: app/package-lock.json
 
       - run: npm ci
 
@@ -31,4 +31,4 @@ jobs:
       - uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./bulk_upload_usability_fixes/dist
+          publish_dir: ./app/dist
