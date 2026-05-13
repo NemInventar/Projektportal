@@ -334,6 +334,72 @@ async function mergePdfs(quoteBytes: Uint8Array, appendixBytes: Uint8Array): Pro
   return await merged.save();
 }
 
+const SIGNED_URL_TTL_SECONDS = 3600; // 1 hour
+
+interface UploadResult {
+  signed_url: string;
+  expires_at: string;
+  path: string;
+  filename: string;
+  file_size_bytes: number;
+}
+
+async function uploadAndSign(
+  supabase: ReturnType<typeof createClient>,
+  bytes: Uint8Array,
+  loaded: LoadedQuoteData,
+  format: Format,
+): Promise<UploadResult | { error: string; status: number }> {
+  const { quote, project } = loaded;
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const timestamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}${pad(now.getMinutes())}`;
+
+  const projectNumber = project.project_number || 'unknown';
+  const quoteNumber = quote.quote_number || quote.id.slice(0, 8);
+
+  // Storage path: {project_number}/{quote_number}/{timestamp}_{format}.pdf
+  const path = `${projectNumber}/${quoteNumber}/${timestamp}_${format}.pdf`;
+
+  // Human-friendly download filename
+  const sanitize = (s: string) => s.replace(/[^a-zA-Z0-9æøåÆØÅ_-]+/g, '-').replace(/^-+|-+$/g, '');
+  const formatLabel = format === 'pdf' ? 'tilbud' : format === 'bilag' ? 'bilag' : 'tilbud+bilag';
+  const filename = `${timestamp.replace('T', '_')}_${formatLabel}-${sanitize(project.name)}-${sanitize(quoteNumber)}.pdf`;
+
+  const { error: uploadErr } = await supabase.storage
+    .from('quote-pdfs')
+    .upload(path, bytes, {
+      contentType: 'application/pdf',
+      upsert: true,
+    });
+
+  if (uploadErr) {
+    console.error('Storage upload fejlede:', uploadErr);
+    return { error: `Storage upload fejlede: ${uploadErr.message}`, status: 502 };
+  }
+
+  const { data: signedData, error: signErr } = await supabase.storage
+    .from('quote-pdfs')
+    .createSignedUrl(path, SIGNED_URL_TTL_SECONDS, {
+      download: filename,
+    });
+
+  if (signErr || !signedData?.signedUrl) {
+    console.error('Signed URL generation fejlede:', signErr);
+    return { error: 'Kunne ikke generere signed URL', status: 500 };
+  }
+
+  const expiresAt = new Date(now.getTime() + SIGNED_URL_TTL_SECONDS * 1000).toISOString();
+
+  return {
+    signed_url: signedData.signedUrl,
+    expires_at: expiresAt,
+    path,
+    filename,
+    file_size_bytes: bytes.byteLength,
+  };
+}
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -396,13 +462,16 @@ serve(async (req) => {
       pdfBytes = await mergePdfs(quoteBytes, appendixBytes);
     }
 
-    // TODO: upload, return signed URL
+    const uploaded = await uploadAndSign(supabase, pdfBytes, loaded, format);
+    if ('error' in uploaded) {
+      return jsonResponse({ error: uploaded.error }, uploaded.status);
+    }
+
     return jsonResponse({
-      _debug: 'pdf rendered',
-      format,
-      bytes: pdfBytes.byteLength,
+      ...uploaded,
       quote_number: loaded.quote.quote_number,
       project_name: loaded.project.name,
+      format,
     }, 200);
 
   } catch (err) {
