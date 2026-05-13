@@ -1,0 +1,10 @@
+# Supabase CLI config for Projektportal
+# This config is intentionally minimal — only the parts needed for edge function deploys.
+
+project_id = "guhbrpektblabndqttgp"
+
+[functions.generate-quote-pdf]
+verify_jwt = false
+# Path relative to this config.toml.
+# Project uses 'edge_function/' (singular) instead of CLI default 'functions/'.
+entrypoint = "./edge_function/generate-quote-pdf/index.ts"
