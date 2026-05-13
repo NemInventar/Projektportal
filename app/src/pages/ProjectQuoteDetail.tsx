@@ -364,14 +364,14 @@ const ProjectQuoteDetail = () => {
     customer_contact_name: '',
     payment_terms: '',
     delivery_period: '',
-    reservations: '',
+    customer_reservations: '',
     special_reservations: '',
     created_by_name: '',
     created_by_email: '',
     created_by_phone: '',
-    recipient_notes: '',
+    internal_recipient_notes: '',
     intro_text: '',
-    notes: '',
+    customer_remarks: '',
     appendix_intro_text: '',
   });
   const [editingPricing, setEditingPricing] = useState<string | null>(null);
@@ -537,14 +537,14 @@ const ProjectQuoteDetail = () => {
       customer_contact_name: quote.customer_contact_name ?? '',
       payment_terms: quote.payment_terms ?? '',
       delivery_period: quote.delivery_period ?? '',
-      reservations: quote.reservations ?? '',
+      customer_reservations: quote.customer_reservations ?? '',
       special_reservations: quote.special_reservations ?? '',
       created_by_name: quote.created_by_name ?? '',
       created_by_email: quote.created_by_email ?? '',
       created_by_phone: quote.created_by_phone ?? '',
-      recipient_notes: quote.recipient_notes ?? '',
+      internal_recipient_notes: quote.internal_recipient_notes ?? '',
       intro_text: quote.intro_text ?? '',
-      notes: quote.notes ?? '',
+      customer_remarks: quote.customer_remarks ?? '',
       appendix_intro_text: quote.appendix_intro_text ?? '',
     });
   }, [
@@ -552,14 +552,14 @@ const ProjectQuoteDetail = () => {
     quote?.customer_contact_name,
     quote?.payment_terms,
     quote?.delivery_period,
-    quote?.reservations,
+    quote?.customer_reservations,
     quote?.special_reservations,
     quote?.created_by_name,
     quote?.created_by_email,
     quote?.created_by_phone,
-    quote?.recipient_notes,
+    quote?.internal_recipient_notes,
     quote?.intro_text,
-    quote?.notes,
+    quote?.customer_remarks,
     quote?.appendix_intro_text,
   ]);
 
@@ -779,7 +779,7 @@ const ProjectQuoteDetail = () => {
       // Hvis et af felterne triggerer DB-side ændringer eller joins, reload fra view'et
       // så vi fanger trigger-output (sent_at, locked_at, snapshot) og opdaterede joins
       // (company_*, recipient_*, created_by_*_resolved).
-      const triggerKeys = ['status', 'is_locked', 'payment_terms', 'delivery_period', 'reservations', 'special_reservations', 'company_id', 'recipient_contact_id', 'created_by_employee_id', 'quote_date', 'payment_terms_template'];
+      const triggerKeys = ['status', 'is_locked', 'payment_terms', 'delivery_period', 'customer_reservations', 'special_reservations', 'company_id', 'recipient_contact_id', 'created_by_employee_id', 'quote_date', 'payment_terms_template'];
       const needsReload = Object.keys(updates).some(k => triggerKeys.includes(k));
       if (needsReload) {
         const { data: fresh } = await supabase
@@ -2710,11 +2710,11 @@ const ProjectQuoteDetail = () => {
         customer={customer}
         paymentTerms={quote.resolved_payment_terms ?? null}
         deliveryPeriod={quote.resolved_delivery_period ?? null}
-        deliveryNote={quote.delivery_note ?? null}
+        deliveryNote={quote.customer_delivery_note ?? null}
         reservations={quote.resolved_reservations ?? null}
         paymentTermsTemplate={quote.resolved_payment_terms_template ?? '50_50_levering'}
         introText={quote.intro_text ?? null}
-        notes={quote.notes ?? null}
+        notes={quote.customer_remarks ?? null}
         createdBy={{
           name: quote.created_by_name_resolved ?? quote.created_by_name ?? null,
           email: quote.created_by_email_resolved ?? quote.created_by_email ?? null,
@@ -3427,13 +3427,13 @@ const ProjectQuoteDetail = () => {
                   </p>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="notes">Bemærkninger<ColHint name="notes" /></Label>
+                  <Label htmlFor="customer_remarks">Bemærkninger<ColHint name="customer_remarks" /></Label>
                   <Textarea
-                    id="notes"
+                    id="customer_remarks"
                     placeholder="Fx ekstra information til kunden, projekt-specifikke detaljer der ikke passer som forbehold."
-                    value={detailsForm.notes}
-                    onChange={(e) => setDetailsForm(p => ({ ...p, notes: e.target.value }))}
-                    onBlur={() => saveDetailField('notes')}
+                    value={detailsForm.customer_remarks}
+                    onChange={(e) => setDetailsForm(p => ({ ...p, customer_remarks: e.target.value }))}
+                    onBlur={() => saveDetailField('customer_remarks')}
                     disabled={isReadOnly}
                     rows={3}
                   />
@@ -3564,27 +3564,27 @@ const ProjectQuoteDetail = () => {
                 {/* Standardforbehold */}
                 <div className="space-y-2 md:col-span-2">
                   <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <Label htmlFor="reservations">Standardforbehold<ColHint name="reservations" /></Label>
+                    <Label htmlFor="customer_reservations">Standardforbehold<ColHint name="customer_reservations" /></Label>
                     <FieldIndicator
-                      isNull={quote?.reservations === null || quote?.reservations === undefined || quote?.reservations === ''}
+                      isNull={quote?.customer_reservations === null || quote?.customer_reservations === undefined || quote?.customer_reservations === ''}
                       isLocked={isReadOnly}
                       lockedAt={quote?.locked_at}
-                      onReset={() => updateQuoteMetadata({ reservations: null })}
+                      onReset={() => updateQuoteMetadata({ customer_reservations: null })}
                       onOverride={() => {
                         const seed = companySettings?.defaultReservations ?? '';
-                        setDetailsForm(p => ({ ...p, reservations: seed }));
-                        updateQuoteMetadata({ reservations: seed });
+                        setDetailsForm(p => ({ ...p, customer_reservations: seed }));
+                        updateQuoteMetadata({ customer_reservations: seed });
                       }}
                     />
                   </div>
                   <Textarea
-                    id="reservations"
+                    id="customer_reservations"
                     placeholder={companySettings?.defaultReservations ?? 'Fx prisregulering ved materialestigning >5%, forudsætter uhindret adgang...'}
-                    value={detailsForm.reservations}
-                    onChange={(e) => setDetailsForm(p => ({ ...p, reservations: e.target.value }))}
-                    onBlur={() => saveDetailField('reservations')}
+                    value={detailsForm.customer_reservations}
+                    onChange={(e) => setDetailsForm(p => ({ ...p, customer_reservations: e.target.value }))}
+                    onBlur={() => saveDetailField('customer_reservations')}
                     rows={4}
-                    disabled={isReadOnly || quote?.reservations === null || quote?.reservations === undefined || quote?.reservations === ''}
+                    disabled={isReadOnly || quote?.customer_reservations === null || quote?.customer_reservations === undefined || quote?.customer_reservations === ''}
                   />
                   <p className="text-xs text-muted-foreground">
                     Override af standardforbeholdet er en ekstrem case. De fleste projektspecifikke ting hører hjemme i feltet nedenfor.
@@ -3719,13 +3719,13 @@ const ProjectQuoteDetail = () => {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="recipient_notes">Noter om modtager</Label>
+                  <Label htmlFor="internal_recipient_notes">Noter om modtager</Label>
                   <Input
-                    id="recipient_notes"
+                    id="internal_recipient_notes"
                     placeholder="Fx tone, sprogniveau, særlige hensyn"
-                    value={detailsForm.recipient_notes}
-                    onChange={(e) => setDetailsForm(p => ({ ...p, recipient_notes: e.target.value }))}
-                    onBlur={() => saveDetailField('recipient_notes')}
+                    value={detailsForm.internal_recipient_notes}
+                    onChange={(e) => setDetailsForm(p => ({ ...p, internal_recipient_notes: e.target.value }))}
+                    onBlur={() => saveDetailField('internal_recipient_notes')}
                     disabled={isReadOnly}
                   />
                 </div>
@@ -3949,7 +3949,7 @@ const ProjectQuoteDetail = () => {
                       const prio = quote?.priority === 1 ? 'Høj' : quote?.priority === 3 ? 'Lav' : 'Normal';
                       const parts = [
                         `Prioritet: ${prio}`,
-                        quote?.next_action ? `Handling: ${quote.next_action}` : null,
+                        quote?.internal_next_action ? `Handling: ${quote.internal_next_action}` : null,
                         quote?.next_delivery_date ? `Levering: ${fmtDk(quote.next_delivery_date)}` : null,
                       ].filter(Boolean);
                       return <span className="text-sm text-muted-foreground truncate">▸ {parts.join(' · ')}</span>;
@@ -4006,23 +4006,23 @@ const ProjectQuoteDetail = () => {
               </div>
               
               <div className="space-y-2">
-                <Label htmlFor="next_action">Næste handling</Label>
+                <Label htmlFor="internal_next_action">Næste handling</Label>
                 <Input
-                  id="next_action"
+                  id="internal_next_action"
                   placeholder="Beskriv næste handling"
-                  value={quote?.next_action || ''}
-                  onChange={(e) => updateQuoteMetadata({ next_action: e.target.value || null })}
+                  value={quote?.internal_next_action || ''}
+                  onChange={(e) => updateQuoteMetadata({ internal_next_action: e.target.value || null })}
                   disabled={savingMetadata || isReadOnly}
                 />
               </div>
-              
+
               <div className="space-y-2 md:col-span-2">
-                <Label htmlFor="delivery_note">Leveringsnoter</Label>
+                <Label htmlFor="customer_delivery_note">Leveringsnoter</Label>
                 <Textarea
-                  id="delivery_note"
+                  id="customer_delivery_note"
                   placeholder="Noter om levering"
-                  value={quote?.delivery_note || ''}
-                  onChange={(e) => updateQuoteMetadata({ delivery_note: e.target.value || null })}
+                  value={quote?.customer_delivery_note || ''}
+                  onChange={(e) => updateQuoteMetadata({ customer_delivery_note: e.target.value || null })}
                   disabled={savingMetadata || isReadOnly}
                   rows={2}
                 />

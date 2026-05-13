@@ -53,7 +53,7 @@ interface ProjectQuote {
   title: string;
   status: 'draft' | 'sent' | 'accepted' | 'rejected' | 'archived';
   validUntil?: Date;
-  notes?: string;
+  customerRemarks?: string;
   includeInProjectTotal: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -191,7 +191,7 @@ const ProjectQuotes = () => {
     title: '',
     status: 'draft' as const,
     validUntil: '',
-    notes: ''
+    customerRemarks: ''
   });
   
   // Group quotes by status
@@ -266,7 +266,7 @@ const ProjectQuotes = () => {
     title: '',
     status: 'draft' as const,
     validUntil: '',
-    notes: ''
+    customerRemarks: ''
   });
   
   // Collapsible sections state with localStorage persistence
@@ -371,7 +371,7 @@ const ProjectQuotes = () => {
           title: q.title,
           status: q.status,
           validUntil: q.valid_until ? new Date(q.valid_until) : undefined,
-          notes: q.notes,
+          customerRemarks: q.customer_remarks,
           includeInProjectTotal: q.include_in_project_total ?? true,
           createdAt: new Date(q.created_at),
           updatedAt: new Date(q.updated_at)
@@ -415,7 +415,7 @@ const ProjectQuotes = () => {
       title: '',
       status: 'draft',
       validUntil: '',
-      notes: ''
+      customerRemarks: ''
     });
   };
 
@@ -447,10 +447,10 @@ const ProjectQuotes = () => {
         title: formData.title,
         status: formData.status,
         valid_until: autoValidUntil || null,
-        notes: formData.notes || null,
+        customer_remarks: formData.customerRemarks || null,
         payment_terms: companySettings?.defaultPaymentTerms ?? null,
         delivery_period: companySettings?.defaultDeliveryPeriod ?? null,
-        reservations: companySettings?.defaultReservations ?? null,
+        customer_reservations: companySettings?.defaultReservations ?? null,
         recipient_profile: companySettings?.defaultRecipientProfile ?? 'mixed',
       };
 
@@ -490,7 +490,7 @@ const ProjectQuotes = () => {
       title: quote.title,
       status: quote.status,
       validUntil: quote.validUntil ? quote.validUntil.toISOString().split('T')[0] : '',
-      notes: quote.notes || ''
+      customerRemarks: quote.customerRemarks || ''
     });
     setShowEditQuoteModal(true);
   };
@@ -509,7 +509,7 @@ const ProjectQuotes = () => {
       const updateData: any = {
         title: editQuoteFormData.title,
         status: editQuoteFormData.status,
-        notes: editQuoteFormData.notes,
+        customer_remarks: editQuoteFormData.customerRemarks,
         updated_at: new Date().toISOString()
       };
 
@@ -870,12 +870,12 @@ const ProjectQuotes = () => {
               </div>
 
               <div>
-                <Label htmlFor="notes">Noter</Label>
+                <Label htmlFor="customerRemarks">Bemærkninger til kunden</Label>
                 <Textarea
-                  id="notes"
-                  value={formData.notes}
-                  onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
-                  placeholder="Interne noter om tilbuddet"
+                  id="customerRemarks"
+                  value={formData.customerRemarks}
+                  onChange={(e) => setFormData(prev => ({ ...prev, customerRemarks: e.target.value }))}
+                  placeholder="Vises på PDF — fx ekstra information til kunden"
                 />
               </div>
 
@@ -946,14 +946,14 @@ const ProjectQuotes = () => {
                 />
               </div>
 
-              {/* Notes */}
+              {/* Customer remarks */}
               <div>
-                <Label htmlFor="editNotes">Noter</Label>
+                <Label htmlFor="editCustomerRemarks">Bemærkninger til kunden</Label>
                 <Textarea
-                  id="editNotes"
-                  value={editQuoteFormData.notes}
-                  onChange={(e) => setEditQuoteFormData(prev => ({ ...prev, notes: e.target.value }))}
-                  placeholder="Interne noter om tilbuddet"
+                  id="editCustomerRemarks"
+                  value={editQuoteFormData.customerRemarks}
+                  onChange={(e) => setEditQuoteFormData(prev => ({ ...prev, customerRemarks: e.target.value }))}
+                  placeholder="Vises på PDF — fx ekstra information til kunden"
                 />
               </div>
 
