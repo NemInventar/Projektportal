@@ -33,7 +33,7 @@ Designet bygger på det eksisterende. Ingen ny lock-mekanisme. Ingen ny tenant-k
 | 1 | Hvad er "låst på projekt"? | **Eksisterende `fully_approved`** (production + sustainability = approved). Genbrug, ikke nyt felt. |
 | 2 | Default for portefølje-inklusion | **Approval-status driver alt.** Intet projekt-niveau flag. |
 | 3 | Scope | **Kun Nem Inventar.** Foresite/Askkon ude. |
-| 4 | Fase-mapping (sikker/tentativ) | Sikker: Kontrakt og planlægning, Afventer opstart, Produktion. Tentativ: Tilbud, Sendt. Ude: Tabt, Arkiv, Garanti. |
+| 4 | Fase-mapping (sikker/tentativ) | Sikker: Kontrakt og planlægning, Afventer opstart, Produktion. Tentativ: Tilbud, Sendt. Ude: Tabt, Fravalgt, Arkiv, Garanti. |
 | 5 | Materialer uden `standard_material_id` | **V1: ignorér i porteføljen.** Aggregering kræver standard_material_id. |
 | 6 | Godkendelses-trin | **Ét trin** — `fully_approved`. Ikke spec-lock + pris-lock separat. |
 | 7 | RFQ-kobling | **Valgfri detour** — kan udsendes på ethvert godkendt materiale, opdaterer pris/leverandør hvis vundet. RFQ er discovery-værktøj, ikke obligatorisk. |
@@ -109,7 +109,7 @@ WITH demand AS (
   JOIN project_products_2026_01_15_12_49 pp ON pp.id = ppml.project_product_id
   JOIN v_orderable_project_materials om ON om.project_material_id = ppml.project_material_id
   JOIN projects_2026_01_15_06_45 p ON p.id = pp.project_id
-  WHERE p.phase NOT IN ('Tabt', 'Arkiv', 'Garanti')
+  WHERE p.phase NOT IN ('Tabt', 'Fravalgt', 'Arkiv', 'Garanti')
     AND pp.status = 'active'
     AND om.project_id = p.id
   GROUP BY om.standard_material_id, p.id, p.phase
@@ -127,7 +127,7 @@ ordered_agg AS (
   SELECT
     om.standard_material_id,
     SUM(pol.ordered_qty) AS qty_ordered,
-    MIN(pol.expected_delivery_date) FILTER (WHERE pol.status IN ('ordered', 'partially_received')) AS next_delivery_date
+    MIN(pol.expected_delivery_date) FILTER (WHERE pol.status IN ('ordered', 'confirmed')) AS next_delivery_date
   FROM purchase_order_lines_2026_01_15_06_45 pol
   JOIN v_orderable_project_materials om ON om.project_material_id = pol.project_material_id
   WHERE pol.status <> 'cancelled'
@@ -471,7 +471,7 @@ Automatiseret test: ikke i V1. Kodebasen har minimal eksisterende test-infrastru
 
 ## 15. Open questions — afklaret 2026-05-13
 
-1. **`next_delivery_date` — hvilke PO-statusser?** Mørkhøj har flere store delleverancer, så `partially_received` er allerede aktivt og vigtigt. **Beslutning: filtreret på `status IN ('ordered', 'partially_received')`** — ikke kun 'ordered'.
+1. **`next_delivery_date` — hvilke PO-statusser?** Mørkhøj har flere store delleverancer, så `confirmed` (PO-linje bekræftet af leverandør, ikke leveret endnu) er allerede aktivt og vigtigt. **Beslutning: filtreret på `status IN ('ordered', 'confirmed')`** — ikke kun 'ordered'. (Note: `partially_received` findes ikke i CHECK-constraint på `purchase_order_lines.status`; gyldige værdier er ordered/confirmed/delivered/cancelled.)
 2. **"Send samlet PDF" i bulk-dialog** — **Beslutning: V1.1.** V1 har kun individuelle PO-PDF'er via eksisterende infrastruktur.
 3. **"Vis brudt op"-toggle persistens** — **Beslutning: ja, localStorage pr. bruger** (`localStorage.getItem('show_replaced_materials')`).
 
