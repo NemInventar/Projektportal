@@ -16,6 +16,11 @@
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from '@supabase/supabase-js';
+import React from 'react';
+import { pdf } from '@react-pdf/renderer';
+import { QuotePDF } from './QuotePDF.tsx';
+import { QuoteAppendixPDF } from './QuoteAppendixPDF.tsx';
+import { calculateLine, pricingFromLine } from './quotePricing.ts';
 
 interface LineItemRow {
   id: string;
@@ -171,6 +176,149 @@ async function loadQuoteData(
   };
 }
 
+function formatDk(iso: string | null | undefined): string {
+  if (!iso) return '';
+  return new Intl.DateTimeFormat('da-DK').format(new Date(iso));
+}
+
+function lineEffectiveImageUrl(line: LineRow): string | null {
+  if (line.active_image_source === 'custom') return line.custom_image_url ?? null;
+  if (line.active_image_source === 'render') return line.render_image_url ?? null;
+  if (line.active_image_source === 'none') return null;
+  // Fallback when active_image_source is null/unknown: prefer custom > render
+  return line.custom_image_url || line.render_image_url || null;
+}
+
+async function renderQuotePdf(loaded: LoadedQuoteData): Promise<Uint8Array> {
+  const { quote, lines, project, companyDefaultContactName } = loaded;
+
+  // Mirror GUI's buildQuotePdfBlob (ProjectQuoteDetail.tsx:2670-2725).
+  const pdfLines = lines.map((line) => {
+    const items = (line.project_quote_line_items_2026_01_16_23_00 ?? []).map((it) => ({
+      qty: Number(it.qty ?? 0),
+      cost_total_per_unit: it.cost_total_per_unit != null ? Number(it.cost_total_per_unit) : 0,
+      cost_breakdown_json: it.cost_breakdown_json,
+    }));
+    const pricing = pricingFromLine(line);
+    const t = calculateLine(items, Number(line.quantity ?? 0), pricing);
+    return {
+      title: line.title,
+      description: line.description ?? undefined,
+      quantity: Number(line.quantity ?? 0),
+      unit: line.unit,
+      sellingPricePerUnit: t.sellingPricePerUnit,
+      totalSellingPrice: t.totalSellingPrice,
+    };
+  });
+
+  const date = formatDk(quote.created_at);
+  const validUntil = quote.valid_until ? formatDk(quote.valid_until) : null;
+
+  const recipientName =
+    quote.recipient_name ??
+    quote.customer_contact_name ??
+    companyDefaultContactName ??
+    null;
+
+  // Customer block: prefer denormalized company_* from v_quotes_resolved; fall back to project.customer; fall back to bare contact.
+  const customer = quote.company_name
+    ? {
+        name: quote.company_name,
+        cvr: quote.company_cvr ?? null,
+        addressLine1: quote.company_address_line1 ?? null,
+        addressZip: quote.company_address_zip ?? null,
+        addressCity: quote.company_address_city ?? null,
+        contactName: recipientName,
+      }
+    : project.customer
+    ? { name: project.customer, contactName: recipientName }
+    : { contactName: recipientName };
+
+  const quoteDateStr = quote.resolved_quote_date ? formatDk(quote.resolved_quote_date) : date;
+
+  const doc = React.createElement(QuotePDF as any, {
+    projectName: project.name,
+    quoteTitle: quote.title,
+    quoteNumber: quote.quote_number,
+    quoteDate: quoteDateStr,
+    validUntil,
+    lines: pdfLines,
+    customer,
+    paymentTerms: quote.resolved_payment_terms ?? null,
+    deliveryPeriod: quote.resolved_delivery_period ?? null,
+    deliveryNote: quote.customer_delivery_note ?? null,
+    reservations: quote.resolved_reservations ?? null,
+    paymentTermsTemplate: quote.resolved_payment_terms_template ?? quote.payment_terms_template ?? '50_50_levering',
+    introText: quote.intro_text ?? null,
+    notes: quote.customer_remarks ?? null,
+    createdBy: {
+      name: quote.created_by_name_resolved ?? quote.created_by_name ?? null,
+      email: quote.created_by_email_resolved ?? quote.created_by_email ?? null,
+      phone: quote.created_by_phone_resolved ?? quote.created_by_phone ?? null,
+    },
+  });
+
+  // Use toBlob() (same path as GUI) — most reliable cross-runtime way to get bytes.
+  // .toBuffer() in @react-pdf/renderer v4 returns a Node ReadableStream that requires manual
+  // collection; .toBlob() returns a standard Blob that Deno can convert directly.
+  const blob = await pdf(doc as any).toBlob();
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+async function renderAppendixPdf(loaded: LoadedQuoteData): Promise<Uint8Array> {
+  const { quote, lines, project, companyDefaultContactName } = loaded;
+
+  // Mirror GUI's buildAppendixPdfBlob (ProjectQuoteDetail.tsx:2753-2799).
+  // Note: the appendix customer block uses a SLIGHTLY different fallback chain than the
+  // main quote (no addressLine1/zip/city, only name + contactName).
+  const customer = quote.company_name
+    ? {
+        name: quote.company_name,
+        cvr: quote.company_cvr ?? null,
+        contactName: quote.customer_contact_name ?? companyDefaultContactName ?? null,
+      }
+    : project.customer
+    ? { name: project.customer, contactName: quote.customer_contact_name ?? null }
+    : { contactName: quote.customer_contact_name ?? null };
+
+  const sortedLines = [...lines]
+    .filter((l) => l.include_in_appendix !== false)
+    .sort((a, b) => {
+      const aOrder = a.display_order;
+      const bOrder = b.display_order;
+      if (aOrder != null && bOrder != null) return aOrder - bOrder;
+      if (aOrder != null) return -1;
+      if (bOrder != null) return 1;
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    });
+
+  const appendixLines = sortedLines.map((line) => ({
+    title: line.title,
+    description: line.description ?? null,
+    livingDescription: line.living_description ?? null,
+    technicalSpec: line.technical_spec ?? null,
+    imageUrl: lineEffectiveImageUrl(line),
+    imageCaption:
+      line.active_image_source === 'custom' ? line.custom_image_caption ?? null : null,
+  }));
+
+  const date = formatDk(quote.created_at);
+  const quoteDateStr = quote.resolved_quote_date ? formatDk(quote.resolved_quote_date) : date;
+
+  const doc = React.createElement(QuoteAppendixPDF as any, {
+    projectName: project.name,
+    quoteTitle: quote.title,
+    quoteNumber: quote.quote_number,
+    quoteDate: quoteDateStr,
+    customer,
+    lines: appendixLines,
+    introText: quote.appendix_intro_text ?? null,
+  });
+
+  const blob = await pdf(doc as any).toBlob();
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -219,16 +367,23 @@ serve(async (req) => {
       return jsonResponse({ error: loaded.error }, loaded.status);
     }
 
-    // TODO: render PDF, upload, return signed URL
+    let pdfBytes: Uint8Array;
+    if (format === 'pdf') {
+      pdfBytes = await renderQuotePdf(loaded);
+    } else if (format === 'bilag') {
+      pdfBytes = await renderAppendixPdf(loaded);
+    } else {
+      // format === 'pdf+bilag' — handled in Task 6
+      return jsonResponse({ error: "format 'pdf+bilag' ikke implementeret endnu" }, 501);
+    }
+
+    // TODO: upload, return signed URL
     return jsonResponse({
-      _debug: 'data loaded',
+      _debug: 'pdf rendered',
+      format,
+      bytes: pdfBytes.byteLength,
       quote_number: loaded.quote.quote_number,
       project_name: loaded.project.name,
-      project_number: loaded.project.project_number,
-      company_name: loaded.quote.company_name,
-      line_count: loaded.lines.length,
-      first_line_item_count: loaded.lines[0]?.project_quote_line_items_2026_01_16_23_00?.length ?? 0,
-      fallback_contact_used: loaded.companyDefaultContactName !== null,
     }, 200);
 
   } catch (err) {
