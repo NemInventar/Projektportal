@@ -1,8 +1,8 @@
-// Bemærk: Denne fil er også kopieret til app/supabase/edge_function/generate-quote-pdf/QuoteAppendixPDF.tsx
-// for headless PDF-generering. Hvis du ændrer her, opdater også kopien.
+// KOPI af app/src/components/QuoteAppendixPDF.tsx
+// Skal holdes synkroniseret med GUI-versionen.
 
 import { Document, Page, Text, View, Image, StyleSheet } from '@react-pdf/renderer';
-import { COMPANY_INFO } from '@/config/company';
+import { COMPANY_INFO } from './company.ts';
 
 // Designguide (delt med QuotePDF)
 const PALETTE = {

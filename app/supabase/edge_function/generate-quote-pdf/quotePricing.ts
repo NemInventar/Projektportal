@@ -1,5 +1,6 @@
-// Bemærk: Denne fil er også kopieret til app/supabase/edge_function/generate-quote-pdf/quotePricing.ts
-// for headless PDF-generering. Hvis du ændrer her, opdater også kopien.
+// KOPI af app/src/lib/quotePricing.ts
+// Skal holdes synkroniseret med GUI-versionen.
+// Hvis du ændrer her, opdater også GUI-versionen.
 
 /**
  * Quote pricing — én helper brugt overalt.
