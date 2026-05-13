@@ -21,6 +21,7 @@ import { pdf } from '@react-pdf/renderer';
 import { QuotePDF } from './QuotePDF.tsx';
 import { QuoteAppendixPDF } from './QuoteAppendixPDF.tsx';
 import { calculateLine, pricingFromLine } from './quotePricing.ts';
+import { PDFDocument } from 'pdf-lib';
 
 interface LineItemRow {
   id: string;
@@ -319,6 +320,20 @@ async function renderAppendixPdf(loaded: LoadedQuoteData): Promise<Uint8Array> {
   return new Uint8Array(await blob.arrayBuffer());
 }
 
+async function mergePdfs(quoteBytes: Uint8Array, appendixBytes: Uint8Array): Promise<Uint8Array> {
+  const merged = await PDFDocument.create();
+  const quoteDoc = await PDFDocument.load(quoteBytes);
+  const appendixDoc = await PDFDocument.load(appendixBytes);
+
+  const quotePages = await merged.copyPages(quoteDoc, quoteDoc.getPageIndices());
+  quotePages.forEach((p) => merged.addPage(p));
+
+  const appendixPages = await merged.copyPages(appendixDoc, appendixDoc.getPageIndices());
+  appendixPages.forEach((p) => merged.addPage(p));
+
+  return await merged.save();
+}
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -373,8 +388,12 @@ serve(async (req) => {
     } else if (format === 'bilag') {
       pdfBytes = await renderAppendixPdf(loaded);
     } else {
-      // format === 'pdf+bilag' — handled in Task 6
-      return jsonResponse({ error: "format 'pdf+bilag' ikke implementeret endnu" }, 501);
+      // format === 'pdf+bilag' — render both, merge with pdf-lib
+      const [quoteBytes, appendixBytes] = await Promise.all([
+        renderQuotePdf(loaded),
+        renderAppendixPdf(loaded),
+      ]);
+      pdfBytes = await mergePdfs(quoteBytes, appendixBytes);
     }
 
     // TODO: upload, return signed URL
