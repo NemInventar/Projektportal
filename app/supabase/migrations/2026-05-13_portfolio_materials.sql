@@ -62,7 +62,7 @@ WITH demand AS (
   JOIN project_products_2026_01_15_12_49 pp ON pp.id = ppml.project_product_id
   JOIN v_orderable_project_materials om ON om.project_material_id = ppml.project_material_id
   JOIN projects_2026_01_15_06_45 p ON p.id = pp.project_id
-  WHERE p.phase NOT IN ('Tabt', 'Arkiv', 'Garanti')
+  WHERE p.phase NOT IN ('Tabt', 'Fravalgt', 'Arkiv', 'Garanti')
     AND pp.status = 'active'
     AND om.project_id = p.id
   GROUP BY om.standard_material_id, p.id, p.phase
@@ -81,7 +81,7 @@ ordered_agg AS (
     om.standard_material_id,
     SUM(pol.ordered_qty) AS qty_ordered,
     MIN(pol.expected_delivery_date)
-      FILTER (WHERE pol.status IN ('ordered', 'partially_received')) AS next_delivery_date
+      FILTER (WHERE pol.status IN ('ordered', 'confirmed')) AS next_delivery_date
   FROM purchase_order_lines_2026_01_15_06_45 pol
   JOIN v_orderable_project_materials om ON om.project_material_id = pol.project_material_id
   WHERE pol.status <> 'cancelled'
@@ -126,7 +126,7 @@ FROM project_product_material_lines_2026_01_15_12_49 ppml
 JOIN project_products_2026_01_15_12_49 pp ON pp.id = ppml.project_product_id
 JOIN v_orderable_project_materials om ON om.project_material_id = ppml.project_material_id
 JOIN projects_2026_01_15_06_45 p ON p.id = pp.project_id
-WHERE p.phase NOT IN ('Tabt', 'Arkiv', 'Garanti')
+WHERE p.phase NOT IN ('Tabt', 'Fravalgt', 'Arkiv', 'Garanti')
   AND pp.status = 'active'
   AND om.project_id = p.id
 GROUP BY om.standard_material_id, p.id, p.name, p.project_number, p.phase, om.project_material_id;
