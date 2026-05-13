@@ -40,7 +40,12 @@ export interface ProjectMaterial {
   currency: string;
   priceStatus: 'not_confirmed' | 'confirmed';
   priceNote?: string;
-  
+
+  // Breakdown linking (V1: portfolio)
+  parentProjectMaterialId?: string;
+  replacedAt?: Date;
+  isGeneric: boolean;
+
   // Approvals
   approvals: ProjectMaterialApproval[];
   
@@ -55,6 +60,16 @@ export interface ProjectMaterial {
   updatedAt: Date;
 }
 
+export interface BreakdownChild {
+  name: string;
+  category: string;
+  unit: string;
+  qty?: number;
+  supplierId?: string;
+  standardMaterialId?: string;
+  notes?: string;
+}
+
 interface ProjectMaterialsContextType {
   projectMaterials: ProjectMaterial[];
   loading: boolean;
@@ -64,16 +79,17 @@ interface ProjectMaterialsContextType {
   removeProjectMaterial: (id: string) => Promise<void>;
   addApproval: (materialId: string, approval: Omit<ProjectMaterialApproval, 'id'>) => void;
   updateApproval: (materialId: string, approvalId: string, updates: Partial<ProjectMaterialApproval>) => void;
-  
+
   // DEPRECATED: Use PurchaseOrdersContext instead
   // addOrder: (order: Omit<ProjectMaterialOrder, 'id' | 'createdAt'>) => void;
   // updateOrder: (orderId: string, updates: Partial<ProjectMaterialOrder>) => void;
-  
+
   getApprovalStatus: (materialId: string) => 'not_approved' | 'partially_approved' | 'fully_approved';
   isFullyApproved: (materialId: string) => boolean;
   validateOrderCreation: (materialId: string) => { canOrder: boolean; reason?: string };
   getTotalOrderedQuantity: (materialId: string) => number;
   getNextExpectedDelivery: (materialId: string) => Date | null;
+  breakdownGenericMaterial: (genericId: string, children: BreakdownChild[]) => Promise<void>;
 }
 
 const ProjectMaterialsContext = createContext<ProjectMaterialsContextType | undefined>(undefined);
@@ -102,6 +118,7 @@ const mockProjectMaterials: ProjectMaterial[] = [
     currency: 'DKK',
     priceStatus: 'confirmed',
     priceNote: 'Pris bekræftet med Bygma d. 15/1',
+    isGeneric: false,
     approvals: [
       {
         id: '1',
@@ -148,6 +165,7 @@ const mockProjectMaterials: ProjectMaterial[] = [
     currency: 'DKK',
     priceStatus: 'not_confirmed',
     priceNote: 'Afventer pristilbud fra XL-BYG',
+    isGeneric: false,
     approvals: [],
     orders: [],
     createdAt: new Date('2024-01-16'),
@@ -214,6 +232,9 @@ export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ ch
           currency: m.currency,
           priceStatus: m.price_status,
           priceNote: m.price_note,
+          parentProjectMaterialId: m.parent_project_material_id ?? undefined,
+          replacedAt: m.replaced_at ? new Date(m.replaced_at) : undefined,
+          isGeneric: m.is_generic ?? false,
           approvals: m.project_material_approvals_2026_01_15_06_45?.map((a: any) => ({
             id: a.id,
             type: a.type,
@@ -389,6 +410,54 @@ export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ ch
     }
   };
 
+  const breakdownGenericMaterial = async (genericId: string, children: BreakdownChild[]) => {
+    if (children.length === 0) {
+      throw new Error('Mindst én konkret variant skal tilføjes');
+    }
+
+    const generic = projectMaterials.find(m => m.id === genericId);
+    if (!generic) {
+      throw new Error('Generisk materiale ikke fundet');
+    }
+    if (!generic.isGeneric) {
+      throw new Error('Materialet er ikke generisk');
+    }
+    if (generic.replacedAt) {
+      throw new Error('Materialet er allerede brudt op');
+    }
+
+    // 1. Insert children
+    const childRows = children.map(c => ({
+      project_id: generic.projectId,
+      parent_project_material_id: genericId,
+      is_generic: false,
+      name: c.name,
+      category: c.category,
+      unit: c.unit,
+      supplier_id: c.supplierId ?? null,
+      standard_material_id: c.standardMaterialId ?? null,
+      currency: 'DKK',
+      price_status: 'estimated',
+      notes: c.notes ?? null,
+    }));
+
+    const { error: insertErr } = await supabase
+      .from('project_materials_2026_01_15_06_45')
+      .insert(childRows);
+    if (insertErr) throw insertErr;
+
+    // 2. Mark generic as replaced
+    const replacedAt = new Date().toISOString();
+    const { error: updateErr } = await supabase
+      .from('project_materials_2026_01_15_06_45')
+      .update({ replaced_at: replacedAt })
+      .eq('id', genericId);
+    if (updateErr) throw updateErr;
+
+    // 3. Reload to reflect changes
+    await loadProjectMaterials(generic.projectId);
+  };
+
   const addApproval = (materialId: string, approvalData: Omit<ProjectMaterialApproval, 'id'>) => {
     const newApproval: ProjectMaterialApproval = {
       ...approvalData,
@@ -504,6 +573,7 @@ export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ ch
       validateOrderCreation,
       getTotalOrderedQuantity,
       getNextExpectedDelivery,
+      breakdownGenericMaterial,
     }}>
       {children}
     </ProjectMaterialsContext.Provider>
