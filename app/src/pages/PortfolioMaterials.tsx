@@ -5,6 +5,7 @@ import { usePortfolioMaterials, PortfolioMaterial } from '@/contexts/PortfolioMa
 import { useStandardSuppliers } from '@/contexts/StandardSuppliersContext';
 import PortfolioFilters, { PortfolioFiltersState } from '@/components/portfolio/PortfolioFilters';
 import PortfolioTable from '@/components/portfolio/PortfolioTable';
+import PortfolioMaterialDrilldown from '@/components/portfolio/PortfolioMaterialDrilldown';
 
 export default function PortfolioMaterials() {
   const { materials, loading, error } = usePortfolioMaterials();
@@ -105,12 +106,14 @@ export default function PortfolioMaterials() {
           />
         )}
 
-        {/* Drill-down sheet kommer i Task 6 */}
-        {selected && (
-          <div className="text-xs text-muted-foreground">
-            (Drill-down for {selected.materialName} kommer i næste task)
-          </div>
-        )}
+        <PortfolioMaterialDrilldown
+          material={selected}
+          onClose={() => setSelected(null)}
+          onClickBulkOrder={(mat, projs) => {
+            // BulkOrderDialog kommer i Task 7 — for nu, log til console
+            console.log('Bulk order clicked for', mat, projs);
+          }}
+        />
       </div>
     </Layout>
   );
