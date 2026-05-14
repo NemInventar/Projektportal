@@ -63,6 +63,12 @@ const Sidebar = () => {
       active: isActive('/quotes'),
     },
     {
+      label: 'Portefølje',
+      icon: Layers,
+      path: '/portfolio/materials',
+      active: isActive('/portfolio/materials')
+    },
+    {
       label: 'Firmaer',
       icon: Building2,
       path: '/firmaer',
@@ -147,17 +153,11 @@ const Sidebar = () => {
       path: '/project/budget',
       active: isActive('/project/budget')
     },
-    { 
-      label: 'BOM', 
-      icon: ClipboardList, 
+    {
+      label: 'BOM',
+      icon: ClipboardList,
       path: '/project/bom',
       active: isActive('/project/bom')
-    },
-    {
-      label: 'Portefølje',
-      icon: Layers,
-      path: '/portfolio/materials',
-      active: isActive('/portfolio/materials')
     },
     {
       label: 'Purchase Orders',
