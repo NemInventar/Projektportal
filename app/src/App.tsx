@@ -11,6 +11,7 @@ import { StandardSuppliersProvider } from "@/contexts/StandardSuppliersContext";
 import { StandardMaterialsProvider } from "@/contexts/StandardMaterialsContext";
 import { ProjectMaterialsProvider } from "@/contexts/ProjectMaterialsContext";
 import { PurchaseOrdersProvider } from "@/contexts/PurchaseOrdersContext";
+import { PortfolioMaterialsProvider } from "@/contexts/PortfolioMaterialsContext";
 import { TransportProvider } from "@/contexts/TransportContext";
 import { ProjectProductsProvider } from "@/contexts/ProjectProductsContext";
 import { CompaniesProvider } from "@/contexts/CompaniesContext";
@@ -67,6 +68,7 @@ function AppProviders({ children }: { children: React.ReactNode }) {
         <StandardMaterialsProvider>
           <ProjectMaterialsProvider>
             <PurchaseOrdersProvider>
+              <PortfolioMaterialsProvider>
               <TransportProvider>
                 <ProjectProductsProvider>
                   <CompaniesProvider>
@@ -86,6 +88,7 @@ function AppProviders({ children }: { children: React.ReactNode }) {
                   </CompaniesProvider>
                 </ProjectProductsProvider>
               </TransportProvider>
+              </PortfolioMaterialsProvider>
             </PurchaseOrdersProvider>
           </ProjectMaterialsProvider>
         </StandardMaterialsProvider>
