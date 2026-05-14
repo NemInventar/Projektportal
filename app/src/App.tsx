@@ -56,6 +56,7 @@ import MaterialDetail from "./pages/MaterialDetail";
 import ProjectMaterials from "./pages/ProjectMaterials";
 import ProjectMaterialsV1 from "./pages/ProjectMaterialsV1";
 import ProjectMaterialDetail from "./pages/ProjectMaterialDetail";
+import PortfolioMaterials from "@/pages/PortfolioMaterials";
 import TestPage from "./pages/TestPage";
 import NotFound from "./pages/NotFound";
 
@@ -134,6 +135,7 @@ const App = () => (
           <Route path="/project/bom" element={<ProtectedRoute><AppProviders><BOM /></AppProviders></ProtectedRoute>} />
           <Route path="/project/purchase-orders" element={<ProtectedRoute><AppProviders><PurchaseOrders /></AppProviders></ProtectedRoute>} />
           <Route path="/project/purchase-orders/:id" element={<ProtectedRoute><AppProviders><PurchaseOrderDetail /></AppProviders></ProtectedRoute>} />
+          <Route path="/portfolio/materials" element={<ProtectedRoute><AppProviders><PortfolioMaterials /></AppProviders></ProtectedRoute>} />
           <Route path="/project/price-requests" element={<ProtectedRoute><AppProviders><PriceRequests /></AppProviders></ProtectedRoute>} />
           <Route path="/project/price-requests/new" element={<ProtectedRoute><AppProviders><PriceRequestForm /></AppProviders></ProtectedRoute>} />
           <Route path="/project/price-requests/:id" element={<ProtectedRoute><AppProviders><PriceRequestDetail /></AppProviders></ProtectedRoute>} />

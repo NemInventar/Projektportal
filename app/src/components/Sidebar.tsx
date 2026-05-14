@@ -22,7 +22,8 @@ import {
   DollarSign,
   Inbox,
   Building2,
-  Contact
+  Contact,
+  Layers
 } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -152,9 +153,15 @@ const Sidebar = () => {
       path: '/project/bom',
       active: isActive('/project/bom')
     },
-    { 
-      label: 'Purchase Orders', 
-      icon: ShoppingCart, 
+    {
+      label: 'Portefølje',
+      icon: Layers,
+      path: '/portfolio/materials',
+      active: isActive('/portfolio/materials')
+    },
+    {
+      label: 'Purchase Orders',
+      icon: ShoppingCart,
       path: '/project/purchase-orders',
       active: isActive('/project/purchase-orders')
     },
