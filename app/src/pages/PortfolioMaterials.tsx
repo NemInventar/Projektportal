@@ -1,9 +1,63 @@
+import { useMemo, useState } from 'react';
 import Layout from '@/components/Layout';
 import { Card, CardContent } from '@/components/ui/card';
-import { usePortfolioMaterials } from '@/contexts/PortfolioMaterialsContext';
+import { usePortfolioMaterials, PortfolioMaterial } from '@/contexts/PortfolioMaterialsContext';
+import { useStandardSuppliers } from '@/contexts/StandardSuppliersContext';
+import PortfolioFilters, { PortfolioFiltersState } from '@/components/portfolio/PortfolioFilters';
+import PortfolioTable from '@/components/portfolio/PortfolioTable';
 
 export default function PortfolioMaterials() {
   const { materials, loading, error } = usePortfolioMaterials();
+  const { suppliers: standardSuppliers } = useStandardSuppliers();
+
+  const [filters, setFilters] = useState<PortfolioFiltersState>({
+    search: '',
+    supplierId: '',
+    category: '',
+    leadTimeBand: 'all',
+    showFullyOrdered: false,
+  });
+
+  const supplierMap = useMemo(() => {
+    const m = new Map<string, string>();
+    standardSuppliers.forEach(s => m.set(s.id, s.name));
+    return m;
+  }, [standardSuppliers]);
+
+  const supplierOptions = useMemo(() => {
+    const ids = new Set<string>();
+    materials.forEach(m => { if (m.primarySupplierId) ids.add(m.primarySupplierId); });
+    return Array.from(ids).map(id => ({ id, name: supplierMap.get(id) ?? '(ukendt)' })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [materials, supplierMap]);
+
+  const categoryOptions = useMemo(() => {
+    const s = new Set<string>();
+    materials.forEach(m => { if (m.category) s.add(m.category); });
+    return Array.from(s).sort();
+  }, [materials]);
+
+  const filtered = useMemo(() => {
+    const search = filters.search.trim().toLowerCase();
+    return materials.filter(m => {
+      if (search) {
+        const supplierName = m.primarySupplierId ? (supplierMap.get(m.primarySupplierId) ?? '').toLowerCase() : '';
+        const hay = [m.materialName, m.category ?? '', supplierName].join(' ').toLowerCase();
+        if (!hay.includes(search)) return false;
+      }
+      if (filters.supplierId && m.primarySupplierId !== filters.supplierId) return false;
+      if (filters.category && m.category !== filters.category) return false;
+      if (filters.leadTimeBand !== 'all') {
+        const lt = m.leadTimeDays;
+        if (filters.leadTimeBand === 'unknown' && lt != null) return false;
+        if (filters.leadTimeBand === 'lt7' && (lt == null || lt >= 7)) return false;
+        if (filters.leadTimeBand === '7-14' && (lt == null || lt < 7 || lt > 14)) return false;
+        if (filters.leadTimeBand === 'gt14' && (lt == null || lt <= 14)) return false;
+      }
+      return true;
+    });
+  }, [materials, filters, supplierMap]);
+
+  const [selected, setSelected] = useState<PortfolioMaterial | null>(null);
 
   return (
     <Layout>
@@ -15,9 +69,22 @@ export default function PortfolioMaterials() {
               ? 'Indlæser…'
               : error
                 ? `Fejl: ${error}`
-                : `${materials.filter(m => m.qtyMissing > 0).length} materialer mangler bestilling`}
+                : `${filtered.filter(m => m.qtyMissing > 0).length} materialer mangler bestilling`}
           </p>
         </div>
+
+        {!loading && !error && (
+          <Card>
+            <CardContent className="pt-4">
+              <PortfolioFilters
+                state={filters}
+                onChange={setFilters}
+                suppliers={supplierOptions}
+                categories={categoryOptions}
+              />
+            </CardContent>
+          </Card>
+        )}
 
         {!loading && !error && materials.length === 0 && (
           <Card>
@@ -32,14 +99,17 @@ export default function PortfolioMaterials() {
         )}
 
         {!loading && !error && materials.length > 0 && (
-          <Card>
-            <CardContent className="p-4">
-              <p className="text-sm text-muted-foreground">
-                {/* Placeholder — tabel kommer i Task 5 */}
-                {materials.length} materialer fundet. Tabel implementeres næste step.
-              </p>
-            </CardContent>
-          </Card>
+          <PortfolioTable
+            materials={filtered}
+            onRowClick={m => setSelected(m)}
+          />
+        )}
+
+        {/* Drill-down sheet kommer i Task 6 */}
+        {selected && (
+          <div className="text-xs text-muted-foreground">
+            (Drill-down for {selected.materialName} kommer i næste task)
+          </div>
         )}
       </div>
     </Layout>
