@@ -64,7 +64,6 @@ export interface BreakdownChild {
   name: string;
   category: string;
   unit: string;
-  qty?: number;
   supplierId?: string;
   standardMaterialId?: string;
   notes?: string;
@@ -452,7 +451,13 @@ export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ ch
       .from('project_materials_2026_01_15_06_45')
       .update({ replaced_at: replacedAt })
       .eq('id', genericId);
-    if (updateErr) throw updateErr;
+    if (updateErr) {
+      console.error('[breakdown] Children inserted but parent update failed', { genericId, error: updateErr });
+      throw new Error(
+        `Børn er oprettet, men det generiske materiale kunne ikke markeres som brudt op. ` +
+        `Genstart breakdown for at fuldføre, eller kontakt support. Fejl: ${updateErr.message}`
+      );
+    }
 
     // 3. Reload to reflect changes
     await loadProjectMaterials(generic.projectId);

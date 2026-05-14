@@ -176,7 +176,8 @@ const ProjectMaterials = () => {
               unitPrice: latestPrice?.price || undefined,
               currency: latestPrice?.currency || 'DKK',
               priceStatus: latestPrice ? 'confirmed' as const : 'not_confirmed' as const,
-              priceNote: latestPrice ? `Importeret fra standard materiale (${new Date(latestPrice.date).toLocaleDateString('da-DK')})` : undefined
+              priceNote: latestPrice ? `Importeret fra standard materiale (${new Date(latestPrice.date).toLocaleDateString('da-DK')})` : undefined,
+              isGeneric: false
             };
             
             console.log('Material data to import:', materialData);
