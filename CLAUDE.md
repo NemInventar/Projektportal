@@ -20,3 +20,9 @@ NÅR DU SVARER:
 - Giv én klar løsning.
 - Skriv implementerings-prompt hvis relevant.
 - Interfacet er på dansk – brug danske labels.
+
+---
+
+## Edge functions
+
+- **generate-quote-pdf** — Headless tilbuds-PDF til chat-skills. Returnerer signed URL (gyldig 1 time) fra `quote-pdfs` storage-bucket. Formater: `pdf` / `bilag` / `pdf+bilag`. Kopierer `QuotePDF.tsx`, `QuoteAppendixPDF.tsx`, `quotePricing.ts`, `COMPANY_INFO` fra GUI — hold synkroniseret hvis GUI-design ændres (cross-reference-kommentarer i top af hver fil). Spec: [docs/superpowers/specs/2026-05-13-generate-quote-pdf-edge-function-design.md](docs/superpowers/specs/2026-05-13-generate-quote-pdf-edge-function-design.md). Source: [app/supabase/edge_function/generate-quote-pdf/](app/supabase/edge_function/generate-quote-pdf/). Deploy: bundlet single-file via Supabase MCP (CLI ikke nødvendig).
