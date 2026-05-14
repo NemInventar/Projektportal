@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react';
 import Layout from '@/components/Layout';
 import { Card, CardContent } from '@/components/ui/card';
-import { usePortfolioMaterials, PortfolioMaterial } from '@/contexts/PortfolioMaterialsContext';
+import { usePortfolioMaterials, PortfolioMaterial, PortfolioMaterialProject } from '@/contexts/PortfolioMaterialsContext';
 import { useStandardSuppliers } from '@/contexts/StandardSuppliersContext';
 import PortfolioFilters, { PortfolioFiltersState } from '@/components/portfolio/PortfolioFilters';
 import PortfolioTable from '@/components/portfolio/PortfolioTable';
 import PortfolioMaterialDrilldown from '@/components/portfolio/PortfolioMaterialDrilldown';
+import BulkOrderDialog from '@/components/portfolio/BulkOrderDialog';
 
 export default function PortfolioMaterials() {
   const { materials, loading, error } = usePortfolioMaterials();
@@ -59,6 +60,7 @@ export default function PortfolioMaterials() {
   }, [materials, filters, supplierMap]);
 
   const [selected, setSelected] = useState<PortfolioMaterial | null>(null);
+  const [bulkOrderState, setBulkOrderState] = useState<{ material: PortfolioMaterial; projects: PortfolioMaterialProject[] } | null>(null);
 
   return (
     <Layout>
@@ -110,9 +112,16 @@ export default function PortfolioMaterials() {
           material={selected}
           onClose={() => setSelected(null)}
           onClickBulkOrder={(mat, projs) => {
-            // BulkOrderDialog kommer i Task 7 — for nu, log til console
-            console.log('Bulk order clicked for', mat, projs);
+            setBulkOrderState({ material: mat, projects: projs });
+            setSelected(null);
           }}
+        />
+
+        <BulkOrderDialog
+          open={!!bulkOrderState}
+          material={bulkOrderState?.material ?? null}
+          projects={bulkOrderState?.projects ?? []}
+          onClose={() => setBulkOrderState(null)}
         />
       </div>
     </Layout>
