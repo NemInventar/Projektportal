@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Switch } from '@/components/ui/switch';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -33,21 +34,24 @@ import {
   DialogDescription,
   DialogTrigger
 } from '@/components/ui/dialog';
-import { 
-  Plus, 
-  Download, 
-  Search, 
+import {
+  Plus,
+  Download,
+  Search,
   Filter,
   Edit,
   FileText,
   Calendar,
   Trash2,
-  Upload
+  Upload,
+  Scissors
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useProject } from '@/contexts/ProjectContext';
 import { useStandardMaterials } from '@/contexts/StandardMaterialsContext';
 import { useStandardSuppliers } from '@/contexts/StandardSuppliersContext';
+import BreakdownDialog from '@/components/materials/BreakdownDialog';
+import type { ProjectMaterial as ContextProjectMaterial } from '@/contexts/ProjectMaterialsContext';
 
 interface ProjectMaterial {
   id: string;
@@ -70,6 +74,8 @@ interface ProjectMaterial {
   transportEstimatedCost?: number;
   transportCurrency: string;
   transportNote?: string;
+  parentProjectMaterialId?: string;
+  replacedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -91,13 +97,25 @@ const ProjectMaterialsV1: React.FC = () => {
   const [supplierFilter, setSupplierFilter] = useState<string>('all');
   const [priceStatusFilter, setPriceStatusFilter] = useState<string>('all');
   const [missingPriceFilter, setMissingPriceFilter] = useState(false);
-  
+  const [showReplaced, setShowReplaced] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('show_replaced_materials') === 'true';
+    } catch { return false; }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('show_replaced_materials', showReplaced ? 'true' : 'false');
+    } catch { /* ignore */ }
+  }, [showReplaced]);
+
   // Modals
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showBulkUploadModal, setShowBulkUploadModal] = useState(false);
   const [editingMaterial, setEditingMaterial] = useState<ProjectMaterial | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [breakdownTarget, setBreakdownTarget] = useState<ProjectMaterial | null>(null);
   
   // Import modal state
   const [importSearchTerm, setImportSearchTerm] = useState('');
@@ -210,6 +228,8 @@ const ProjectMaterialsV1: React.FC = () => {
           transportEstimatedCost: m.transport_estimated_cost ? parseFloat(m.transport_estimated_cost) : undefined,
           transportCurrency: m.transport_currency || 'DKK',
           transportNote: m.transport_note,
+          parentProjectMaterialId: m.parent_project_material_id || undefined,
+          replacedAt: m.replaced_at ? new Date(m.replaced_at) : undefined,
           createdAt: new Date(m.created_at),
           updatedAt: new Date(m.updated_at)
         }));
@@ -241,8 +261,9 @@ const ProjectMaterialsV1: React.FC = () => {
     const matchesSupplier = supplierFilter === 'all' || material.supplierId === supplierFilter;
     const matchesPriceStatus = priceStatusFilter === 'all' || material.priceStatus === priceStatusFilter;
     const matchesMissingPrice = !missingPriceFilter || material.unitPrice === undefined;
+    const matchesReplacedFilter = showReplaced || !material.replacedAt;
 
-    return matchesSearch && matchesCategory && matchesGeneric && matchesSupplier && matchesPriceStatus && matchesMissingPrice;
+    return matchesSearch && matchesCategory && matchesGeneric && matchesSupplier && matchesPriceStatus && matchesMissingPrice && matchesReplacedFilter;
   });
 
   const getSupplierName = (supplierId?: string) => {
@@ -906,6 +927,17 @@ const ProjectMaterialsV1: React.FC = () => {
                   />
                   <Label htmlFor="missing-price" className="text-sm">Mangler pris</Label>
                 </div>
+
+                <div className="flex items-center gap-2">
+                  <Switch
+                    id="show-replaced"
+                    checked={showReplaced}
+                    onCheckedChange={setShowReplaced}
+                  />
+                  <Label htmlFor="show-replaced" className="text-sm cursor-pointer">
+                    Vis brudt op
+                  </Label>
+                </div>
               </div>
             </div>
           </CardContent>
@@ -943,9 +975,28 @@ const ProjectMaterialsV1: React.FC = () => {
                       <TableCell>{material.category}</TableCell>
                       <TableCell>{material.unit}</TableCell>
                       <TableCell>
-                        <Badge variant={material.isGeneric ? "default" : "secondary"}>
-                          {material.isGeneric ? "Ja" : "Nej"}
-                        </Badge>
+                        <div className="flex items-center gap-2">
+                          <Badge variant={material.isGeneric ? "default" : "secondary"}>
+                            {material.isGeneric ? "Ja" : "Nej"}
+                          </Badge>
+                          {material.replacedAt && (
+                            <Badge variant="secondary" className="text-xs">Brudt op</Badge>
+                          )}
+                          {material.isGeneric && !material.replacedAt && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={(e: React.MouseEvent) => {
+                                e.stopPropagation();
+                                setBreakdownTarget(material);
+                              }}
+                              title="Bryd op i konkrete materialer"
+                              className="h-7 w-7"
+                            >
+                              <Scissors className="h-4 w-4" />
+                            </Button>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>{getSupplierName(material.supplierId)}</TableCell>
                       <TableCell>
@@ -1541,6 +1592,15 @@ const ProjectMaterialsV1: React.FC = () => {
             </div>
           </DialogContent>
         </Dialog>
+
+        <BreakdownDialog
+          open={!!breakdownTarget}
+          material={breakdownTarget as unknown as ContextProjectMaterial | null}
+          onClose={() => {
+            setBreakdownTarget(null);
+            loadMaterials();
+          }}
+        />
       </div>
     </Layout>
   );
