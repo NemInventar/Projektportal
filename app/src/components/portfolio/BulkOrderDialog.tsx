@@ -109,15 +109,17 @@ export default function BulkOrderDialog({ open, material, projects, onClose }: P
     setSubmitting(true);
     const bulkGroupId = generateUuid();
     const today = new Date().toISOString().split('T')[0];
+    const succeeded: Array<{ projectName: string; poId: string }> = [];
 
     try {
       for (const row of selectedRows) {
+        // 1. Insert PO as draft first — only flip to 'sent' after line insert succeeds
         const { data: po, error: poErr } = await supabase
           .from('purchase_orders_2026_01_15_06_45')
           .insert({
             project_id: row.projectId,
             supplier_id: supplierId,
-            status: 'sent',
+            status: 'draft',
             order_date: today,
             expected_delivery_date: expectedDelivery || null,
             notes: notes || null,
@@ -135,6 +137,7 @@ export default function BulkOrderDialog({ open, material, projects, onClose }: P
 
         const needsOverride = !isFullyApproved(row.projectMaterialId);
 
+        // 2. Insert PO line
         const { error: lineErr } = await supabase
           .from('purchase_order_lines_2026_01_15_06_45')
           .insert({
@@ -149,32 +152,57 @@ export default function BulkOrderDialog({ open, material, projects, onClose }: P
             status: 'ordered',
             approval_override: needsOverride,
             approval_override_reason: needsOverride ? (row.approvalOverrideReason ?? null) : null,
-            approval_override_by: needsOverride ? 'current_user' : null,
+            approval_override_by: needsOverride ? 'current_user' : null, // TODO: replace with actual user once auth context is wired
             approval_override_at: needsOverride ? new Date().toISOString() : null,
           });
-        if (lineErr) throw lineErr;
+        if (lineErr) {
+          // Line failed — keep PO as draft so it's not a phantom sent order
+          throw lineErr;
+        }
+
+        // 3. Flip PO status to 'sent' now that we know the line is in
+        const { error: statusErr } = await supabase
+          .from('purchase_orders_2026_01_15_06_45')
+          .update({ status: 'sent' })
+          .eq('id', po.id);
+        if (statusErr) {
+          // Line is in, status update failed. PO is functionally valid but stuck as 'draft'.
+          // Log and continue — user can fix status manually.
+          console.error('[bulk-order] Line inserted, PO status update failed', { poId: po.id, error: statusErr });
+        }
+
+        succeeded.push({ projectName: row.projectName, poId: po.id });
       }
 
       toast({
         title: 'Bestilling oprettet',
-        description: `${selectedRows.length} PO'er oprettet og grupperet.`,
+        description: `${succeeded.length} PO'er oprettet og grupperet.`,
       });
 
       await refreshPortfolio();
       onClose();
     } catch (err: any) {
+      const failedCount = selectedRows.length - succeeded.length;
+      const succeededProjects = succeeded.map(s => s.projectName).join(', ');
+      const description = succeeded.length > 0
+        ? `${succeeded.length} oprettet (${succeededProjects}), ${failedCount} fejlede. Bulk-gruppe ID: ${bulkGroupId}. Fejl: ${err.message ?? 'ukendt'}`
+        : `Ingen PO'er oprettet. Fejl: ${err.message ?? 'ukendt'}`;
       toast({
-        title: 'Fejl ved oprettelse',
-        description: err.message ?? 'Ukendt fejl',
+        title: 'Delvis fejl ved oprettelse',
+        description,
         variant: 'destructive',
       });
+      // Refresh in case some succeeded
+      if (succeeded.length > 0) {
+        await refreshPortfolio();
+      }
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <Dialog open={open} onOpenChange={o => !o && onClose()}>
+    <Dialog open={open} onOpenChange={o => !o && !submitting && onClose()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Bestil {material.materialName}</DialogTitle>
@@ -314,7 +342,7 @@ export default function BulkOrderDialog({ open, material, projects, onClose }: P
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Annullér</Button>
+          <Button variant="outline" onClick={onClose} disabled={submitting}>Annullér</Button>
           <Button onClick={handleSubmit} disabled={!canSubmit || submitting}>
             {submitting ? 'Opretter…' : `Opret ${selectedRows.length} PO'er`}
           </Button>
