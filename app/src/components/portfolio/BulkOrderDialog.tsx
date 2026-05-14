@@ -44,7 +44,7 @@ function generateUuid(): string {
 
 export default function BulkOrderDialog({ open, material, projects, onClose }: Props) {
   const { suppliers: standardSuppliers } = useStandardSuppliers();
-  const { projectMaterials, isFullyApproved } = useProjectMaterials();
+  const { projectMaterials } = useProjectMaterials();
   const { refresh: refreshPortfolio } = usePortfolioMaterials();
   const { toast } = useToast();
 
@@ -55,27 +55,66 @@ export default function BulkOrderDialog({ open, material, projects, onClose }: P
   const [notes, setNotes] = useState<string>('');
   const [rows, setRows] = useState<RowState[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [approvedSet, setApprovedSet] = useState<Set<string>>(new Set());
+  const [orderedByPmId, setOrderedByPmId] = useState<Map<string, number>>(new Map());
 
   useEffect(() => {
-    if (!material) return;
+    if (!material || projects.length === 0) {
+      setRows([]);
+      setApprovedSet(new Set());
+      setOrderedByPmId(new Map());
+      return;
+    }
+    let cancelled = false;
     setSupplierId(material.primarySupplierId ?? '');
-    setRows(projects.map(p => {
-      const ordered = 0;
-      const needed = Math.max(p.qty - ordered, 0);
-      return {
-        projectMaterialId: p.projectMaterialId,
-        projectId: p.projectId,
-        projectName: p.projectName,
-        demandClass: p.demandClass,
-        needed,
-        selected: needed > 0,
-        qty: needed,
-      };
-    }));
     setGlobalPrice('');
     setUsePriceForAll(true);
     setExpectedDelivery('');
     setNotes('');
+
+    (async () => {
+      const pmIds = projects.map(p => p.projectMaterialId);
+
+      // 1. Fetch approval status for all involved project materials (cross-project safe)
+      const { data: approved } = await supabase
+        .from('v_approved_project_materials')
+        .select('project_material_id')
+        .in('project_material_id', pmIds);
+      const approvedIds = new Set<string>((approved ?? []).map((r: any) => r.project_material_id));
+
+      // 2. Fetch already-ordered qty per project_material_id (active PO lines only)
+      const { data: orderedRows } = await supabase
+        .from('purchase_order_lines_2026_01_15_06_45')
+        .select('project_material_id, ordered_qty, status')
+        .in('project_material_id', pmIds)
+        .neq('status', 'cancelled');
+      const orderedMap = new Map<string, number>();
+      (orderedRows ?? []).forEach((r: any) => {
+        const id = r.project_material_id;
+        const qty = Number(r.ordered_qty) || 0;
+        orderedMap.set(id, (orderedMap.get(id) ?? 0) + qty);
+      });
+
+      if (cancelled) return;
+
+      setApprovedSet(approvedIds);
+      setOrderedByPmId(orderedMap);
+      setRows(projects.map(p => {
+        const ordered = orderedMap.get(p.projectMaterialId) ?? 0;
+        const needed = Math.max(p.qty - ordered, 0);
+        return {
+          projectMaterialId: p.projectMaterialId,
+          projectId: p.projectId,
+          projectName: p.projectName,
+          demandClass: p.demandClass,
+          needed,
+          selected: needed > 0,
+          qty: needed,
+        };
+      }));
+    })();
+
+    return () => { cancelled = true; };
   }, [material, projects]);
 
   if (!material) return null;
@@ -88,7 +127,7 @@ export default function BulkOrderDialog({ open, material, projects, onClose }: P
     : selectedRows.reduce((sum, r) => sum + ((r.unitPrice ?? 0) * (r.qty || 0)), 0);
 
   const hasTentative = selectedRows.some(r => r.demandClass === 'tentative');
-  const notApprovedRows = selectedRows.filter(r => !isFullyApproved(r.projectMaterialId));
+  const notApprovedRows = selectedRows.filter(r => !approvedSet.has(r.projectMaterialId));
   const hasOverrideNeeds = notApprovedRows.length > 0;
 
   const selectedProjectMaterials = selectedRows
@@ -135,7 +174,7 @@ export default function BulkOrderDialog({ open, material, projects, onClose }: P
           ? (Number.isFinite(numericPrice) ? numericPrice : null)
           : (row.unitPrice ?? null);
 
-        const needsOverride = !isFullyApproved(row.projectMaterialId);
+        const needsOverride = !approvedSet.has(row.projectMaterialId);
 
         // 2. Insert PO line
         const { error: lineErr } = await supabase
@@ -251,7 +290,7 @@ export default function BulkOrderDialog({ open, material, projects, onClose }: P
             <Label className="mb-2 block">Fordeling pr. projekt</Label>
             <div className="space-y-2">
               {rows.map((row, idx) => {
-                const needsOverride = row.selected && !isFullyApproved(row.projectMaterialId);
+                const needsOverride = row.selected && !approvedSet.has(row.projectMaterialId);
                 return (
                   <div key={row.projectMaterialId} className="space-y-1 border rounded p-2">
                     <div className="flex items-center gap-2">

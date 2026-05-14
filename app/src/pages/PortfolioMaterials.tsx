@@ -17,7 +17,6 @@ export default function PortfolioMaterials() {
     supplierId: '',
     category: '',
     leadTimeBand: 'all',
-    showFullyOrdered: false,
   });
 
   const supplierMap = useMemo(() => {

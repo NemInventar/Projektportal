@@ -1,7 +1,5 @@
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Switch } from '@/components/ui/switch';
-import { Label } from '@/components/ui/label';
 import { Search } from 'lucide-react';
 
 export interface PortfolioFiltersState {
@@ -9,7 +7,6 @@ export interface PortfolioFiltersState {
   supplierId: string;
   category: string;
   leadTimeBand: 'all' | 'lt7' | '7-14' | 'gt14' | 'unknown';
-  showFullyOrdered: boolean;
 }
 
 interface Props {
@@ -61,17 +58,6 @@ export default function PortfolioFilters({ state, onChange, suppliers, categorie
             <SelectItem value="unknown">Ukendt</SelectItem>
           </SelectContent>
         </Select>
-
-        <div className="flex items-center gap-2 ml-auto">
-          <Switch
-            id="show-fully-ordered"
-            checked={state.showFullyOrdered}
-            onCheckedChange={v => update({ showFullyOrdered: v })}
-          />
-          <Label htmlFor="show-fully-ordered" className="text-sm cursor-pointer">
-            Vis fuldt bestilt
-          </Label>
-        </div>
       </div>
     </div>
   );
