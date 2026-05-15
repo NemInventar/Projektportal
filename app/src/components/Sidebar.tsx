@@ -1,6 +1,5 @@
 import React from 'react';
 import { useProject } from '@/contexts/ProjectContext';
-import { useQuoteReview } from '@/features/purchasing';
 import { useLeads } from '@/features/leads';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -13,13 +12,7 @@ import {
   Wrench,
   Users,
   FileText,
-  Calculator,
-  PieChart,
-  ClipboardList,
-  ShoppingCart,
   Settings,
-  Database,
-  DollarSign,
   Inbox,
   Building2,
   Contact,
@@ -29,7 +22,6 @@ import { useNavigate, useLocation } from 'react-router-dom';
 
 const Sidebar = () => {
   const { activeProject } = useProject();
-  const { count: reviewCount } = useQuoteReview();
   const { overdueCount } = useLeads();
   const navigate = useNavigate();
   const location = useLocation();
@@ -57,12 +49,6 @@ const Sidebar = () => {
       active: isActive('/')
     },
     {
-      label: 'Tilbud',
-      icon: FileText,
-      path: '/quotes',
-      active: isActive('/quotes'),
-    },
-    {
       label: 'Portefølje',
       icon: Layers,
       path: '/portfolio/materials',
@@ -86,13 +72,9 @@ const Sidebar = () => {
       path: '/medarbejdere',
       active: isActive('/medarbejdere') || location.pathname.startsWith('/medarbejdere/'),
     },
-    {
-      label: 'Indstillinger',
-      icon: Settings,
-      path: '/indstillinger',
-      active: isActive('/indstillinger'),
-    },
   ];
+
+  // Indstillinger ligger i sidebar-footer (se nederst i return).
 
   const standardMenuItems = [
     { 
@@ -109,22 +91,25 @@ const Sidebar = () => {
     },
   ];
 
+  // Aktive projekt-menu items (færdige features).
+  // Skjulte indtil de er bygget ordentligt: Indkøb, Budgetter, Budget, BOM, Purchase Orders, Prisindhentning, Leverandører.
+  // Routes findes stadig — kan tilgås via direkte URL — og kan re-enables her når de er klar.
   const projectMenuItems = activeProject ? [
-    { 
-      label: 'Overblik', 
-      icon: BarChart3, 
+    {
+      label: 'Overblik',
+      icon: BarChart3,
       path: '/project/overview',
       active: isActive('/project/overview')
     },
-    { 
-      label: 'Materialer', 
-      icon: Wrench, 
+    {
+      label: 'Materialer',
+      icon: Wrench,
       path: '/project/materials',
       active: isActive('/project/materials')
     },
-    { 
-      label: 'Produkter', 
-      icon: Package, 
+    {
+      label: 'Produkter',
+      icon: Package,
       path: '/project/products',
       active: isActive('/project/products')
     },
@@ -133,49 +118,6 @@ const Sidebar = () => {
       icon: FileText,
       path: '/project/quotes',
       active: isActive('/project/quotes')
-    },
-    {
-      label: 'Indkøb',
-      icon: ShoppingCart,
-      path: '/purchasing',
-      active: isActive('/purchasing') || location.pathname.startsWith('/purchasing/'),
-      badge: reviewCount > 0 ? reviewCount : undefined,
-    },
-    { 
-      label: 'Budgetter', 
-      icon: PieChart, 
-      path: '/project/budgets',
-      active: isActive('/project/budgets')
-    },
-    { 
-      label: 'Budget', 
-      icon: Calculator, 
-      path: '/project/budget',
-      active: isActive('/project/budget')
-    },
-    {
-      label: 'BOM',
-      icon: ClipboardList,
-      path: '/project/bom',
-      active: isActive('/project/bom')
-    },
-    {
-      label: 'Purchase Orders',
-      icon: ShoppingCart,
-      path: '/project/purchase-orders',
-      active: isActive('/project/purchase-orders')
-    },
-    { 
-      label: 'Prisindhentning', 
-      icon: DollarSign, 
-      path: '/project/price-requests',
-      active: isActive('/project/price-requests')
-    },
-    { 
-      label: 'Leverandører', 
-      icon: Users, 
-      path: '/project/suppliers',
-      active: isActive('/project/suppliers')
     },
   ] : [];
 
@@ -267,18 +209,9 @@ const Sidebar = () => {
                       item.active && "bg-primary text-primary-foreground"
                     )}
                     onClick={() => navigate(item.path)}
-                    title={item.badge ? `${item.badge} svar venter på gennemsyn` : undefined}
                   >
                     <item.icon className="h-4 w-4" />
                     <span className="flex-1 text-left">{item.label}</span>
-                    {item.badge ? (
-                      <Badge
-                        variant="secondary"
-                        className="h-5 min-w-5 px-1.5 text-xs bg-amber-100 text-amber-800 border-amber-200"
-                      >
-                        {item.badge}
-                      </Badge>
-                    ) : null}
                   </Button>
                 ))}
               </div>
@@ -287,13 +220,16 @@ const Sidebar = () => {
         )}
       </div>
 
-      {/* Footer */}
+      {/* Footer — Indstillinger holdes nederst, væk fra det daglige arbejde */}
       <div className="p-4 border-t border-border">
         <Button
-          variant="ghost"
+          variant={isActive('/indstillinger') ? 'default' : 'ghost'}
           size="sm"
-          className="w-full justify-start gap-3"
-          onClick={() => navigate('/settings')}
+          className={cn(
+            'w-full justify-start gap-3',
+            isActive('/indstillinger') && 'bg-primary text-primary-foreground'
+          )}
+          onClick={() => navigate('/indstillinger')}
         >
           <Settings className="h-4 w-4" />
           Indstillinger

@@ -8,36 +8,30 @@ import { PortfolioMaterial } from '@/contexts/PortfolioMaterialsContext';
 
 interface Props {
   materials: PortfolioMaterial[];
-  onRowClick: (material: PortfolioMaterial) => void;
 }
 
-type GroupKey = 'missing' | 'in_progress' | 'fully_ordered';
+type GroupKey = 'missing' | 'in_progress';
 
 function classifyMaterial(m: PortfolioMaterial): GroupKey {
   if (m.qtyMissing > 0) return 'missing';
-  // qty_missing === 0 — we don't yet distinguish "all received" from "in progress" because v_portfolio_materials
-  // doesn't expose received-status aggregation in V1. Treat all qty_missing=0 as in_progress.
   return 'in_progress';
 }
 
 const groupLabels: Record<GroupKey, string> = {
   missing: 'MANGLER AT BESTILLE',
   in_progress: 'KLAR / I PROCES',
-  fully_ordered: 'FULDT BESTILT',
 };
 
 const groupOpenDefault: Record<GroupKey, boolean> = {
   missing: true,
   in_progress: false,
-  fully_ordered: false,
 };
 
-export default function PortfolioTable({ materials, onRowClick }: Props) {
+export default function PortfolioTable({ materials }: Props) {
   const groups = useMemo(() => {
     const m = new Map<GroupKey, PortfolioMaterial[]>();
     m.set('missing', []);
     m.set('in_progress', []);
-    m.set('fully_ordered', []);
     for (const mat of materials) {
       m.get(classifyMaterial(mat))!.push(mat);
     }
@@ -46,21 +40,20 @@ export default function PortfolioTable({ materials, onRowClick }: Props) {
 
   return (
     <div className="space-y-4">
-      {(['missing', 'in_progress', 'fully_ordered'] as GroupKey[]).map(g => (
+      {(['missing', 'in_progress'] as GroupKey[]).map(g => (
         <GroupCard
           key={g}
           label={groupLabels[g]}
           materials={groups.get(g) ?? []}
           defaultOpen={groupOpenDefault[g]}
-          onRowClick={onRowClick}
         />
       ))}
     </div>
   );
 }
 
-function GroupCard({ label, materials, defaultOpen, onRowClick }: {
-  label: string; materials: PortfolioMaterial[]; defaultOpen: boolean; onRowClick: (m: PortfolioMaterial) => void;
+function GroupCard({ label, materials, defaultOpen }: {
+  label: string; materials: PortfolioMaterial[]; defaultOpen: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
@@ -94,7 +87,7 @@ function GroupCard({ label, materials, defaultOpen, onRowClick }: {
                 </TableHeader>
                 <TableBody>
                   {materials.map(m => (
-                    <TableRow key={m.standardMaterialId} className="cursor-pointer hover:bg-muted/50" onClick={() => onRowClick(m)}>
+                    <TableRow key={m.standardMaterialId} className="hover:bg-muted/30">
                       <TableCell className="font-medium">
                         {m.materialName}
                         {m.category && <Badge variant="secondary" className="ml-2 text-xs">{m.category}</Badge>}

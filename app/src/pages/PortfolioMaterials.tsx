@@ -1,12 +1,10 @@
 import { useMemo, useState } from 'react';
 import Layout from '@/components/Layout';
 import { Card, CardContent } from '@/components/ui/card';
-import { usePortfolioMaterials, PortfolioMaterial, PortfolioMaterialProject } from '@/contexts/PortfolioMaterialsContext';
+import { usePortfolioMaterials } from '@/contexts/PortfolioMaterialsContext';
 import { useStandardSuppliers } from '@/contexts/StandardSuppliersContext';
 import PortfolioFilters, { PortfolioFiltersState } from '@/components/portfolio/PortfolioFilters';
 import PortfolioTable from '@/components/portfolio/PortfolioTable';
-import PortfolioMaterialDrilldown from '@/components/portfolio/PortfolioMaterialDrilldown';
-import BulkOrderDialog from '@/components/portfolio/BulkOrderDialog';
 
 export default function PortfolioMaterials() {
   const { materials, loading, error } = usePortfolioMaterials();
@@ -58,9 +56,6 @@ export default function PortfolioMaterials() {
     });
   }, [materials, filters, supplierMap]);
 
-  const [selected, setSelected] = useState<PortfolioMaterial | null>(null);
-  const [bulkOrderState, setBulkOrderState] = useState<{ material: PortfolioMaterial; projects: PortfolioMaterialProject[] } | null>(null);
-
   return (
     <Layout>
       <div className="p-6 space-y-4">
@@ -93,35 +88,16 @@ export default function PortfolioMaterials() {
             <CardContent className="p-8 text-center text-muted-foreground">
               <p className="text-base font-medium mb-2">Ingen materialer i porteføljen endnu</p>
               <p className="text-sm">
-                Materialer dukker op her når de er fuldt godkendt (production + sustainability)
-                på et projekt der ikke er Tabt, Fravalgt, Arkiv eller Garanti.
+                Materialer dukker op her når et projekt har materialer linket til et standard-materiale
+                og er i en aktiv fase (ikke Tabt, Fravalgt, Arkiv eller Garanti).
               </p>
             </CardContent>
           </Card>
         )}
 
         {!loading && !error && materials.length > 0 && (
-          <PortfolioTable
-            materials={filtered}
-            onRowClick={m => setSelected(m)}
-          />
+          <PortfolioTable materials={filtered} />
         )}
-
-        <PortfolioMaterialDrilldown
-          material={selected}
-          onClose={() => setSelected(null)}
-          onClickBulkOrder={(mat, projs) => {
-            setBulkOrderState({ material: mat, projects: projs });
-            setSelected(null);
-          }}
-        />
-
-        <BulkOrderDialog
-          open={!!bulkOrderState}
-          material={bulkOrderState?.material ?? null}
-          projects={bulkOrderState?.projects ?? []}
-          onClose={() => setBulkOrderState(null)}
-        />
       </div>
     </Layout>
   );

@@ -40,10 +40,6 @@ export interface ProjectMaterial {
   currency: string;
   priceStatus: 'not_confirmed' | 'confirmed';
   priceNote?: string;
-
-  // Breakdown linking (V1: portfolio)
-  parentProjectMaterialId?: string;
-  replacedAt?: Date;
   isGeneric: boolean;
 
   // Approvals
@@ -58,15 +54,6 @@ export interface ProjectMaterial {
   
   createdAt: Date;
   updatedAt: Date;
-}
-
-export interface BreakdownChild {
-  name: string;
-  category: string;
-  unit: string;
-  supplierId?: string;
-  standardMaterialId?: string;
-  notes?: string;
 }
 
 interface ProjectMaterialsContextType {
@@ -88,7 +75,6 @@ interface ProjectMaterialsContextType {
   validateOrderCreation: (materialId: string) => { canOrder: boolean; reason?: string };
   getTotalOrderedQuantity: (materialId: string) => number;
   getNextExpectedDelivery: (materialId: string) => Date | null;
-  breakdownGenericMaterial: (genericId: string, children: BreakdownChild[]) => Promise<void>;
 }
 
 const ProjectMaterialsContext = createContext<ProjectMaterialsContextType | undefined>(undefined);
@@ -231,8 +217,6 @@ export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ ch
           currency: m.currency,
           priceStatus: m.price_status,
           priceNote: m.price_note,
-          parentProjectMaterialId: m.parent_project_material_id ?? undefined,
-          replacedAt: m.replaced_at ? new Date(m.replaced_at) : undefined,
           isGeneric: m.is_generic ?? false,
           approvals: m.project_material_approvals_2026_01_15_06_45?.map((a: any) => ({
             id: a.id,
@@ -409,60 +393,6 @@ export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ ch
     }
   };
 
-  const breakdownGenericMaterial = async (genericId: string, children: BreakdownChild[]) => {
-    if (children.length === 0) {
-      throw new Error('Mindst én konkret variant skal tilføjes');
-    }
-
-    const generic = projectMaterials.find(m => m.id === genericId);
-    if (!generic) {
-      throw new Error('Generisk materiale ikke fundet');
-    }
-    if (!generic.isGeneric) {
-      throw new Error('Materialet er ikke generisk');
-    }
-    if (generic.replacedAt) {
-      throw new Error('Materialet er allerede brudt op');
-    }
-
-    // 1. Insert children
-    const childRows = children.map(c => ({
-      project_id: generic.projectId,
-      parent_project_material_id: genericId,
-      is_generic: false,
-      name: c.name,
-      category: c.category,
-      unit: c.unit,
-      supplier_id: c.supplierId ?? null,
-      standard_material_id: c.standardMaterialId ?? null,
-      currency: 'DKK',
-      price_status: 'estimated',
-      notes: c.notes ?? null,
-    }));
-
-    const { error: insertErr } = await supabase
-      .from('project_materials_2026_01_15_06_45')
-      .insert(childRows);
-    if (insertErr) throw insertErr;
-
-    // 2. Mark generic as replaced
-    const replacedAt = new Date().toISOString();
-    const { error: updateErr } = await supabase
-      .from('project_materials_2026_01_15_06_45')
-      .update({ replaced_at: replacedAt })
-      .eq('id', genericId);
-    if (updateErr) {
-      console.error('[breakdown] Children inserted but parent update failed', { genericId, error: updateErr });
-      throw new Error(
-        `Børn er oprettet, men det generiske materiale kunne ikke markeres som brudt op. ` +
-        `Genstart breakdown for at fuldføre, eller kontakt support. Fejl: ${updateErr.message}`
-      );
-    }
-
-    // 3. Reload to reflect changes
-    await loadProjectMaterials(generic.projectId);
-  };
-
   const addApproval = (materialId: string, approvalData: Omit<ProjectMaterialApproval, 'id'>) => {
     const newApproval: ProjectMaterialApproval = {
       ...approvalData,
@@ -578,7 +508,6 @@ export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ ch
       validateOrderCreation,
       getTotalOrderedQuantity,
       getNextExpectedDelivery,
-      breakdownGenericMaterial,
     }}>
       {children}
     </ProjectMaterialsContext.Provider>
