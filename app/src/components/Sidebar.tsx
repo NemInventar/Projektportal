@@ -12,6 +12,7 @@ import {
   Wrench,
   Users,
   FileText,
+  ClipboardList,
   Settings,
   Inbox,
   Building2,
@@ -118,6 +119,12 @@ const Sidebar = () => {
       icon: FileText,
       path: '/project/quotes',
       active: isActive('/project/quotes')
+    },
+    {
+      label: 'BOM',
+      icon: ClipboardList,
+      path: '/project/bom',
+      active: isActive('/project/bom')
     },
   ] : [];
 
