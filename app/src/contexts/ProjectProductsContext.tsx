@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { 
   ProjectProduct, 
@@ -77,11 +77,16 @@ export const ProjectProductsProvider: React.FC<{ children: ReactNode }> = ({ chi
   const { projectMaterials } = useProjectMaterials();
   const { getProjectMaterialTransports } = useTransport();
 
+  // Monotonically increasing token — guards against a stale load (from a
+  // previously-active project) resolving after a newer one and overwriting state.
+  const requestTokenRef = useRef(0);
+
   // Load data when active project changes
   useEffect(() => {
     if (activeProject) {
-      loadProductsData();
+      loadProductsData(activeProject.id);
     } else {
+      requestTokenRef.current++; // invalidate any in-flight load
       setProducts([]);
       setMaterialLines([]);
       setLaborLines([]);
@@ -91,23 +96,27 @@ export const ProjectProductsProvider: React.FC<{ children: ReactNode }> = ({ chi
     }
   }, [activeProject]);
 
-  const loadProductsData = async () => {
-    if (!activeProject) return;
-    
+  const loadProductsData = async (projectId: string) => {
+    const token = ++requestTokenRef.current;
+    const isStale = () => token !== requestTokenRef.current;
+
     try {
       setLoading(true);
-      
+
       // Load products
       const { data: productsData, error: productsError } = await supabase
         .from('project_products_2026_01_15_12_49')
         .select('*')
-        .eq('project_id', activeProject.id)
+        .eq('project_id', projectId)
         .order('created_at', { ascending: false });
 
       if (productsError) {
         console.error('Error loading products:', productsError);
         return;
       }
+
+      // A newer project became active while we were fetching — drop this result.
+      if (isStale()) return;
 
       const formattedProducts = productsData.map(p => ({
         id: p.id,
@@ -124,28 +133,37 @@ export const ProjectProductsProvider: React.FC<{ children: ReactNode }> = ({ chi
       }));
       setProducts(formattedProducts);
 
+      // Scope all line loads to THIS project's products only.
+      const productIds = formattedProducts.map(p => p.id);
+
       // Load all related lines
       await Promise.all([
-        loadMaterialLines(),
-        loadLaborLines(),
-        loadTransportLines(),
-        loadOtherCostLines()
+        loadMaterialLines(productIds, isStale),
+        loadLaborLines(productIds, isStale),
+        loadTransportLines(productIds, isStale),
+        loadOtherCostLines(productIds, isStale)
       ]);
-      
+
     } catch (error) {
       console.error('Error loading products data:', error);
     } finally {
-      setLoading(false);
+      if (!isStale()) setLoading(false);
     }
   };
 
-  const loadMaterialLines = async () => {
+  const loadMaterialLines = async (productIds: string[], isStale: () => boolean) => {
+    if (productIds.length === 0) {
+      if (!isStale()) setMaterialLines([]);
+      return;
+    }
+
     const { data, error } = await supabase
       .from('project_product_material_lines_2026_01_15_12_49')
       .select('*')
+      .in('project_product_id', productIds)
       .order('sort_order', { ascending: true });
 
-    if (!error && data) {
+    if (!error && data && !isStale()) {
       const formatted = data.map(l => ({
         id: l.id,
         projectProductId: l.project_product_id,
@@ -170,13 +188,19 @@ export const ProjectProductsProvider: React.FC<{ children: ReactNode }> = ({ chi
     }
   };
 
-  const loadLaborLines = async () => {
+  const loadLaborLines = async (productIds: string[], isStale: () => boolean) => {
+    if (productIds.length === 0) {
+      if (!isStale()) setLaborLines([]);
+      return;
+    }
+
     const { data, error } = await supabase
       .from('project_product_labor_lines_2026_01_15_12_49')
       .select('*')
+      .in('project_product_id', productIds)
       .order('sort_order', { ascending: true });
 
-    if (!error && data) {
+    if (!error && data && !isStale()) {
       const formatted = data.map(l => ({
         id: l.id,
         projectProductId: l.project_product_id,
@@ -194,13 +218,19 @@ export const ProjectProductsProvider: React.FC<{ children: ReactNode }> = ({ chi
     }
   };
 
-  const loadTransportLines = async () => {
+  const loadTransportLines = async (productIds: string[], isStale: () => boolean) => {
+    if (productIds.length === 0) {
+      if (!isStale()) setTransportLines([]);
+      return;
+    }
+
     const { data, error } = await supabase
       .from('project_product_transport_lines_2026_01_15_12_49')
       .select('*')
+      .in('project_product_id', productIds)
       .order('sort_order', { ascending: true });
 
-    if (!error && data) {
+    if (!error && data && !isStale()) {
       const formatted = data.map(l => ({
         id: l.id,
         projectProductId: l.project_product_id,
@@ -217,13 +247,19 @@ export const ProjectProductsProvider: React.FC<{ children: ReactNode }> = ({ chi
     }
   };
 
-  const loadOtherCostLines = async () => {
+  const loadOtherCostLines = async (productIds: string[], isStale: () => boolean) => {
+    if (productIds.length === 0) {
+      if (!isStale()) setOtherCostLines([]);
+      return;
+    }
+
     const { data, error } = await supabase
       .from('project_product_other_cost_lines_2026_01_15_12_49')
       .select('*')
+      .in('project_product_id', productIds)
       .order('sort_order', { ascending: true });
 
-    if (!error && data) {
+    if (!error && data && !isStale()) {
       const formatted = data.map(l => ({
         id: l.id,
         projectProductId: l.project_product_id,
