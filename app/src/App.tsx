@@ -34,6 +34,7 @@ import Materials from "./pages/Materials";
 import Suppliers from "./pages/Suppliers";
 import Quotes from "./pages/Quotes";
 import ProjectQuotes from "./pages/ProjectQuotes";
+import ProjectProduction from "./pages/ProjectProduction";
 import AllQuotes from "./pages/AllQuotes";
 import ProjectQuoteDetail from "./pages/ProjectQuoteDetail";
 import ProjectBudgets from "./pages/ProjectBudgets";
@@ -129,6 +130,7 @@ const App = () => (
           <Route path="/project/suppliers" element={<ProtectedRoute><AppProviders><Suppliers /></AppProviders></ProtectedRoute>} />
           <Route path="/project/quotes" element={<ProtectedRoute><AppProviders><ProjectQuotes /></AppProviders></ProtectedRoute>} />
           <Route path="/project/quotes/:id" element={<ProtectedRoute><AppProviders><ProjectQuoteDetail /></AppProviders></ProtectedRoute>} />
+          <Route path="/project/production" element={<ProtectedRoute><AppProviders><ProjectProduction /></AppProviders></ProtectedRoute>} />
           <Route path="/project/budgets" element={<ProtectedRoute><AppProviders><ProjectBudgets /></AppProviders></ProtectedRoute>} />
           <Route path="/project/budgets/:id" element={<ProtectedRoute><AppProviders><ProjectBudgetDetail /></AppProviders></ProtectedRoute>} />
           <Route path="/project/budget" element={<ProtectedRoute><AppProviders><Budget /></AppProviders></ProtectedRoute>} />

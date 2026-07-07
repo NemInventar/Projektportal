@@ -182,12 +182,27 @@ function formatDk(iso: string | null | undefined): string {
   return new Intl.DateTimeFormat('da-DK').format(new Date(iso));
 }
 
+// @react-pdf dekoder billeder i fuld opløsning — flere full-res renders (~2,3 MB/stk)
+// sprænger edge-funktionens compute (WORKER_RESOURCE_LIMIT). Nedskalér derfor Supabase-
+// storage-billeder via image-transform-endpointet før embed. Eksterne/allerede
+// transformerede URLs røres ikke.
+function toDownscaledUrl(url: string | null): string | null {
+  if (!url) return null;
+  if (url.includes('/storage/v1/render/image/')) return url;
+  const transformed = url.replace('/storage/v1/object/public/', '/storage/v1/render/image/public/');
+  if (transformed === url) return url;
+  return `${transformed}${transformed.includes('?') ? '&' : '?'}width=700&quality=70`;
+}
+
 function lineEffectiveImageUrl(line: LineRow): string | null {
-  if (line.active_image_source === 'custom') return line.custom_image_url ?? null;
-  if (line.active_image_source === 'render') return line.render_image_url ?? null;
-  if (line.active_image_source === 'none') return null;
-  // Fallback when active_image_source is null/unknown: prefer custom > render
-  return line.custom_image_url || line.render_image_url || null;
+  const raw = (() => {
+    if (line.active_image_source === 'custom') return line.custom_image_url ?? null;
+    if (line.active_image_source === 'render') return line.render_image_url ?? null;
+    if (line.active_image_source === 'none') return null;
+    // Fallback when active_image_source is null/unknown: prefer custom > render
+    return line.custom_image_url || line.render_image_url || null;
+  })();
+  return toDownscaledUrl(raw);
 }
 
 async function renderQuotePdf(loaded: LoadedQuoteData): Promise<Uint8Array> {

@@ -15,6 +15,9 @@ const PALETTE = {
 
 const MARGIN = 62; // 22mm
 
+// Hardcoded system-wide disclaimer på alle bilag (kunde-facing). Joachim 2026-06-16.
+const RENDER_DISCLAIMER = 'Dette er renderinger, udførslen tilpasses det enkelte projekt.';
+
 const styles = StyleSheet.create({
   page: {
     fontFamily: 'Helvetica',
@@ -104,6 +107,13 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: PALETTE.muted,
     lineHeight: 1.6,
+    marginBottom: 14,
+  },
+  coverDisclaimer: {
+    fontSize: 8,
+    fontStyle: 'italic',
+    color: PALETTE.muted,
+    lineHeight: 1.5,
     marginBottom: 60,
   },
   coverMetaBlock: {
@@ -287,6 +297,7 @@ export function QuoteAppendixPDF({
         <View style={styles.coverAccentLine} />
 
         <Text style={styles.coverIntro}>{intro}</Text>
+        <Text style={styles.coverDisclaimer}>{RENDER_DISCLAIMER}</Text>
 
         {/* Meta */}
         <View style={styles.coverMetaBlock}>

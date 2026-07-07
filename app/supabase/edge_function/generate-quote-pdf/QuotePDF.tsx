@@ -512,7 +512,9 @@ export function QuotePDF({
 
         {/* Linjer */}
         {lines.map((line, i) => {
-          const hasPrice = line.totalSellingPrice && line.totalSellingPrice > 0;
+          // 0/tom = uprissat linje ("—"). Negative beløb SKAL vises — reduktions-/rabatlinjer
+          // (fx "Optimering -42.000") indgår i subtotalen og må ikke stå med blank beløbskolonne.
+          const hasPrice = !!line.totalSellingPrice;
           return (
             <View key={i} style={styles.row} wrap={false}>
               <Text style={[styles.cellMuted, styles.colNo]}>{i + 1}</Text>

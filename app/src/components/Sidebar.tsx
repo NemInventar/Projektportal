@@ -17,7 +17,8 @@ import {
   Inbox,
   Building2,
   Contact,
-  Layers
+  Layers,
+  Factory
 } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -119,6 +120,12 @@ const Sidebar = () => {
       icon: FileText,
       path: '/project/quotes',
       active: isActive('/project/quotes')
+    },
+    {
+      label: 'Produktion',
+      icon: Factory,
+      path: '/project/production',
+      active: isActive('/project/production')
     },
     {
       label: 'BOM',
