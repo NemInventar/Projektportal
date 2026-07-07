@@ -848,12 +848,15 @@ export default function Dashboard() {
                   title={q.sent_at ? `Sendt ${formatDateDanish(q.sent_at)}` : undefined}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <div className="text-xs font-medium text-muted-foreground truncate">
-                      {project?.customer || project?.name || 'Ukendt projekt'}
+                    <div className="text-xs text-muted-foreground truncate">
+                      {[project?.customer, project?.projectNumber].filter(Boolean).join(' · ') || 'Ukendt kunde'}
                     </div>
                     {q.is_locked && <Lock className="h-3 w-3 text-muted-foreground shrink-0" />}
                   </div>
-                  <div className="font-medium text-sm truncate mt-0.5">
+                  <div className="font-semibold text-sm truncate mt-0.5">
+                    {project?.name || 'Ukendt projekt'}
+                  </div>
+                  <div className="text-xs text-muted-foreground truncate mt-0.5">
                     {q.quote_number ? `${q.quote_number} · ` : ''}{q.title || '(uden titel)'}
                   </div>
                   <div className="flex items-center justify-between gap-2 mt-1">

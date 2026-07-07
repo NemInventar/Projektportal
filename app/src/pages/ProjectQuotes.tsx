@@ -104,10 +104,24 @@ const ProjectQuotes = () => {
               >
                 <TableCell className="font-mono text-sm">{quote.quoteNumber}</TableCell>
                 <TableCell className="font-medium">{quote.title}</TableCell>
-                <TableCell>
-                  <Badge className={getStatusColor(quote.status)}>
-                    {getStatusLabel(quote.status)}
-                  </Badge>
+                <TableCell onClick={(e) => e.stopPropagation()}>
+                  <Select
+                    value={quote.status}
+                    onValueChange={(value) => handleStatusChange(quote, value as ProjectQuote['status'])}
+                  >
+                    <SelectTrigger
+                      className={`h-7 w-[130px] border-0 font-medium text-xs rounded-md ${getStatusColor(quote.status)}`}
+                      title="Skift status"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="draft">Kladder</SelectItem>
+                      <SelectItem value="sent">Sendt</SelectItem>
+                      <SelectItem value="accepted">Accepteret</SelectItem>
+                      <SelectItem value="rejected">Afvist</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </TableCell>
                 <TableCell className="text-right font-medium">
                   {formatCurrency(totals.totalSellingPrice)}
@@ -546,6 +560,44 @@ const ProjectQuotes = () => {
         variant: "destructive",
       });
     }
+  };
+
+  // Inline status-skift fra Tilbudsoversigt — uden at åbne rediger-dialogen.
+  const handleStatusChange = async (quote: ProjectQuote, newStatus: ProjectQuote['status']) => {
+    if (newStatus === quote.status) return;
+    const prevStatus = quote.status;
+
+    // Optimistisk opdatering — rækken hopper straks til den rigtige sektion.
+    setQuotes(prev => prev.map(q => q.id === quote.id ? { ...q, status: newStatus } : q));
+
+    const updateData: any = { status: newStatus, updated_at: new Date().toISOString() };
+    // Sæt sent_at når status skifter til 'sent' (DB-trigger gør det også som backup —
+    // vi sender fra UI så værdien er synlig straks, jf. handleUpdateQuote).
+    if (newStatus === 'sent' && prevStatus !== 'sent') {
+      updateData.sent_at = new Date().toISOString();
+    }
+
+    const { error } = await supabase
+      .from('project_quotes_2026_01_16_23_00')
+      .update(updateData)
+      .eq('id', quote.id);
+
+    if (error) {
+      // Rul tilbage ved fejl.
+      setQuotes(prev => prev.map(q => q.id === quote.id ? { ...q, status: prevStatus } : q));
+      console.error('Error updating quote status:', error);
+      toast({
+        title: "Fejl",
+        description: "Kunne ikke opdatere status",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    toast({
+      title: "Status opdateret",
+      description: `${quote.quoteNumber} → ${getStatusLabel(newStatus)}`,
+    });
   };
 
   const handleArchiveQuote = async (quoteId: string) => {
