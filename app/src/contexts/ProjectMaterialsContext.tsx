@@ -589,22 +589,10 @@ export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ ch
   };
 
   const validateOrderCreation = (materialId: string): { canOrder: boolean; reason?: string } => {
-    const material = projectMaterials.find(m => m.id === materialId);
-    if (!material) {
-      return { canOrder: false, reason: 'Materiale ikke fundet' };
-    }
-
-    // Bæredygtighed/DGNB-godkendelse blokerer ikke bestilling — kun relevant på
-    // DGNB-mærkede projekter, sporet informativt i Godkendelser-fanen men aldrig
-    // en hård stopklods. Kun produktionsgodkendelse gater bestilling.
-    const productionApproval = material.approvals.find(a => a.type === 'production');
-    if (productionApproval?.status !== 'approved') {
-      return {
-        canOrder: false,
-        reason: 'Du kan ikke bestille dette materiale før produktionsgodkendelse er gennemført.'
-      };
-    }
-
+    // Godkendelses-gate deaktiveret (Milot, 2026-07-23) — ikke relevant for
+    // langt de fleste (ikke-DGNB) projekter. Bestilling blokeres ikke længere
+    // af godkendelsesstatus. Godkendelser-fanen + datamodellen er bevaret
+    // uændret til evt. senere reaktivering.
     return { canOrder: true };
   };
 

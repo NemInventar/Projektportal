@@ -70,7 +70,7 @@ const BOM = () => {
   
   const [searchTerm, setSearchTerm] = useState('');
   const [supplierFilter, setSupplierFilter] = useState<string>('all');
-  const [approvalFilter, setApprovalFilter] = useState<string>('all');
+  const [sourcingFilter, setSourcingFilter] = useState<string>('all');
   const [orderStatusFilter, setOrderStatusFilter] = useState<string>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [selectedMaterials, setSelectedMaterials] = useState<string[]>([]);
@@ -99,17 +99,16 @@ const BOM = () => {
     const matchesSupplier = supplierFilter === 'all' || material.supplierId === supplierFilter;
     const matchesCategory = categoryFilter === 'all' || material.category === categoryFilter;
     
-    const productionApproved = material.approvals.find(a => a.type === 'production')?.status === 'approved';
-    const matchesApproval = approvalFilter === 'all' ||
-                           (approvalFilter === 'fully_approved' && productionApproved) ||
-                           (approvalFilter === 'not_fully_approved' && !productionApproved);
-    
+    const matchesSourcing = sourcingFilter === 'all' ||
+                           (sourcingFilter === 'none' && !material.sourcingDecision) ||
+                           material.sourcingDecision === sourcingFilter;
+
     const totalOrdered = getTotalOrderedQty(material.id);
-    const matchesOrderStatus = orderStatusFilter === 'all' || 
+    const matchesOrderStatus = orderStatusFilter === 'all' ||
                               (orderStatusFilter === 'ordered' && totalOrdered > 0) ||
                               (orderStatusFilter === 'not_ordered' && totalOrdered === 0);
 
-    return matchesSearch && matchesSupplier && matchesCategory && matchesApproval && matchesOrderStatus;
+    return matchesSearch && matchesSupplier && matchesCategory && matchesSourcing && matchesOrderStatus;
   });
 
   const getSupplierName = (supplierId?: string) => {
@@ -118,14 +117,23 @@ const BOM = () => {
     return supplier?.name || 'Ukendt leverandør';
   };
 
-  const getApprovalBadge = (materialId: string) => {
-    // Kun produktionsgodkendelse gater bestilling — DGNB/bæredygtighed spores
-    // separat i Godkendelser-fanen, men afgør ikke denne badge.
+  const getSourcingBadge = (materialId: string) => {
     const material = currentProjectMaterials.find(m => m.id === materialId);
-    const productionApproved = material?.approvals.find(a => a.type === 'production')?.status === 'approved';
-    return productionApproved
-      ? <Badge variant="default" className="bg-green-100 text-green-800"><CheckCircle className="h-3 w-3 mr-1" />Produktionsgodkendt</Badge>
-      : <Badge variant="destructive" className="bg-red-100 text-red-800"><AlertTriangle className="h-3 w-3 mr-1" />Ikke produktionsgodkendt</Badge>;
+    switch (material?.sourcingDecision) {
+      case 'kosovo':
+        return <Badge variant="outline">Kosovo</Badge>;
+      case 'dk_to_kosovo':
+        return <Badge variant="outline">DK → Kosovo</Badge>;
+      case 'dk_local':
+        return <Badge variant="outline">DK (lokal)</Badge>;
+      default:
+        return (
+          <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">
+            <AlertTriangle className="h-3 w-3 mr-1" />
+            Ingen beslutning
+          </Badge>
+        );
+    }
   };
 
   const getOrderStatusBadge = (materialId: string) => {
@@ -447,14 +455,16 @@ const BOM = () => {
                 </SelectContent>
               </Select>
 
-              <Select value={approvalFilter} onValueChange={setApprovalFilter}>
+              <Select value={sourcingFilter} onValueChange={setSourcingFilter}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Godkendelsesstatus" />
+                  <SelectValue placeholder="Land" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">Alle godkendelser</SelectItem>
-                  <SelectItem value="fully_approved">Produktionsgodkendt</SelectItem>
-                  <SelectItem value="not_fully_approved">Ikke produktionsgodkendt</SelectItem>
+                  <SelectItem value="all">Alle lande</SelectItem>
+                  <SelectItem value="kosovo">Kosovo</SelectItem>
+                  <SelectItem value="dk_to_kosovo">DK → Kosovo</SelectItem>
+                  <SelectItem value="dk_local">DK (lokal)</SelectItem>
+                  <SelectItem value="none">Ingen beslutning</SelectItem>
                 </SelectContent>
               </Select>
 
@@ -491,7 +501,7 @@ const BOM = () => {
                       <TableHead>Leverandør</TableHead>
                       <TableHead>Enhed</TableHead>
                       <TableHead>Enhedspris</TableHead>
-                      <TableHead>Godkendelsesstatus</TableHead>
+                      <TableHead>Land</TableHead>
                       <TableHead>Bestilt i alt</TableHead>
                       <TableHead>Næste levering</TableHead>
                       <TableHead>Bestillingsstatus</TableHead>
@@ -523,7 +533,7 @@ const BOM = () => {
                             <span className="text-muted-foreground">-</span>
                           )}
                         </TableCell>
-                        <TableCell>{getApprovalBadge(material.id)}</TableCell>
+                        <TableCell>{getSourcingBadge(material.id)}</TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
                             <span className="font-medium">
