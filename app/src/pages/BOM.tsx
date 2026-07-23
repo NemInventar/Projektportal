@@ -166,6 +166,10 @@ const BOM = () => {
     }
   };
 
+  const needsKosovoTransportWarning = (material: typeof currentProjectMaterials[number]) => {
+    return material.sourcingDecision === 'dk_to_kosovo' && !hasKosovoTransportBooked(material.id);
+  };
+
   const getKosovoTransportCell = (material: typeof currentProjectMaterials[number]) => {
     if (material.sourcingDecision !== 'dk_to_kosovo') {
       return <span className="text-muted-foreground">-</span>;
@@ -191,9 +195,14 @@ const BOM = () => {
           checked={booked}
           onCheckedChange={(checked) => handleToggleKosovoTransport(material.id, checked as boolean)}
         />
-        <span className={booked ? 'text-green-700' : 'text-red-700'}>
-          {booked ? 'Transport bestilt' : 'Transport ikke bestilt'}
-        </span>
+        {booked ? (
+          <span className="text-green-700">Transport bestilt</span>
+        ) : (
+          <span className="inline-flex items-center gap-1 font-semibold text-red-700" title="Materialet skal til Kosovo, men der er ikke bestilt transport endnu">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            Transport IKKE bestilt
+          </span>
+        )}
       </div>
     );
   };
@@ -510,9 +519,9 @@ const BOM = () => {
                   </TableHeader>
                   <TableBody>
                     {filteredMaterials.map((material) => (
-                      <TableRow 
+                      <TableRow
                         key={material.id}
-                        className="cursor-pointer hover:bg-muted/50"
+                        className={`cursor-pointer hover:bg-muted/50 ${needsKosovoTransportWarning(material) ? 'bg-red-50 hover:bg-red-100' : ''}`}
                         onClick={() => navigate(`/projects/${activeProject.id}/materials/${material.id}`)}
                       >
                         <TableCell onClick={(e) => e.stopPropagation()}>

@@ -28,20 +28,21 @@ import { useNavigate, useLocation } from 'react-router-dom';
 const Sidebar = () => {
   const { activeProject } = useProject();
   const { overdueCount } = useLeads();
-  const { projectMaterials, getApprovalStatus } = useProjectMaterials();
+  const { projectMaterials, hasKosovoTransportBooked } = useProjectMaterials();
   const { getPOLinesByMaterial } = usePurchaseOrders();
   const navigate = useNavigate();
   const location = useLocation();
 
   const isActive = (path: string) => location.pathname === path;
 
-  // BOM-advarsel: materialer på det aktive projekt der enten ikke er fuldt
-  // godkendt eller slet ikke er bestilt endnu.
+  // BOM-advarsel: materialer på det aktive projekt der enten slet ikke er
+  // bestilt endnu, eller skal til Kosovo fra DK uden bestilt transport.
+  // Godkendelsesstatus tæller ikke længere med (gaten er deaktiveret).
   const bomWarningCount = activeProject
     ? projectMaterials.filter(m => m.projectId === activeProject.id).filter(m => {
-        const notApproved = getApprovalStatus(m.id) !== 'fully_approved';
         const notOrdered = getPOLinesByMaterial(m.id).filter(l => l.status !== 'cancelled').length === 0;
-        return notApproved || notOrdered;
+        const needsKosovoTransport = m.sourcingDecision === 'dk_to_kosovo' && !hasKosovoTransportBooked(m.id);
+        return notOrdered || needsKosovoTransport;
       }).length
     : 0;
 

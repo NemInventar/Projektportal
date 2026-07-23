@@ -49,7 +49,7 @@ import { useProject } from '@/contexts/ProjectContext';
 import { useStandardMaterials } from '@/contexts/StandardMaterialsContext';
 import { useStandardSuppliers } from '@/contexts/StandardSuppliersContext';
 import { usePurchaseOrders } from '@/contexts/PurchaseOrdersContext';
-import { XCircle, Truck, MapPin } from 'lucide-react';
+import { XCircle, Truck, MapPin, AlertTriangle } from 'lucide-react';
 
 interface ProjectMaterial {
   id: string;
@@ -310,6 +310,10 @@ const ProjectMaterialsV1: React.FC = () => {
     return supplier?.name || 'Ukendt leverandør';
   };
 
+  const needsKosovoTransportWarning = (material: ProjectMaterial) => {
+    return material.sourcingDecision === 'dk_to_kosovo' && !(kosovoTransportStatus[material.id]?.booked ?? false);
+  };
+
   const getSourcingBadges = (material: ProjectMaterial) => {
     const editLink = (
       <Button
@@ -371,9 +375,17 @@ const ProjectMaterialsV1: React.FC = () => {
                 checked={transportBooked}
                 onCheckedChange={(checked) => handleToggleKosovoTransport(material.id, checked as boolean)}
               />
-              <span className={`text-xs ${transportBooked ? 'text-green-700' : 'text-red-700'}`}>
-                {transportBooked ? 'Transport bestilt' : 'Transport ikke bestilt'}
-              </span>
+              {transportBooked ? (
+                <span className="text-xs text-green-700">Transport bestilt</span>
+              ) : (
+                <span
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-red-700"
+                  title="Materialet skal til Kosovo, men der er ikke bestilt transport endnu"
+                >
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                  Transport IKKE bestilt
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -1101,7 +1113,7 @@ const ProjectMaterialsV1: React.FC = () => {
                   {filteredMaterials.map((material) => (
                     <TableRow
                       key={material.id}
-                      className="cursor-pointer hover:bg-muted/50"
+                      className={`cursor-pointer hover:bg-muted/50 ${needsKosovoTransportWarning(material) ? 'bg-red-50 hover:bg-red-100' : ''}`}
                       onClick={() => handleEdit(material)}
                     >
                       <TableCell className="font-medium">{material.name}</TableCell>
