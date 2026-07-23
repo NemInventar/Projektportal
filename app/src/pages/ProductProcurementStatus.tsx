@@ -53,11 +53,13 @@ const STATUS_LABEL: Record<ProductProcurementRow['status'], string> = {
 
 const ProductProcurementStatus: React.FC = () => {
   const navigate = useNavigate();
-  const { projects, setActiveProject } = useProject();
+  const { projects, activeProject, setActiveProject } = useProject();
 
   const [rows, setRows] = useState<ProductProcurementRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [projectFilter, setProjectFilter] = useState<string>('all');
+  // Grupperet under "Aktivt Projekt" i sidebaren — default til det aktive
+  // projekt, men "Alle projekter" er stadig ét klik væk.
+  const [projectFilter, setProjectFilter] = useState<string>(activeProject?.id || 'all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
 

@@ -74,12 +74,6 @@ const Sidebar = () => {
       active: isActive('/portfolio/materials')
     },
     {
-      label: 'Produkt-indkøb',
-      icon: Package,
-      path: '/products/procurement-status',
-      active: isActive('/products/procurement-status')
-    },
-    {
       label: 'Firmaer',
       icon: Building2,
       path: '/firmaer',
@@ -137,6 +131,12 @@ const Sidebar = () => {
       icon: Package,
       path: '/project/products',
       active: isActive('/project/products')
+    },
+    {
+      label: 'Produkt-indkøb',
+      icon: Package,
+      path: '/products/procurement-status',
+      active: isActive('/products/procurement-status')
     },
     {
       label: 'Tilbud',

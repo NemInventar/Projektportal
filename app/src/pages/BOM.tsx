@@ -187,12 +187,24 @@ const BOM = () => {
     }
   };
 
+  const isFullyDeliveredInKosovo = (materialId: string) => {
+    const lines = getPOLinesByMaterial(materialId).filter(line => line.status !== 'cancelled');
+    return lines.length > 0 && lines.every(line => line.status === 'delivered' && line.deliveredLocation === 'kosovo');
+  };
+
   const needsKosovoTransportWarning = (material: typeof currentProjectMaterials[number]) => {
+    if (isFullyDeliveredInKosovo(material.id)) return false;
     return material.sourcingDecision === 'dk_to_kosovo' && !hasKosovoTransportBooked(material.id);
   };
 
   const getKosovoTransportCell = (material: typeof currentProjectMaterials[number]) => {
     if (material.sourcingDecision !== 'dk_to_kosovo') {
+      return <span className="text-muted-foreground">-</span>;
+    }
+
+    // Allerede ankommet til Kosovo — "transport bestilt/ikke bestilt" er ikke
+    // relevant længere, det fremgår af Bestillingsstatus ("Leveret (Kosovo)").
+    if (isFullyDeliveredInKosovo(material.id)) {
       return <span className="text-muted-foreground">-</span>;
     }
 
