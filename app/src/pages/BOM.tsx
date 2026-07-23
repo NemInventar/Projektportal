@@ -29,15 +29,16 @@ import {
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { 
-  Search, 
-  ShoppingCart, 
-  Package, 
-  AlertTriangle, 
-  CheckCircle, 
+import {
+  Search,
+  ShoppingCart,
+  Package,
+  AlertTriangle,
+  CheckCircle,
   Clock,
   Calendar,
-  DollarSign
+  DollarSign,
+  Truck
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useProject } from '@/contexts/ProjectContext';
@@ -50,7 +51,10 @@ const BOM = () => {
   const { activeProject } = useProject();
   const {
     projectMaterials,
-    validateOrderCreation
+    validateOrderCreation,
+    hasKosovoTransportBooked,
+    isKosovoTransportDerived,
+    setKosovoTransportManualFlag
   } = useProjectMaterials();
   const { suppliers } = useStandardSuppliers();
   const {
@@ -140,6 +144,50 @@ const BOM = () => {
       return <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">Ingen leverandør</Badge>;
     }
     return <span>{getSupplierName(supplierId)}</span>;
+  };
+
+  const handleToggleKosovoTransport = async (materialId: string, checked: boolean) => {
+    try {
+      await setKosovoTransportManualFlag(materialId, checked);
+      toast({
+        title: checked ? "Transport markeret bestilt" : "Markering fjernet",
+      });
+    } catch (error) {
+      console.error('Error updating Kosovo transport flag:', error);
+      toast({ title: "Fejl", description: "Kunne ikke gemme markeringen", variant: "destructive" });
+    }
+  };
+
+  const getKosovoTransportCell = (material: typeof currentProjectMaterials[number]) => {
+    if (material.sourcingDecision !== 'dk_to_kosovo') {
+      return <span className="text-muted-foreground">-</span>;
+    }
+
+    if (isKosovoTransportDerived(material.id)) {
+      return (
+        <Badge
+          variant="default"
+          className="bg-green-600 text-white"
+          title="Koblet til en oprettet Kosovo-forsendelse"
+        >
+          <Truck className="h-3 w-3 mr-1" />
+          Transport bestilt
+        </Badge>
+      );
+    }
+
+    const booked = hasKosovoTransportBooked(material.id);
+    return (
+      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+        <Checkbox
+          checked={booked}
+          onCheckedChange={(checked) => handleToggleKosovoTransport(material.id, checked as boolean)}
+        />
+        <span className={booked ? 'text-green-700' : 'text-red-700'}>
+          {booked ? 'Transport bestilt' : 'Transport ikke bestilt'}
+        </span>
+      </div>
+    );
   };
 
   const hasApprovalOverride = (materialId: string) => {
@@ -447,6 +495,7 @@ const BOM = () => {
                       <TableHead>Bestilt i alt</TableHead>
                       <TableHead>Næste levering</TableHead>
                       <TableHead>Bestillingsstatus</TableHead>
+                      <TableHead>Kosovo-transport</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -490,6 +539,7 @@ const BOM = () => {
                         </TableCell>
                         <TableCell>{formatNextDelivery(material.id)}</TableCell>
                         <TableCell>{getOrderStatusBadge(material.id)}</TableCell>
+                        <TableCell>{getKosovoTransportCell(material)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

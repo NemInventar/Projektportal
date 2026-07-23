@@ -78,6 +78,9 @@ interface ProjectMaterialsContextType {
   isFullyApproved: (materialId: string) => boolean;
   validateOrderCreation: (materialId: string) => { canOrder: boolean; reason?: string };
   hasKosovoTransportBooked: (materialId: string) => boolean;
+  isKosovoTransportDerived: (materialId: string) => boolean;
+  isKosovoTransportManuallyConfirmed: (materialId: string) => boolean;
+  setKosovoTransportManualFlag: (materialId: string, value: boolean) => Promise<void>;
   getTotalOrderedQuantity: (materialId: string) => number;
   getNextExpectedDelivery: (materialId: string) => Date | null;
 }
@@ -179,10 +182,16 @@ const mockOrders: ProjectMaterialOrder[] = [
 
 
 
+interface KosovoTransportStatus {
+  booked: boolean;
+  manuallyConfirmed: boolean;
+  derived: boolean; // true = koblet til en reelt oprettet forsendelse, kan ikke fjernes herfra
+}
+
 export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const { activeProject } = useProject();
   const [projectMaterials, setProjectMaterials] = useState<ProjectMaterial[]>([]);
-  const [kosovoTransportStatus, setKosovoTransportStatus] = useState<Record<string, boolean>>({});
+  const [kosovoTransportStatus, setKosovoTransportStatus] = useState<Record<string, KosovoTransportStatus>>({});
   const [loading, setLoading] = useState(true);
 
   // Load project materials when active project changes
@@ -201,19 +210,43 @@ export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ ch
     try {
       const { data, error } = await supabase
         .from('v_material_kosovo_transport_status')
-        .select('project_material_id, transport_booked')
+        .select('project_material_id, transport_booked, manually_confirmed, transport_booked_derived')
         .eq('project_id', projectId);
 
       if (!error && data) {
-        const statusMap: Record<string, boolean> = {};
+        const statusMap: Record<string, KosovoTransportStatus> = {};
         data.forEach((row: any) => {
-          statusMap[row.project_material_id] = row.transport_booked;
+          statusMap[row.project_material_id] = {
+            booked: row.transport_booked,
+            manuallyConfirmed: row.manually_confirmed,
+            derived: row.transport_booked_derived,
+          };
         });
         setKosovoTransportStatus(statusMap);
       }
     } catch (error) {
       console.error('Error loading Kosovo transport status:', error);
     }
+  };
+
+  const setKosovoTransportManualFlag = async (materialId: string, value: boolean) => {
+    const { error } = await supabase
+      .from('project_materials_2026_01_15_06_45')
+      .update({ kosovo_transport_manually_confirmed: value })
+      .eq('id', materialId);
+    if (error) throw error;
+
+    setKosovoTransportStatus(prev => {
+      const existing = prev[materialId] || { booked: false, manuallyConfirmed: false, derived: false };
+      return {
+        ...prev,
+        [materialId]: {
+          ...existing,
+          manuallyConfirmed: value,
+          booked: value || existing.derived,
+        },
+      };
+    });
   };
 
   const loadProjectMaterials = async (projectId: string) => {
@@ -507,7 +540,15 @@ export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ ch
   };
 
   const hasKosovoTransportBooked = (materialId: string): boolean => {
-    return kosovoTransportStatus[materialId] ?? false;
+    return kosovoTransportStatus[materialId]?.booked ?? false;
+  };
+
+  const isKosovoTransportDerived = (materialId: string): boolean => {
+    return kosovoTransportStatus[materialId]?.derived ?? false;
+  };
+
+  const isKosovoTransportManuallyConfirmed = (materialId: string): boolean => {
+    return kosovoTransportStatus[materialId]?.manuallyConfirmed ?? false;
   };
 
   const getTotalOrderedQuantity = (materialId: string): number => {
@@ -581,6 +622,9 @@ export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ ch
       isFullyApproved,
       validateOrderCreation,
       hasKosovoTransportBooked,
+      isKosovoTransportDerived,
+      isKosovoTransportManuallyConfirmed,
+      setKosovoTransportManualFlag,
       getTotalOrderedQuantity,
       getNextExpectedDelivery,
     }}>

@@ -66,7 +66,9 @@ const ProjectMaterialDetail = () => {
     addApproval,
     getApprovalStatus,
     validateOrderCreation,
-    hasKosovoTransportBooked
+    hasKosovoTransportBooked,
+    isKosovoTransportDerived,
+    setKosovoTransportManualFlag
   } = useProjectMaterials();
   const { suppliers } = useStandardSuppliers();
   const { materials: standardMaterials } = useStandardMaterials();
@@ -257,6 +259,17 @@ const ProjectMaterialDetail = () => {
     } catch (error) {
       console.error('Error saving sourcing decision:', error);
       toast({ title: "Fejl", description: "Beslutningen kunne ikke gemmes", variant: "destructive" });
+    }
+  };
+
+  const handleToggleKosovoTransport = async (checked: boolean) => {
+    if (!material) return;
+    try {
+      await setKosovoTransportManualFlag(material.id, checked);
+      toast({ title: checked ? "Transport markeret bestilt" : "Markering fjernet" });
+    } catch (error) {
+      console.error('Error updating Kosovo transport flag:', error);
+      toast({ title: "Fejl", description: "Kunne ikke gemme markeringen", variant: "destructive" });
     }
   };
 
@@ -568,16 +581,25 @@ const ProjectMaterialDetail = () => {
                         <div>
                           <Label>Transportstatus</Label>
                           <div className="mt-1">
-                            {hasKosovoTransportBooked(material.id) ? (
-                              <Badge variant="default" className="bg-green-600 text-white">
+                            {isKosovoTransportDerived(material.id) ? (
+                              <Badge
+                                variant="default"
+                                className="bg-green-600 text-white"
+                                title="Koblet til en oprettet Kosovo-forsendelse"
+                              >
                                 <Truck className="h-3 w-3 mr-1" />
                                 Transport bestilt
                               </Badge>
                             ) : (
-                              <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">
-                                <Truck className="h-3 w-3 mr-1" />
-                                Transport ikke bestilt
-                              </Badge>
+                              <div className="flex items-center gap-2">
+                                <Checkbox
+                                  checked={hasKosovoTransportBooked(material.id)}
+                                  onCheckedChange={(checked) => handleToggleKosovoTransport(checked as boolean)}
+                                />
+                                <span className={hasKosovoTransportBooked(material.id) ? 'text-green-700' : 'text-red-700'}>
+                                  {hasKosovoTransportBooked(material.id) ? 'Transport bestilt' : 'Transport ikke bestilt'}
+                                </span>
+                              </div>
                             )}
                           </div>
                         </div>

@@ -88,7 +88,7 @@ const ProjectMaterialsV1: React.FC = () => {
   
   const [materials, setMaterials] = useState<ProjectMaterial[]>([]);
   const [loading, setLoading] = useState(true);
-  const [kosovoTransportStatus, setKosovoTransportStatus] = useState<Record<string, boolean>>({});
+  const [kosovoTransportStatus, setKosovoTransportStatus] = useState<Record<string, { booked: boolean; manuallyConfirmed: boolean; derived: boolean }>>({});
   
   // Filters
   const [searchTerm, setSearchTerm] = useState('');
@@ -236,18 +236,48 @@ const ProjectMaterialsV1: React.FC = () => {
     try {
       const { data, error } = await supabase
         .from('v_material_kosovo_transport_status')
-        .select('project_material_id, transport_booked')
+        .select('project_material_id, transport_booked, manually_confirmed, transport_booked_derived')
         .eq('project_id', activeProject.id);
 
       if (!error && data) {
-        const statusMap: Record<string, boolean> = {};
+        const statusMap: Record<string, { booked: boolean; manuallyConfirmed: boolean; derived: boolean }> = {};
         data.forEach((row: any) => {
-          statusMap[row.project_material_id] = row.transport_booked;
+          statusMap[row.project_material_id] = {
+            booked: row.transport_booked,
+            manuallyConfirmed: row.manually_confirmed,
+            derived: row.transport_booked_derived,
+          };
         });
         setKosovoTransportStatus(statusMap);
       }
     } catch (error) {
       console.error('Error loading Kosovo transport status:', error);
+    }
+  };
+
+  const handleToggleKosovoTransport = async (materialId: string, checked: boolean) => {
+    try {
+      const { error } = await supabase
+        .from('project_materials_2026_01_15_06_45')
+        .update({ kosovo_transport_manually_confirmed: checked })
+        .eq('id', materialId);
+      if (error) throw error;
+
+      setKosovoTransportStatus(prev => {
+        const existing = prev[materialId] || { booked: false, manuallyConfirmed: false, derived: false };
+        return {
+          ...prev,
+          [materialId]: {
+            ...existing,
+            manuallyConfirmed: checked,
+            booked: checked || existing.derived,
+          },
+        };
+      });
+      toast({ title: checked ? "Transport markeret bestilt" : "Markering fjernet" });
+    } catch (error) {
+      console.error('Error updating Kosovo transport flag:', error);
+      toast({ title: "Fejl", description: "Kunne ikke gemme markeringen", variant: "destructive" });
     }
   };
 
@@ -323,21 +353,28 @@ const ProjectMaterialsV1: React.FC = () => {
     }
 
     // dk_to_kosovo
-    const transportBooked = kosovoTransportStatus[material.id] ?? false;
+    const status = kosovoTransportStatus[material.id];
+    const transportBooked = status?.booked ?? false;
+    const transportDerived = status?.derived ?? false;
     return (
       <div className="flex flex-col gap-1 items-start">
         <div className="flex flex-wrap gap-1 items-center">
           <Badge variant="outline">DK → Kosovo</Badge>
-          {transportBooked ? (
-            <Badge variant="default" className="bg-green-600 text-white">
+          {transportDerived ? (
+            <Badge variant="default" className="bg-green-600 text-white" title="Koblet til en oprettet Kosovo-forsendelse">
               <Truck className="h-3 w-3 mr-1" />
               Transport bestilt
             </Badge>
           ) : (
-            <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">
-              <Truck className="h-3 w-3 mr-1" />
-              Transport ikke bestilt
-            </Badge>
+            <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+              <Checkbox
+                checked={transportBooked}
+                onCheckedChange={(checked) => handleToggleKosovoTransport(material.id, checked as boolean)}
+              />
+              <span className={`text-xs ${transportBooked ? 'text-green-700' : 'text-red-700'}`}>
+                {transportBooked ? 'Transport bestilt' : 'Transport ikke bestilt'}
+              </span>
+            </div>
           )}
         </div>
         {material.kosovoTargetDeliveryDate && (
