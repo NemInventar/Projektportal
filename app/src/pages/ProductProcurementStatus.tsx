@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/table';
 import {
   Package, CheckCircle2, Clock, AlertTriangle, RefreshCw, Search, HelpCircle,
+  ChevronDown, ChevronUp, Truck, ShoppingCart, ExternalLink,
 } from 'lucide-react';
 
 interface ProductProcurementRow {
@@ -36,12 +37,32 @@ interface ProductProcurementRow {
   product_name: string;
   quantity: number;
   product_type: string | null;
+  total_material_lines: number;
   total_materials: number;
   ordered_materials: number;
   delivered_materials: number;
   pending_materials: number;
   pct_procured: number;
-  status: 'fully_procured' | 'partially_procured' | 'not_procured' | 'no_materials_linked';
+  status: 'fully_procured' | 'partially_procured' | 'not_procured' | 'no_materials_linked' | 'no_sold_qty';
+}
+
+interface ProductMaterialRow {
+  product_material_line_id: string;
+  project_material_id: string;
+  material_name: string;
+  unit: string;
+  quantity_needed: number;
+  sourcing_decision: 'kosovo' | 'dk_to_kosovo' | 'dk_local' | null;
+  kosovo_target_delivery_date: string | null;
+  procurement_status: 'ikke_bestilt' | 'delvist_bestilt' | 'bestilt' | 'leveret' | 'ikke_i_bom' | null;
+  ordered_qty: number | null;
+  delivered_qty: number | null;
+  rest_qty: number | null;
+  next_expected_delivery: string | null;
+  supplier_name: string | null;
+  kosovo_transport_booked: boolean | null;
+  kosovo_shipment_status: 'planlagt' | 'afsendt' | 'ankommet' | 'lukket' | null;
+  delivered_location: 'dk' | 'kosovo' | null;
 }
 
 const STATUS_LABEL: Record<ProductProcurementRow['status'], string> = {
@@ -49,6 +70,15 @@ const STATUS_LABEL: Record<ProductProcurementRow['status'], string> = {
   partially_procured: 'Delvist Procureret',
   not_procured: 'Ikke Procureret',
   no_materials_linked: 'Ingen Materialer Koblet',
+  no_sold_qty: 'Ingen Solgt Mængde',
+};
+
+const PROCUREMENT_LABEL: Record<string, string> = {
+  ikke_bestilt: 'ikke bestilt',
+  delvist_bestilt: 'delvist bestilt',
+  bestilt: 'bestilt',
+  leveret: 'leveret',
+  ikke_i_bom: 'ikke i styklisten',
 };
 
 const ProductProcurementStatus: React.FC = () => {
@@ -62,6 +92,10 @@ const ProductProcurementStatus: React.FC = () => {
   const [projectFilter, setProjectFilter] = useState<string>(activeProject?.id || 'all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
+
+  const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
+  const [materialsByProduct, setMaterialsByProduct] = useState<Record<string, ProductMaterialRow[]>>({});
+  const [materialsLoading, setMaterialsLoading] = useState<Record<string, boolean>>({});
 
   const loadData = async () => {
     setLoading(true);
@@ -102,6 +136,7 @@ const ProductProcurementStatus: React.FC = () => {
       partially: rows.filter(r => r.status === 'partially_procured').length,
       notProcured: rows.filter(r => r.status === 'not_procured').length,
       noMaterials: rows.filter(r => r.status === 'no_materials_linked').length,
+      noSoldQty: rows.filter(r => r.status === 'no_sold_qty').length,
     };
   }, [rows]);
 
@@ -115,6 +150,16 @@ const ProductProcurementStatus: React.FC = () => {
         return <Badge variant="destructive" className="bg-red-100 text-red-800"><AlertTriangle className="h-3 w-3 mr-1" />{STATUS_LABEL[status]}</Badge>;
       case 'no_materials_linked':
         return <Badge variant="outline" className="bg-gray-100 text-gray-700"><HelpCircle className="h-3 w-3 mr-1" />{STATUS_LABEL[status]}</Badge>;
+      case 'no_sold_qty':
+        return (
+          <Badge
+            variant="outline"
+            className="bg-gray-100 text-gray-700"
+            title="Materialer er koblet til produktet, men ingen af dem har en solgt mængde fra en accepteret tilbudslinje endnu"
+          >
+            <HelpCircle className="h-3 w-3 mr-1" />{STATUS_LABEL[status]}
+          </Badge>
+        );
     }
   };
 
@@ -124,13 +169,99 @@ const ProductProcurementStatus: React.FC = () => {
       case 'partially_procured': return 'bg-yellow-500';
       case 'not_procured': return 'bg-red-300';
       case 'no_materials_linked': return 'bg-gray-300';
+      case 'no_sold_qty': return 'bg-gray-300';
     }
   };
 
-  const handleShowMaterials = (row: ProductProcurementRow) => {
+  const loadMaterialsForProduct = async (productId: string) => {
+    setMaterialsLoading(prev => ({ ...prev, [productId]: true }));
+    const { data, error } = await supabase
+      .from('v_product_material_status')
+      .select('*')
+      .eq('project_product_id', productId)
+      .order('material_name');
+
+    if (!error && data) {
+      setMaterialsByProduct(prev => ({ ...prev, [productId]: data as unknown as ProductMaterialRow[] }));
+    } else if (error) {
+      console.error('Error loading product materials:', error);
+    }
+    setMaterialsLoading(prev => ({ ...prev, [productId]: false }));
+  };
+
+  const handleToggleMaterials = (row: ProductProcurementRow) => {
+    if (expandedProductId === row.project_product_id) {
+      setExpandedProductId(null);
+      return;
+    }
+    setExpandedProductId(row.project_product_id);
+    if (!materialsByProduct[row.project_product_id]) {
+      loadMaterialsForProduct(row.project_product_id);
+    }
+  };
+
+  const handleOpenProduct = (row: ProductProcurementRow) => {
     const project = projects.find(p => p.id === row.project_id);
     if (project) setActiveProject(project);
     navigate(`/project/products/${row.project_product_id}`);
+  };
+
+  // Andet badge — den handlingsorienterede status, med Kosovo-nuancer
+  // (undervejs/afventer-Kosovo osv.), ikke kun bestilt/ikke bestilt.
+  const getMaterialActionBadge = (m: ProductMaterialRow) => {
+    const isDkToKosovo = m.sourcing_decision === 'dk_to_kosovo';
+
+    // Ingen solgt mængde fra en accepteret tilbudslinje endnu (fx en produkt-
+    // række fra et arkiveret/erstattet tilbud) — IKKE det samme som "mangler
+    // bestilling". Adskil dem, ellers ser noget uafklaret ud som en fejl.
+    if (!m.procurement_status || m.procurement_status === 'ikke_i_bom') {
+      return (
+        <Badge
+          variant="outline"
+          className="bg-gray-100 text-gray-600"
+          title="Ingen solgt mængde fra en accepteret tilbudslinje endnu — kan ikke afgøre behov"
+        >
+          <HelpCircle className="h-3 w-3 mr-1" />
+          Ingen solgt mængde
+        </Badge>
+      );
+    }
+
+    if (m.procurement_status === 'ikke_bestilt') {
+      return <Badge variant="destructive" className="bg-red-100 text-red-800"><ShoppingCart className="h-3 w-3 mr-1" />Mangler bestilling</Badge>;
+    }
+
+    if (m.procurement_status === 'delvist_bestilt') {
+      return <Badge variant="default" className="bg-orange-100 text-orange-800"><ShoppingCart className="h-3 w-3 mr-1" />Delvist — mangler resten</Badge>;
+    }
+
+    if (m.procurement_status === 'bestilt') {
+      if (isDkToKosovo) {
+        if (m.kosovo_shipment_status === 'afsendt') {
+          return <Badge variant="default" className="bg-purple-100 text-purple-800"><Truck className="h-3 w-3 mr-1" />Undervejs til Kosovo</Badge>;
+        }
+        if (!m.kosovo_transport_booked) {
+          return <Badge variant="default" className="bg-orange-100 text-orange-800"><AlertTriangle className="h-3 w-3 mr-1" />Bestilt — mangler Kosovo-transport</Badge>;
+        }
+        return <Badge variant="default" className="bg-blue-100 text-blue-800"><CheckCircle2 className="h-3 w-3 mr-1" />Bestilt — transport booket</Badge>;
+      }
+      return <Badge variant="default" className="bg-green-100 text-green-800"><CheckCircle2 className="h-3 w-3 mr-1" />Bestilt</Badge>;
+    }
+
+    if (m.procurement_status === 'leveret') {
+      if (isDkToKosovo) {
+        if (m.delivered_location === 'kosovo') {
+          return <Badge variant="default" className="bg-green-100 text-green-800"><CheckCircle2 className="h-3 w-3 mr-1" />Leveret i Kosovo</Badge>;
+        }
+        if (m.delivered_location === 'dk') {
+          return <Badge variant="default" className="bg-orange-100 text-orange-800"><AlertTriangle className="h-3 w-3 mr-1" />Leveret i DK — afventer Kosovo</Badge>;
+        }
+        return <Badge variant="default" className="bg-orange-100 text-orange-800"><AlertTriangle className="h-3 w-3 mr-1" />Leveret — sted ukendt</Badge>;
+      }
+      return <Badge variant="default" className="bg-green-100 text-green-800"><CheckCircle2 className="h-3 w-3 mr-1" />Leveret</Badge>;
+    }
+
+    return null;
   };
 
   return (
@@ -171,7 +302,7 @@ const ProductProcurementStatus: React.FC = () => {
         </div>
 
         {/* Summary cards */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
           <Card>
             <CardContent className="p-4">
               <div className="flex items-center justify-between">
@@ -217,6 +348,15 @@ const ProductProcurementStatus: React.FC = () => {
               <div className="text-2xl font-bold mt-1 text-gray-600">{summary.noMaterials}</div>
             </CardContent>
           </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Ingen Solgt Mængde</span>
+                <HelpCircle className="h-4 w-4 text-gray-500" />
+              </div>
+              <div className="text-2xl font-bold mt-1 text-gray-600">{summary.noSoldQty}</div>
+            </CardContent>
+          </Card>
         </div>
 
         {/* Filters */}
@@ -242,6 +382,7 @@ const ProductProcurementStatus: React.FC = () => {
                   <SelectItem value="partially_procured">Delvist Procureret</SelectItem>
                   <SelectItem value="not_procured">Ikke Procureret</SelectItem>
                   <SelectItem value="no_materials_linked">Ingen Materialer Koblet</SelectItem>
+                  <SelectItem value="no_sold_qty">Ingen Solgt Mængde</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -273,47 +414,110 @@ const ProductProcurementStatus: React.FC = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredRows.map(row => (
-                      <TableRow key={row.project_product_id}>
-                        <TableCell className="text-sm">
-                          <div className="font-medium">{row.project_number || '-'}</div>
-                          <div className="text-muted-foreground">{row.project_name}</div>
-                        </TableCell>
-                        <TableCell className="font-medium">{row.product_name}</TableCell>
-                        <TableCell>{row.quantity}</TableCell>
-                        <TableCell className="text-sm">
-                          {row.total_materials === 0 ? (
-                            <span className="text-muted-foreground">Ingen materialer koblet</span>
-                          ) : (
-                            <>
-                              <span className="text-green-700">{row.ordered_materials} bestilt</span>
-                              {', '}
-                              <span className="text-red-700">{row.pending_materials} afventer</span>
-                              {' '}<span className="text-muted-foreground">af {row.total_materials} i alt</span>
-                            </>
+                    {filteredRows.map(row => {
+                      const isExpanded = expandedProductId === row.project_product_id;
+                      const materials = materialsByProduct[row.project_product_id] || [];
+                      const isMaterialsLoading = materialsLoading[row.project_product_id];
+
+                      return (
+                        <React.Fragment key={row.project_product_id}>
+                          <TableRow>
+                            <TableCell className="text-sm">
+                              <div className="font-medium">{row.project_number || '-'}</div>
+                              <div className="text-muted-foreground">{row.project_name}</div>
+                            </TableCell>
+                            <TableCell className="font-medium">{row.product_name}</TableCell>
+                            <TableCell>{row.quantity}</TableCell>
+                            <TableCell className="text-sm">
+                              {row.total_material_lines === 0 ? (
+                                <span className="text-muted-foreground">Ingen materialer koblet</span>
+                              ) : row.total_materials === 0 ? (
+                                <span className="text-muted-foreground">
+                                  {row.total_material_lines} materialer koblet, men ingen solgt mængde endnu
+                                </span>
+                              ) : (
+                                <>
+                                  <span className="text-green-700">{row.ordered_materials} bestilt</span>
+                                  {', '}
+                                  <span className="text-red-700">{row.pending_materials} afventer</span>
+                                  {' '}<span className="text-muted-foreground">af {row.total_materials} i alt</span>
+                                </>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-2">
+                                <div className="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden">
+                                  <div
+                                    className={`h-2.5 rounded-full ${getProgressBarColor(row.status)}`}
+                                    style={{ width: `${row.total_materials === 0 ? 0 : row.pct_procured}%` }}
+                                  />
+                                </div>
+                                <span className="text-xs text-muted-foreground whitespace-nowrap">
+                                  {row.total_materials === 0 ? '-' : `${row.pct_procured}%`}
+                                </span>
+                              </div>
+                            </TableCell>
+                            <TableCell>{getStatusBadge(row.status)}</TableCell>
+                            <TableCell>
+                              <div className="flex gap-2">
+                                <Button variant="outline" size="sm" onClick={() => handleToggleMaterials(row)} className="gap-1">
+                                  {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                                  {isExpanded ? 'Skjul materialer' : 'Vis materialer'}
+                                </Button>
+                                <Button variant="ghost" size="sm" onClick={() => handleOpenProduct(row)} title="Åbn produktet">
+                                  <ExternalLink className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+
+                          {isExpanded && (
+                            <TableRow className="bg-muted/30 hover:bg-muted/30">
+                              <TableCell colSpan={7} className="p-0">
+                                <div className="p-4 space-y-2">
+                                  <div className="flex items-center gap-2 text-sm font-medium mb-3">
+                                    <Package className="h-4 w-4" />
+                                    Materialer til {row.product_name}
+                                  </div>
+                                  {isMaterialsLoading ? (
+                                    <div className="text-center py-4 text-muted-foreground text-sm">Indlæser...</div>
+                                  ) : materials.length === 0 ? (
+                                    <div className="text-center py-4 text-muted-foreground text-sm">Ingen materialer koblet til dette produkt</div>
+                                  ) : (
+                                    materials.map(m => (
+                                      <div
+                                        key={m.product_material_line_id}
+                                        className="flex items-center justify-between bg-white border rounded-lg p-3"
+                                      >
+                                        <div>
+                                          <div className="font-medium text-sm">{m.material_name}</div>
+                                          <div className="text-xs text-muted-foreground">
+                                            Mængde nødvendig: {m.quantity_needed} {m.unit}
+                                            {m.supplier_name && <> · {m.supplier_name}</>}
+                                            {m.next_expected_delivery && (
+                                              <> · Forventet: {new Date(m.next_expected_delivery).toLocaleDateString('da-DK')}</>
+                                            )}
+                                            {m.sourcing_decision === 'dk_to_kosovo' && m.kosovo_target_delivery_date && (
+                                              <> · Ønsket i Kosovo: {new Date(m.kosovo_target_delivery_date).toLocaleDateString('da-DK')}</>
+                                            )}
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center gap-2 shrink-0">
+                                          <Badge variant="outline" className="bg-gray-50 text-gray-600 text-xs">
+                                            {PROCUREMENT_LABEL[m.procurement_status || 'ikke_bestilt']}
+                                          </Badge>
+                                          {getMaterialActionBadge(m)}
+                                        </div>
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
                           )}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <div className="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden">
-                              <div
-                                className={`h-2.5 rounded-full ${getProgressBarColor(row.status)}`}
-                                style={{ width: `${row.total_materials === 0 ? 0 : row.pct_procured}%` }}
-                              />
-                            </div>
-                            <span className="text-xs text-muted-foreground whitespace-nowrap">
-                              {row.total_materials === 0 ? '-' : `${row.pct_procured}%`}
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell>{getStatusBadge(row.status)}</TableCell>
-                        <TableCell>
-                          <Button variant="outline" size="sm" onClick={() => handleShowMaterials(row)}>
-                            Vis materialer
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                        </React.Fragment>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </div>
