@@ -396,6 +396,21 @@ const ProjectMaterialDetail = () => {
     }
   };
 
+  const handleSetDeliveredLocation = async (lineId: string, location: 'dk' | 'kosovo') => {
+    if (!material) return;
+    try {
+      await updatePurchaseOrderLine(lineId, { deliveredLocation: location });
+      // Ankommet til Kosovo beviser at transporten er sket — ryd "ikke bestilt"-advarslen automatisk.
+      if (location === 'kosovo') {
+        await setKosovoTransportManualFlag(material.id, true);
+      }
+      toast({ title: `Markeret leveret i ${location === 'dk' ? 'DK' : 'Kosovo'}` });
+    } catch (error) {
+      console.error('Error setting delivered location:', error);
+      toast({ title: "Fejl", description: "Kunne ikke gemme leveringssted", variant: "destructive" });
+    }
+  };
+
   const getSupplierName = (supplierId: string) => {
     const supplier = suppliers.find(s => s.id === supplierId);
     return supplier?.name || 'Ukendt leverandør';
@@ -956,6 +971,9 @@ const ProjectMaterialDetail = () => {
                                 <TableHead>Forventet levering</TableHead>
                                 <TableHead>Status</TableHead>
                                 <TableHead>Leveret dato</TableHead>
+                                {material.sourcingDecision === 'dk_to_kosovo' && (
+                                  <TableHead>Leveret hvor?</TableHead>
+                                )}
                                 <TableHead>Noter</TableHead>
                                 <TableHead>Handlinger</TableHead>
                               </TableRow>
@@ -977,6 +995,26 @@ const ProjectMaterialDetail = () => {
                                       className="w-36"
                                     />
                                   </TableCell>
+                                  {material.sourcingDecision === 'dk_to_kosovo' && (
+                                    <TableCell>
+                                      {line.status === 'delivered' ? (
+                                        <Select
+                                          value={line.deliveredLocation || ''}
+                                          onValueChange={(value) => handleSetDeliveredLocation(line.id, value as 'dk' | 'kosovo')}
+                                        >
+                                          <SelectTrigger className={`w-32 ${!line.deliveredLocation ? 'border-red-300 text-red-700' : ''}`}>
+                                            <SelectValue placeholder="Vælg..." />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            <SelectItem value="dk">DK</SelectItem>
+                                            <SelectItem value="kosovo">Kosovo</SelectItem>
+                                          </SelectContent>
+                                        </Select>
+                                      ) : (
+                                        <span className="text-muted-foreground">-</span>
+                                      )}
+                                    </TableCell>
+                                  )}
                                   <TableCell className="max-w-xs truncate">
                                     {line.notes || '-'}
                                   </TableCell>

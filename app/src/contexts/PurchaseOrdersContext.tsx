@@ -27,6 +27,7 @@ export interface PurchaseOrderLine {
   currency: string; // snapshot
   expectedDeliveryDate?: Date;
   deliveredDate?: Date; // faktisk leveringsdato — adskilt fra expectedDeliveryDate
+  deliveredLocation?: 'dk' | 'kosovo'; // hvor blev det faktisk leveret — kun entydigt for dk_to_kosovo-materialer
   status: 'ordered' | 'confirmed' | 'delivered' | 'cancelled';
   notes?: string;
   // Approval override fields
@@ -96,6 +97,7 @@ const mapLine = (l: any): PurchaseOrderLine => ({
   currency: l.currency,
   expectedDeliveryDate: l.expected_delivery_date ? new Date(l.expected_delivery_date) : undefined,
   deliveredDate: l.delivered_date ? new Date(l.delivered_date) : undefined,
+  deliveredLocation: l.delivered_location ?? undefined,
   status: l.status,
   notes: l.notes,
   approvalOverride: l.approval_override,
@@ -206,6 +208,7 @@ export const PurchaseOrdersProvider: React.FC<{ children: ReactNode }> = ({ chil
         currency: lineData.currency,
         expected_delivery_date: toDateOnly(lineData.expectedDeliveryDate),
         delivered_date: toDateOnly(lineData.deliveredDate),
+        delivered_location: lineData.deliveredLocation || null,
         status: lineData.status,
         notes: lineData.notes || null,
         approval_override: lineData.approvalOverride || false,
@@ -230,6 +233,7 @@ export const PurchaseOrdersProvider: React.FC<{ children: ReactNode }> = ({ chil
     if (updates.supplierProductCode !== undefined) payload.supplier_product_code = updates.supplierProductCode;
     if (updates.expectedDeliveryDate !== undefined) payload.expected_delivery_date = toDateOnly(updates.expectedDeliveryDate);
     if (updates.deliveredDate !== undefined) payload.delivered_date = toDateOnly(updates.deliveredDate);
+    if (updates.deliveredLocation !== undefined) payload.delivered_location = updates.deliveredLocation;
     if (updates.status !== undefined) payload.status = updates.status;
     if (updates.notes !== undefined) payload.notes = updates.notes;
     if (updates.approvalOverride !== undefined) payload.approval_override = updates.approvalOverride;

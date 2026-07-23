@@ -56,7 +56,7 @@ const PurchaseOrderDetail = () => {
     updatePurchaseOrder,
     updatePurchaseOrderLine
   } = usePurchaseOrders();
-  const { projectMaterials } = useProjectMaterials();
+  const { projectMaterials, setKosovoTransportManualFlag } = useProjectMaterials();
   const { suppliers } = useStandardSuppliers();
   
   const [editingNotes, setEditingNotes] = useState(false);
@@ -184,6 +184,20 @@ const PurchaseOrderDetail = () => {
     } catch (error) {
       console.error('Error updating PO notes:', error);
       toast({ title: "Fejl", description: "Noter kunne ikke gemmes", variant: "destructive" });
+    }
+  };
+
+  const handleSetDeliveredLocation = async (lineId: string, materialId: string, location: 'dk' | 'kosovo') => {
+    try {
+      await updatePurchaseOrderLine(lineId, { deliveredLocation: location });
+      // Ankommet til Kosovo beviser at transporten er sket — ryd "ikke bestilt"-advarslen automatisk.
+      if (location === 'kosovo') {
+        await setKosovoTransportManualFlag(materialId, true);
+      }
+      toast({ title: `Markeret leveret i ${location === 'dk' ? 'DK' : 'Kosovo'}` });
+    } catch (error) {
+      console.error('Error setting delivered location:', error);
+      toast({ title: "Fejl", description: "Kunne ikke gemme leveringssted", variant: "destructive" });
     }
   };
 
@@ -364,13 +378,16 @@ const PurchaseOrderDetail = () => {
                       <TableHead>Forventet levering</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Leveret dato</TableHead>
+                      <TableHead>Leveret hvor?</TableHead>
                       <TableHead>Noter</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {poLines.map((line) => {
                       const lineTotal = line.orderedQty * (line.unitPrice || 0);
-                      
+                      const material = projectMaterials.find(m => m.id === line.projectMaterialId);
+                      const isDkToKosovo = material?.sourcingDecision === 'dk_to_kosovo';
+
                       return (
                         <TableRow key={line.id}>
                           <TableCell>
@@ -448,6 +465,25 @@ const PurchaseOrderDetail = () => {
                               className="w-36"
                               disabled={purchaseOrder.status === 'cancelled'}
                             />
+                          </TableCell>
+                          <TableCell>
+                            {isDkToKosovo && line.status === 'delivered' ? (
+                              <Select
+                                value={line.deliveredLocation || ''}
+                                onValueChange={(value) => handleSetDeliveredLocation(line.id, line.projectMaterialId, value as 'dk' | 'kosovo')}
+                                disabled={purchaseOrder.status === 'cancelled'}
+                              >
+                                <SelectTrigger className={`w-28 ${!line.deliveredLocation ? 'border-red-300 text-red-700' : ''}`}>
+                                  <SelectValue placeholder="Vælg..." />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="dk">DK</SelectItem>
+                                  <SelectItem value="kosovo">Kosovo</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            ) : (
+                              <span className="text-muted-foreground">-</span>
+                            )}
                           </TableCell>
                           <TableCell>
                             <Input

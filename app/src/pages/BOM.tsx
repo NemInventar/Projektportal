@@ -142,6 +142,27 @@ const BOM = () => {
       return <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">Ikke bestilt</Badge>;
     }
     if (lines.every(line => line.status === 'delivered')) {
+      const material = currentProjectMaterials.find(m => m.id === materialId);
+      if (material?.sourcingDecision === 'dk_to_kosovo') {
+        const locations = new Set(lines.map(l => l.deliveredLocation).filter(Boolean));
+        if (locations.size === 0) {
+          return (
+            <Badge
+              variant="default"
+              className="bg-orange-500 text-white"
+              title="Leveret, men det mangler at blive angivet om det er i DK eller Kosovo"
+            >
+              <AlertTriangle className="h-3 w-3 mr-1" />
+              Leveret (sted ukendt)
+            </Badge>
+          );
+        }
+        if (locations.size > 1) {
+          return <Badge variant="default" className="bg-green-600 text-white">Leveret (DK + Kosovo)</Badge>;
+        }
+        const loc = [...locations][0];
+        return <Badge variant="default" className="bg-green-600 text-white">Leveret ({loc === 'dk' ? 'DK' : 'Kosovo'})</Badge>;
+      }
       return <Badge variant="default" className="bg-green-600 text-white">Leveret</Badge>;
     }
     return <Badge variant="default" className="bg-blue-100 text-blue-800">Bestilt</Badge>;
