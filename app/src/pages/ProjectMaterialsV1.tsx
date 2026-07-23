@@ -49,7 +49,7 @@ import { useProject } from '@/contexts/ProjectContext';
 import { useStandardMaterials } from '@/contexts/StandardMaterialsContext';
 import { useStandardSuppliers } from '@/contexts/StandardSuppliersContext';
 import { usePurchaseOrders } from '@/contexts/PurchaseOrdersContext';
-import { XCircle } from 'lucide-react';
+import { XCircle, Truck, MapPin } from 'lucide-react';
 
 interface ProjectMaterial {
   id: string;
@@ -72,6 +72,8 @@ interface ProjectMaterial {
   transportEstimatedCost?: number;
   transportCurrency: string;
   transportNote?: string;
+  sourcingDecision?: 'kosovo' | 'dk_to_kosovo' | 'dk_local';
+  kosovoTargetDeliveryDate?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -86,6 +88,7 @@ const ProjectMaterialsV1: React.FC = () => {
   
   const [materials, setMaterials] = useState<ProjectMaterial[]>([]);
   const [loading, setLoading] = useState(true);
+  const [kosovoTransportStatus, setKosovoTransportStatus] = useState<Record<string, boolean>>({});
   
   // Filters
   const [searchTerm, setSearchTerm] = useState('');
@@ -142,6 +145,7 @@ const ProjectMaterialsV1: React.FC = () => {
   useEffect(() => {
     if (activeProject) {
       loadMaterials();
+      loadKosovoTransportStatus();
     }
   }, [activeProject]);
 
@@ -213,6 +217,8 @@ const ProjectMaterialsV1: React.FC = () => {
           transportEstimatedCost: m.transport_estimated_cost ? parseFloat(m.transport_estimated_cost) : undefined,
           transportCurrency: m.transport_currency || 'DKK',
           transportNote: m.transport_note,
+          sourcingDecision: m.sourcing_decision ?? undefined,
+          kosovoTargetDeliveryDate: m.kosovo_target_delivery_date ? new Date(m.kosovo_target_delivery_date) : undefined,
           createdAt: new Date(m.created_at),
           updatedAt: new Date(m.updated_at)
         }));
@@ -222,6 +228,26 @@ const ProjectMaterialsV1: React.FC = () => {
       console.error('Error loading materials:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadKosovoTransportStatus = async () => {
+    if (!activeProject) return;
+    try {
+      const { data, error } = await supabase
+        .from('v_material_kosovo_transport_status')
+        .select('project_material_id, transport_booked')
+        .eq('project_id', activeProject.id);
+
+      if (!error && data) {
+        const statusMap: Record<string, boolean> = {};
+        data.forEach((row: any) => {
+          statusMap[row.project_material_id] = row.transport_booked;
+        });
+        setKosovoTransportStatus(statusMap);
+      }
+    } catch (error) {
+      console.error('Error loading Kosovo transport status:', error);
     }
   };
 
@@ -252,6 +278,76 @@ const ProjectMaterialsV1: React.FC = () => {
     if (!supplierId) return '-';
     const supplier = suppliers.find(s => s.id === supplierId);
     return supplier?.name || 'Ukendt leverandør';
+  };
+
+  const getSourcingBadges = (material: ProjectMaterial) => {
+    const editLink = (
+      <Button
+        variant="link"
+        size="sm"
+        className="h-auto p-0 text-xs"
+        onClick={() => activeProject && navigate(`/projects/${activeProject.id}/materials/${material.id}`)}
+      >
+        Rediger →
+      </Button>
+    );
+
+    if (!material.sourcingDecision) {
+      return (
+        <div className="flex flex-col gap-1 items-start">
+          <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">
+            <MapPin className="h-3 w-3 mr-1" />
+            Ingen beslutning
+          </Badge>
+          {editLink}
+        </div>
+      );
+    }
+
+    if (material.sourcingDecision === 'kosovo') {
+      return (
+        <div className="flex flex-col gap-1 items-start">
+          <Badge variant="outline">Kosovo</Badge>
+          {editLink}
+        </div>
+      );
+    }
+
+    if (material.sourcingDecision === 'dk_local') {
+      return (
+        <div className="flex flex-col gap-1 items-start">
+          <Badge variant="outline">DK (lokal)</Badge>
+          {editLink}
+        </div>
+      );
+    }
+
+    // dk_to_kosovo
+    const transportBooked = kosovoTransportStatus[material.id] ?? false;
+    return (
+      <div className="flex flex-col gap-1 items-start">
+        <div className="flex flex-wrap gap-1 items-center">
+          <Badge variant="outline">DK → Kosovo</Badge>
+          {transportBooked ? (
+            <Badge variant="default" className="bg-green-600 text-white">
+              <Truck className="h-3 w-3 mr-1" />
+              Transport bestilt
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">
+              <Truck className="h-3 w-3 mr-1" />
+              Transport ikke bestilt
+            </Badge>
+          )}
+        </div>
+        {material.kosovoTargetDeliveryDate && (
+          <span className="text-xs text-muted-foreground">
+            Ønsket: {material.kosovoTargetDeliveryDate.toLocaleDateString('da-DK')}
+          </span>
+        )}
+        {editLink}
+      </div>
+    );
   };
 
   const getProcurementBadges = (material: ProjectMaterial) => {
@@ -956,6 +1052,7 @@ const ProjectMaterialsV1: React.FC = () => {
                     <TableHead>Generisk</TableHead>
                     <TableHead>Leverandør</TableHead>
                     <TableHead>Indkøbsstatus</TableHead>
+                    <TableHead>Oprindelse</TableHead>
                     <TableHead>Enhedspris</TableHead>
                     <TableHead>Prisstatus</TableHead>
                     <TableHead>Lead time</TableHead>
@@ -980,6 +1077,7 @@ const ProjectMaterialsV1: React.FC = () => {
                       </TableCell>
                       <TableCell>{getSupplierName(material.supplierId)}</TableCell>
                       <TableCell onClick={(e) => e.stopPropagation()}>{getProcurementBadges(material)}</TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()}>{getSourcingBadges(material)}</TableCell>
                       <TableCell>
                         {material.unitPrice ? (
                           `${material.unitPrice.toLocaleString('da-DK')} ${material.currency}`

@@ -36,13 +36,15 @@ import {
   Plus, 
   Edit, 
   Trash2, 
-  CheckCircle, 
-  XCircle, 
+  CheckCircle,
+  XCircle,
   Clock,
   Package,
   FileText,
   User,
-  Leaf
+  Leaf,
+  MapPin,
+  Truck
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useProject } from '@/contexts/ProjectContext';
@@ -63,7 +65,8 @@ const ProjectMaterialDetail = () => {
     updateProjectMaterial,
     addApproval,
     getApprovalStatus,
-    validateOrderCreation
+    validateOrderCreation,
+    hasKosovoTransportBooked
   } = useProjectMaterials();
   const { suppliers } = useStandardSuppliers();
   const { materials: standardMaterials } = useStandardMaterials();
@@ -226,6 +229,48 @@ const ProjectMaterialDetail = () => {
       approvalOverride: false,
       approvalOverrideReason: '',
     });
+  };
+
+  const sourcingLabel = (decision: 'kosovo' | 'dk_to_kosovo' | 'dk_local') => {
+    switch (decision) {
+      case 'kosovo': return 'Købes i Kosovo';
+      case 'dk_to_kosovo': return 'Købes i DK → sendes til Kosovo';
+      case 'dk_local': return 'Købes i DK → bliver i DK';
+    }
+  };
+
+  const handleSourcingDecisionChange = async (decision: 'kosovo' | 'dk_to_kosovo' | 'dk_local') => {
+    if (!material || isNew) return;
+
+    const clearsDate = decision !== 'dk_to_kosovo';
+    try {
+      await updateProjectMaterial(material.id, {
+        sourcingDecision: decision,
+        ...(clearsDate ? { kosovoTargetDeliveryDate: null as unknown as undefined } : {}),
+      });
+      setMaterial(prev => prev ? {
+        ...prev,
+        sourcingDecision: decision,
+        kosovoTargetDeliveryDate: clearsDate ? undefined : prev.kosovoTargetDeliveryDate,
+      } : prev);
+      toast({ title: "Beslutning gemt", description: sourcingLabel(decision) });
+    } catch (error) {
+      console.error('Error saving sourcing decision:', error);
+      toast({ title: "Fejl", description: "Beslutningen kunne ikke gemmes", variant: "destructive" });
+    }
+  };
+
+  const handleKosovoDateChange = async (dateStr: string) => {
+    if (!material || isNew) return;
+
+    const date = dateStr ? new Date(dateStr) : null;
+    try {
+      await updateProjectMaterial(material.id, { kosovoTargetDeliveryDate: date as unknown as undefined });
+      setMaterial(prev => prev ? { ...prev, kosovoTargetDeliveryDate: date ?? undefined } : prev);
+    } catch (error) {
+      console.error('Error saving Kosovo target date:', error);
+      toast({ title: "Fejl", description: "Dato kunne ikke gemmes", variant: "destructive" });
+    }
   };
 
   const handleAddOrder = async () => {
@@ -467,6 +512,79 @@ const ProjectMaterialDetail = () => {
                     rows={4}
                   />
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card className="mt-6">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <MapPin className="h-5 w-5" />
+                  Kosovo/DK — hvor købes materialet?
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {isNew ? (
+                  <p className="text-sm text-muted-foreground">Gem materialet først, før oprindelses-beslutningen kan tages.</p>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                      <Button
+                        variant={material.sourcingDecision === 'kosovo' ? 'default' : 'outline'}
+                        onClick={() => handleSourcingDecisionChange('kosovo')}
+                      >
+                        Købes i Kosovo
+                      </Button>
+                      <Button
+                        variant={material.sourcingDecision === 'dk_to_kosovo' ? 'default' : 'outline'}
+                        onClick={() => handleSourcingDecisionChange('dk_to_kosovo')}
+                      >
+                        Købes i DK → sendes til Kosovo
+                      </Button>
+                      <Button
+                        variant={material.sourcingDecision === 'dk_local' ? 'default' : 'outline'}
+                        onClick={() => handleSourcingDecisionChange('dk_local')}
+                      >
+                        Købes i DK → bliver i DK
+                      </Button>
+                    </div>
+
+                    {!material.sourcingDecision && (
+                      <p className="text-sm text-muted-foreground">
+                        Ingen beslutning taget endnu — vælg en af mulighederne ovenfor.
+                      </p>
+                    )}
+
+                    {material.sourcingDecision === 'dk_to_kosovo' && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t">
+                        <div>
+                          <Label htmlFor="kosovoTargetDate">Ønsket leveringsdato i Kosovo</Label>
+                          <Input
+                            id="kosovoTargetDate"
+                            type="date"
+                            value={material.kosovoTargetDeliveryDate ? material.kosovoTargetDeliveryDate.toISOString().split('T')[0] : ''}
+                            onChange={(e) => handleKosovoDateChange(e.target.value)}
+                          />
+                        </div>
+                        <div>
+                          <Label>Transportstatus</Label>
+                          <div className="mt-1">
+                            {hasKosovoTransportBooked(material.id) ? (
+                              <Badge variant="default" className="bg-green-600 text-white">
+                                <Truck className="h-3 w-3 mr-1" />
+                                Transport bestilt
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">
+                                <Truck className="h-3 w-3 mr-1" />
+                                Transport ikke bestilt
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

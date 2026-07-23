@@ -42,6 +42,10 @@ export interface ProjectMaterial {
   priceNote?: string;
   isGeneric: boolean;
 
+  // Kosovo/DK-oprindelsesbeslutning
+  sourcingDecision?: 'kosovo' | 'dk_to_kosovo' | 'dk_local';
+  kosovoTargetDeliveryDate?: Date;
+
   // Approvals
   approvals: ProjectMaterialApproval[];
   
@@ -73,6 +77,7 @@ interface ProjectMaterialsContextType {
   getApprovalStatus: (materialId: string) => 'not_approved' | 'partially_approved' | 'fully_approved';
   isFullyApproved: (materialId: string) => boolean;
   validateOrderCreation: (materialId: string) => { canOrder: boolean; reason?: string };
+  hasKosovoTransportBooked: (materialId: string) => boolean;
   getTotalOrderedQuantity: (materialId: string) => number;
   getNextExpectedDelivery: (materialId: string) => Date | null;
 }
@@ -177,17 +182,39 @@ const mockOrders: ProjectMaterialOrder[] = [
 export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const { activeProject } = useProject();
   const [projectMaterials, setProjectMaterials] = useState<ProjectMaterial[]>([]);
+  const [kosovoTransportStatus, setKosovoTransportStatus] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
 
   // Load project materials when active project changes
   useEffect(() => {
     if (activeProject) {
       loadProjectMaterials(activeProject.id);
+      loadKosovoTransportStatus(activeProject.id);
     } else {
       setProjectMaterials([]);
+      setKosovoTransportStatus({});
       setLoading(false);
     }
   }, [activeProject]);
+
+  const loadKosovoTransportStatus = async (projectId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('v_material_kosovo_transport_status')
+        .select('project_material_id, transport_booked')
+        .eq('project_id', projectId);
+
+      if (!error && data) {
+        const statusMap: Record<string, boolean> = {};
+        data.forEach((row: any) => {
+          statusMap[row.project_material_id] = row.transport_booked;
+        });
+        setKosovoTransportStatus(statusMap);
+      }
+    } catch (error) {
+      console.error('Error loading Kosovo transport status:', error);
+    }
+  };
 
   const loadProjectMaterials = async (projectId: string) => {
     try {
@@ -218,6 +245,8 @@ export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ ch
           priceStatus: m.price_status,
           priceNote: m.price_note,
           isGeneric: m.is_generic ?? false,
+          sourcingDecision: m.sourcing_decision ?? undefined,
+          kosovoTargetDeliveryDate: m.kosovo_target_delivery_date ? new Date(m.kosovo_target_delivery_date) : undefined,
           approvals: m.project_material_approvals_2026_01_15_06_45?.map((a: any) => ({
             id: a.id,
             type: a.type,
@@ -310,7 +339,14 @@ export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ ch
           unit_price: updates.unitPrice,
           currency: updates.currency,
           price_status: updates.priceStatus,
-          price_note: updates.priceNote
+          price_note: updates.priceNote,
+          sourcing_decision: updates.sourcingDecision,
+          kosovo_target_delivery_date:
+            updates.kosovoTargetDeliveryDate === undefined
+              ? undefined
+              : updates.kosovoTargetDeliveryDate
+                ? updates.kosovoTargetDeliveryDate.toISOString().split('T')[0]
+                : null
         })
         .eq('id', id)
         .select()
@@ -470,6 +506,10 @@ export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ ch
     );
   };
 
+  const hasKosovoTransportBooked = (materialId: string): boolean => {
+    return kosovoTransportStatus[materialId] ?? false;
+  };
+
   const getTotalOrderedQuantity = (materialId: string): number => {
     const material = projectMaterials.find(m => m.id === materialId);
     if (!material) return 0;
@@ -540,6 +580,7 @@ export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ ch
       getApprovalStatus,
       isFullyApproved,
       validateOrderCreation,
+      hasKosovoTransportBooked,
       getTotalOrderedQuantity,
       getNextExpectedDelivery,
     }}>
