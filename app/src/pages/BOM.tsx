@@ -50,7 +50,6 @@ const BOM = () => {
   const { activeProject } = useProject();
   const {
     projectMaterials,
-    getApprovalStatus,
     validateOrderCreation
   } = useProjectMaterials();
   const { suppliers } = useStandardSuppliers();
@@ -96,10 +95,10 @@ const BOM = () => {
     const matchesSupplier = supplierFilter === 'all' || material.supplierId === supplierFilter;
     const matchesCategory = categoryFilter === 'all' || material.category === categoryFilter;
     
-    const approvalStatus = getApprovalStatus(material.id);
-    const matchesApproval = approvalFilter === 'all' || 
-                           (approvalFilter === 'fully_approved' && approvalStatus === 'fully_approved') ||
-                           (approvalFilter === 'not_fully_approved' && approvalStatus !== 'fully_approved');
+    const productionApproved = material.approvals.find(a => a.type === 'production')?.status === 'approved';
+    const matchesApproval = approvalFilter === 'all' ||
+                           (approvalFilter === 'fully_approved' && productionApproved) ||
+                           (approvalFilter === 'not_fully_approved' && !productionApproved);
     
     const totalOrdered = getTotalOrderedQty(material.id);
     const matchesOrderStatus = orderStatusFilter === 'all' || 
@@ -116,13 +115,13 @@ const BOM = () => {
   };
 
   const getApprovalBadge = (materialId: string) => {
-    const status = getApprovalStatus(materialId);
-    switch (status) {
-      case 'fully_approved':
-        return <Badge variant="default" className="bg-green-100 text-green-800"><CheckCircle className="h-3 w-3 mr-1" />Fuldt godkendt</Badge>;
-      default:
-        return <Badge variant="destructive" className="bg-red-100 text-red-800"><AlertTriangle className="h-3 w-3 mr-1" />Ikke fuldt godkendt</Badge>;
-    }
+    // Kun produktionsgodkendelse gater bestilling — DGNB/bæredygtighed spores
+    // separat i Godkendelser-fanen, men afgør ikke denne badge.
+    const material = currentProjectMaterials.find(m => m.id === materialId);
+    const productionApproved = material?.approvals.find(a => a.type === 'production')?.status === 'approved';
+    return productionApproved
+      ? <Badge variant="default" className="bg-green-100 text-green-800"><CheckCircle className="h-3 w-3 mr-1" />Produktionsgodkendt</Badge>
+      : <Badge variant="destructive" className="bg-red-100 text-red-800"><AlertTriangle className="h-3 w-3 mr-1" />Ikke produktionsgodkendt</Badge>;
   };
 
   const getOrderStatusBadge = (materialId: string) => {
@@ -406,8 +405,8 @@ const BOM = () => {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Alle godkendelser</SelectItem>
-                  <SelectItem value="fully_approved">Fuldt godkendt</SelectItem>
-                  <SelectItem value="not_fully_approved">Ikke fuldt godkendt</SelectItem>
+                  <SelectItem value="fully_approved">Produktionsgodkendt</SelectItem>
+                  <SelectItem value="not_fully_approved">Ikke produktionsgodkendt</SelectItem>
                 </SelectContent>
               </Select>
 

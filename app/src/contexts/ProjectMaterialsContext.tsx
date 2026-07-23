@@ -63,8 +63,8 @@ interface ProjectMaterialsContextType {
   addProjectMaterial: (material: Omit<ProjectMaterial, 'id' | 'createdAt' | 'updatedAt' | 'approvals' | 'orders'>) => Promise<void>;
   updateProjectMaterial: (id: string, updates: Partial<ProjectMaterial>) => Promise<void>;
   removeProjectMaterial: (id: string) => Promise<void>;
-  addApproval: (materialId: string, approval: Omit<ProjectMaterialApproval, 'id'>) => void;
-  updateApproval: (materialId: string, approvalId: string, updates: Partial<ProjectMaterialApproval>) => void;
+  addApproval: (materialId: string, approval: Omit<ProjectMaterialApproval, 'id'>) => Promise<void>;
+  updateApproval: (materialId: string, approvalId: string, updates: Partial<ProjectMaterialApproval>) => Promise<void>;
 
   // DEPRECATED: Use PurchaseOrdersContext instead
   // addOrder: (order: Omit<ProjectMaterialOrder, 'id' | 'createdAt'>) => void;
@@ -222,7 +222,7 @@ export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ ch
             id: a.id,
             type: a.type,
             status: a.status,
-            comment: a.comment,
+            comment: a.notes,
             approvedBy: a.approved_by,
             approvedAt: a.approved_at ? new Date(a.approved_at) : undefined
           })) || [],
@@ -393,35 +393,77 @@ export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ ch
     }
   };
 
-  const addApproval = (materialId: string, approvalData: Omit<ProjectMaterialApproval, 'id'>) => {
-    const newApproval: ProjectMaterialApproval = {
-      ...approvalData,
-      id: Date.now().toString(),
+  const addApproval = async (materialId: string, approvalData: Omit<ProjectMaterialApproval, 'id'>) => {
+    const payload = {
+      project_material_id: materialId,
+      type: approvalData.type,
+      status: approvalData.status,
+      approved_by: approvalData.approvedBy || null,
+      approved_at: approvalData.approvedAt ? approvalData.approvedAt.toISOString() : null,
+      notes: approvalData.comment || null,
     };
-    
-    setProjectMaterials(prev => 
-      prev.map(material => 
-        material.id === materialId 
-          ? { 
-              ...material, 
+
+    // Én godkendelse pr. type pr. materiale — find evt. eksisterende række i DB
+    // (aldrig stol på et lokalt id, det kan være fra en tidligere ikke-gemt session).
+    const { data: existingRows, error: selectError } = await supabase
+      .from('project_material_approvals_2026_01_15_06_45')
+      .select('id')
+      .eq('project_material_id', materialId)
+      .eq('type', approvalData.type)
+      .limit(1);
+    if (selectError) throw selectError;
+
+    const query = existingRows && existingRows.length > 0
+      ? supabase.from('project_material_approvals_2026_01_15_06_45').update(payload).eq('id', existingRows[0].id)
+      : supabase.from('project_material_approvals_2026_01_15_06_45').insert(payload);
+
+    const { data, error } = await query.select().single();
+    if (error) throw error;
+
+    const newApproval: ProjectMaterialApproval = {
+      id: data.id,
+      type: data.type,
+      status: data.status,
+      comment: data.notes ?? undefined,
+      approvedBy: data.approved_by ?? undefined,
+      approvedAt: data.approved_at ? new Date(data.approved_at) : undefined,
+    };
+
+    setProjectMaterials(prev =>
+      prev.map(material =>
+        material.id === materialId
+          ? {
+              ...material,
               approvals: [...material.approvals.filter(a => a.type !== approvalData.type), newApproval],
-              updatedAt: new Date() 
+              updatedAt: new Date()
             }
           : material
       )
     );
   };
 
-  const updateApproval = (materialId: string, approvalId: string, updates: Partial<ProjectMaterialApproval>) => {
-    setProjectMaterials(prev => 
-      prev.map(material => 
-        material.id === materialId 
-          ? { 
-              ...material, 
+  const updateApproval = async (materialId: string, approvalId: string, updates: Partial<ProjectMaterialApproval>) => {
+    const payload: Record<string, unknown> = {};
+    if (updates.status !== undefined) payload.status = updates.status;
+    if (updates.comment !== undefined) payload.notes = updates.comment;
+    if (updates.approvedBy !== undefined) payload.approved_by = updates.approvedBy;
+    if (updates.approvedAt !== undefined) payload.approved_at = updates.approvedAt ? updates.approvedAt.toISOString() : null;
+
+    const { error } = await supabase
+      .from('project_material_approvals_2026_01_15_06_45')
+      .update(payload)
+      .eq('id', approvalId);
+    if (error) throw error;
+
+    setProjectMaterials(prev =>
+      prev.map(material =>
+        material.id === materialId
+          ? {
+              ...material,
               approvals: material.approvals.map(approval =>
                 approval.id === approvalId ? { ...approval, ...updates } : approval
               ),
-              updatedAt: new Date() 
+              updatedAt: new Date()
             }
           : material
       )
@@ -471,22 +513,14 @@ export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ ch
       return { canOrder: false, reason: 'Materiale ikke fundet' };
     }
 
-    const approvalStatus = getApprovalStatus(materialId);
-    if (approvalStatus !== 'fully_approved') {
-      const productionApproval = material.approvals.find(a => a.type === 'production');
-      const sustainabilityApproval = material.approvals.find(a => a.type === 'sustainability');
-      
-      const missingApprovals = [];
-      if (productionApproval?.status !== 'approved') {
-        missingApprovals.push('Produktionsgodkendelse');
-      }
-      if (sustainabilityApproval?.status !== 'approved') {
-        missingApprovals.push('DGNB/Bæredygtighedsgodkendelse');
-      }
-      
+    // Bæredygtighed/DGNB-godkendelse blokerer ikke bestilling — kun relevant på
+    // DGNB-mærkede projekter, sporet informativt i Godkendelser-fanen men aldrig
+    // en hård stopklods. Kun produktionsgodkendelse gater bestilling.
+    const productionApproval = material.approvals.find(a => a.type === 'production');
+    if (productionApproval?.status !== 'approved') {
       return {
         canOrder: false,
-        reason: `Du kan ikke bestille dette materiale før både ${missingApprovals.join(' og ')} er gennemført.`
+        reason: 'Du kan ikke bestille dette materiale før produktionsgodkendelse er gennemført.'
       };
     }
 

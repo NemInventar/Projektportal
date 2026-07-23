@@ -154,15 +154,32 @@ const ProjectMaterialDetail = () => {
     }
   };
 
-  const handleApprovalChange = (type: 'production' | 'sustainability', status: 'approved' | 'not_approved', comment?: string) => {
+  const handleApprovalChange = async (type: 'production' | 'sustainability', status: 'approved' | 'not_approved', comment?: string) => {
     if (!material) return;
 
-    addApproval(material.id, {
-      type,
-      status,
-      comment,
-      approvedBy: 'Nuværende bruger', // In real app, get from auth context
-      approvedAt: status === 'approved' ? new Date() : undefined,
+    const approvedBy = user?.email || 'Ukendt bruger';
+
+    try {
+      await addApproval(material.id, {
+        type,
+        status,
+        comment,
+        approvedBy,
+        approvedAt: status === 'approved' ? new Date() : undefined,
+      });
+    } catch (error) {
+      console.error('Error saving approval:', error);
+      toast({
+        title: "Fejl",
+        description: "Godkendelsen kunne ikke gemmes",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    toast({
+      title: status === 'approved' ? "Godkendt" : "Afvist",
+      description: `${type === 'production' ? 'Produktionsgodkendelse' : 'Bæredygtighedsgodkendelse'} er gemt.`,
     });
 
     // Update local state
@@ -176,7 +193,7 @@ const ProjectMaterialDetail = () => {
                 ...approval,
                 status,
                 comment,
-                approvedBy: status === 'approved' ? 'Nuværende bruger' : undefined,
+                approvedBy: status === 'approved' ? approvedBy : undefined,
                 approvedAt: status === 'approved' ? new Date() : undefined,
               }
             : approval
