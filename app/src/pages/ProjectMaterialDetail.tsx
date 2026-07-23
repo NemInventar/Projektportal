@@ -46,33 +46,46 @@ import {
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useProject } from '@/contexts/ProjectContext';
-import { useProjectMaterials, ProjectMaterial, ProjectMaterialOrder } from '@/contexts/ProjectMaterialsContext';
+import { useProjectMaterials, ProjectMaterial } from '@/contexts/ProjectMaterialsContext';
 import { useStandardSuppliers } from '@/contexts/StandardSuppliersContext';
 import { useStandardMaterials } from '@/contexts/StandardMaterialsContext';
+import { usePurchaseOrders } from '@/contexts/PurchaseOrdersContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { Checkbox } from '@/components/ui/checkbox';
 
 const ProjectMaterialDetail = () => {
   const { projectId, materialId } = useParams();
   const navigate = useNavigate();
   const { toast } = useToast();
   const { activeProject } = useProject();
-  const { 
-    projectMaterials, 
-    updateProjectMaterial, 
-    addApproval, 
-    addOrder, 
-    updateOrder,
-    getApprovalStatus 
+  const {
+    projectMaterials,
+    updateProjectMaterial,
+    addApproval,
+    getApprovalStatus,
+    validateOrderCreation
   } = useProjectMaterials();
   const { suppliers } = useStandardSuppliers();
   const { materials: standardMaterials } = useStandardMaterials();
+  const {
+    getPOLinesByMaterial,
+    findOrCreateDraftPO,
+    createPurchaseOrderLine,
+    updatePurchaseOrderLine,
+    getTotalOrderedQty,
+  } = usePurchaseOrders();
+  const { user } = useAuth();
 
   const [material, setMaterial] = useState<ProjectMaterial | null>(null);
   const [showNewOrderDialog, setShowNewOrderDialog] = useState(false);
+  const [submittingOrder, setSubmittingOrder] = useState(false);
   const [newOrder, setNewOrder] = useState({
     supplierId: '',
     orderedQuantity: 0,
     expectedDelivery: '',
     comment: '',
+    approvalOverride: false,
+    approvalOverrideReason: '',
   });
 
   const isNew = materialId === 'new';
@@ -172,8 +185,51 @@ const ProjectMaterialDetail = () => {
     });
   };
 
-  const handleAddOrder = () => {
-    if (!material || !newOrder.supplierId || newOrder.orderedQuantity <= 0) {
+  const openNewOrderDialog = () => {
+    if (isNew) {
+      toast({
+        title: "Gem materialet først",
+        description: "Materialet skal gemmes før der kan registreres en bestilling på det.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (material?.supplierId) {
+      setNewOrder(prev => ({ ...prev, supplierId: material.supplierId! }));
+    }
+    setShowNewOrderDialog(true);
+  };
+
+  const resetNewOrderForm = () => {
+    setNewOrder({
+      supplierId: '',
+      orderedQuantity: 0,
+      expectedDelivery: '',
+      comment: '',
+      approvalOverride: false,
+      approvalOverrideReason: '',
+    });
+  };
+
+  const handleAddOrder = async () => {
+    if (isNew) {
+      toast({
+        title: "Gem materialet først",
+        description: "Materialet skal gemmes før der kan registreres en bestilling på det.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!material || !activeProject) {
+      toast({
+        title: "Fejl",
+        description: "Kunne ikke finde materialet eller det aktive projekt — prøv at genindlæse siden.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!newOrder.supplierId || newOrder.orderedQuantity <= 0) {
       toast({
         title: "Fejl",
         description: "Leverandør og mængde er påkrævet",
@@ -182,31 +238,87 @@ const ProjectMaterialDetail = () => {
       return;
     }
 
-    const orderData = {
-      projectMaterialId: material.id,
-      orderDate: new Date(),
-      supplierId: newOrder.supplierId,
-      orderedQuantity: newOrder.orderedQuantity,
-      expectedDelivery: newOrder.expectedDelivery ? new Date(newOrder.expectedDelivery) : undefined,
-      status: 'ordered' as const,
-      comment: newOrder.comment,
-    };
+    const validation = validateOrderCreation(material.id);
+    if (!validation.canOrder && !newOrder.approvalOverride) {
+      toast({
+        title: "Kan ikke bestille endnu",
+        description: validation.reason,
+        variant: "destructive",
+      });
+      return;
+    }
 
-    addOrder(orderData);
+    if (newOrder.approvalOverride && !newOrder.approvalOverrideReason.trim()) {
+      toast({
+        title: "Begrundelse mangler",
+        description: "Skriv en begrundelse for at bestille uden fuld godkendelse",
+        variant: "destructive",
+      });
+      return;
+    }
 
-    // Reset form
-    setNewOrder({
-      supplierId: '',
-      orderedQuantity: 0,
-      expectedDelivery: '',
-      comment: '',
-    });
-    setShowNewOrderDialog(false);
+    setSubmittingOrder(true);
+    try {
+      const po = await findOrCreateDraftPO(activeProject.id, newOrder.supplierId);
 
-    toast({
-      title: "Bestilling tilføjet",
-      description: "Den nye bestilling er blevet oprettet",
-    });
+      await createPurchaseOrderLine({
+        purchaseOrderId: po.id,
+        projectMaterialId: material.id,
+        supplierId: newOrder.supplierId,
+        supplierProductCode: material.supplierProductCode,
+        supplierProductUrl: material.supplierProductUrl,
+        orderedQty: newOrder.orderedQuantity,
+        unit: material.unit,
+        unitPrice: material.unitPrice,
+        currency: material.currency,
+        expectedDeliveryDate: newOrder.expectedDelivery ? new Date(newOrder.expectedDelivery) : undefined,
+        status: 'ordered',
+        notes: newOrder.comment || undefined,
+        approvalOverride: newOrder.approvalOverride,
+        approvalOverrideReason: newOrder.approvalOverride ? newOrder.approvalOverrideReason : undefined,
+        approvalOverrideBy: newOrder.approvalOverride ? (user?.email || 'ukendt') : undefined,
+        approvalOverrideAt: newOrder.approvalOverride ? new Date() : undefined,
+      });
+
+      // Ingen leverandør valgt på materialet endnu -> sæt den nu, så "ingen leverandør"-flaget rydder sig
+      if (!material.supplierId) {
+        await updateProjectMaterial(material.id, { supplierId: newOrder.supplierId });
+        setMaterial(prev => (prev ? { ...prev, supplierId: newOrder.supplierId } : prev));
+      }
+
+      resetNewOrderForm();
+      setShowNewOrderDialog(false);
+
+      toast({
+        title: "Bestilling registreret",
+        description: "Materialet er nu markeret som bestilt",
+      });
+    } catch (error) {
+      console.error('Error creating order:', error);
+      toast({
+        title: "Fejl",
+        description: "Bestillingen kunne ikke registreres",
+        variant: "destructive",
+      });
+    } finally {
+      setSubmittingOrder(false);
+    }
+  };
+
+  const handleMarkDelivered = async (lineId: string, dateStr: string) => {
+    try {
+      await updatePurchaseOrderLine(lineId, {
+        status: dateStr ? 'delivered' : 'ordered',
+        deliveredDate: dateStr ? new Date(dateStr) : undefined,
+      });
+      toast({
+        title: dateStr ? "Markeret leveret" : "Leveret-dato fjernet",
+        description: dateStr ? `Leveringsdato sat til ${dateStr}` : undefined,
+      });
+    } catch (error) {
+      console.error('Error marking line delivered:', error);
+      toast({ title: "Fejl", description: "Kunne ikke opdatere leveringsstatus", variant: "destructive" });
+    }
   };
 
   const getSupplierName = (supplierId: string) => {
@@ -214,15 +326,20 @@ const ProjectMaterialDetail = () => {
     return supplier?.name || 'Ukendt leverandør';
   };
 
+  const getLineStatusLabel = (status: string) => {
+    switch (status) {
+      case 'ordered': return 'Bestilt';
+      case 'confirmed': return 'Bekræftet';
+      case 'delivered': return 'Leveret';
+      case 'cancelled': return 'Annulleret';
+      default: return status;
+    }
+  };
+
   const getApprovalIcon = (status: 'approved' | 'not_approved') => {
     return status === 'approved' ? 
       <CheckCircle className="h-4 w-4 text-green-600" /> : 
       <XCircle className="h-4 w-4 text-red-600" />;
-  };
-
-  const getTotalOrderedQuantity = () => {
-    if (!material) return 0;
-    return material.orders.reduce((total, order) => total + order.orderedQuantity, 0);
   };
 
   const getStandardMaterialDocuments = () => {
@@ -619,93 +736,123 @@ const ProjectMaterialDetail = () => {
                     <Package className="h-5 w-5" />
                     Bestillinger
                   </CardTitle>
-                  <Button onClick={() => setShowNewOrderDialog(true)} className="gap-2">
+                  <Button onClick={openNewOrderDialog} className="gap-2">
                     <Plus className="h-4 w-4" />
                     Ny Bestilling
                   </Button>
                 </div>
               </CardHeader>
               <CardContent className="space-y-6">
-                {/* Summary */}
-                <div className="bg-muted/50 p-4 rounded-lg">
-                  <h4 className="font-medium mb-2">Sammenfatning</h4>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                    <div>
-                      <Label>Samlet bestilt mængde</Label>
-                      <p className="font-medium">{getTotalOrderedQuantity()} {material.unit}</p>
-                    </div>
-                    <div>
-                      <Label>Antal bestillinger</Label>
-                      <p className="font-medium">{material.orders.length}</p>
-                    </div>
-                    <div>
-                      <Label>Resterende mængde</Label>
-                      <p className="font-medium text-muted-foreground">Kommer senere</p>
-                    </div>
-                  </div>
-                </div>
+                {(() => {
+                  const poLines = isNew ? [] : getPOLinesByMaterial(material.id).filter(l => l.status !== 'cancelled');
+                  const totalOrdered = isNew ? 0 : getTotalOrderedQty(material.id);
+                  const allDelivered = poLines.length > 0 && poLines.every(l => l.status === 'delivered');
 
-                {/* Orders List */}
-                {material.orders.length > 0 ? (
-                  <div className="overflow-x-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Bestillingsdato</TableHead>
-                          <TableHead>Leverandør</TableHead>
-                          <TableHead>Bestilt mængde</TableHead>
-                          <TableHead>Forventet levering</TableHead>
-                          <TableHead>Status</TableHead>
-                          <TableHead>Kommentar</TableHead>
-                          <TableHead>Handlinger</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {material.orders.map((order) => (
-                          <TableRow key={order.id}>
-                            <TableCell>
-                              {order.orderDate.toLocaleDateString('da-DK')}
-                            </TableCell>
-                            <TableCell>{getSupplierName(order.supplierId)}</TableCell>
-                            <TableCell>{order.orderedQuantity} {material.unit}</TableCell>
-                            <TableCell>
-                              {order.expectedDelivery?.toLocaleDateString('da-DK') || '-'}
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant={
-                                order.status === 'received' ? 'default' :
-                                order.status === 'partially_received' ? 'secondary' : 'outline'
-                              }>
-                                {order.status === 'ordered' ? 'Bestilt' :
-                                 order.status === 'received' ? 'Modtaget' : 'Delvist modtaget'}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="max-w-xs truncate">
-                              {order.comment || '-'}
-                            </TableCell>
-                            <TableCell>
-                              <Button variant="outline" size="sm">
-                                <Edit className="h-4 w-4" />
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                ) : (
-                  <div className="text-center py-8">
-                    <Package className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                    <h3 className="text-lg font-medium mb-2">Ingen bestillinger endnu</h3>
-                    <p className="text-muted-foreground mb-4">
-                      Opret den første bestilling for dette materiale
-                    </p>
-                    <Button onClick={() => setShowNewOrderDialog(true)} className="gap-2">
-                      <Plus className="h-4 w-4" />
-                      Opret Bestilling
-                    </Button>
-                  </div>
-                )}
+                  return (
+                    <>
+                      {/* Flags */}
+                      <div className="flex flex-wrap gap-2">
+                        {!material.supplierId && (
+                          <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">
+                            <XCircle className="h-3 w-3 mr-1" />
+                            Ingen leverandør valgt
+                          </Badge>
+                        )}
+                        {poLines.length === 0 ? (
+                          <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">
+                            <XCircle className="h-3 w-3 mr-1" />
+                            Ikke bestilt
+                          </Badge>
+                        ) : allDelivered ? (
+                          <Badge variant="default" className="bg-green-600 text-white">
+                            <CheckCircle className="h-3 w-3 mr-1" />
+                            Leveret
+                          </Badge>
+                        ) : (
+                          <Badge variant="default" className="bg-blue-100 text-blue-800">Bestilt</Badge>
+                        )}
+                      </div>
+
+                      {/* Summary */}
+                      <div className="bg-muted/50 p-4 rounded-lg">
+                        <h4 className="font-medium mb-2">Sammenfatning</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                          <div>
+                            <Label>Samlet bestilt mængde</Label>
+                            <p className="font-medium">{totalOrdered} {material.unit}</p>
+                          </div>
+                          <div>
+                            <Label>Antal bestillinger</Label>
+                            <p className="font-medium">{poLines.length}</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Orders List */}
+                      {poLines.length > 0 ? (
+                        <div className="overflow-x-auto">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Leverandør</TableHead>
+                                <TableHead>Bestilt mængde</TableHead>
+                                <TableHead>Forventet levering</TableHead>
+                                <TableHead>Status</TableHead>
+                                <TableHead>Leveret dato</TableHead>
+                                <TableHead>Noter</TableHead>
+                                <TableHead>Handlinger</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {poLines.map((line) => (
+                                <TableRow key={line.id}>
+                                  <TableCell>{getSupplierName(line.supplierId)}</TableCell>
+                                  <TableCell>{line.orderedQty} {material.unit}</TableCell>
+                                  <TableCell>
+                                    {line.expectedDeliveryDate?.toLocaleDateString('da-DK') || '-'}
+                                  </TableCell>
+                                  <TableCell>{getApprovalIcon(line.status === 'delivered' ? 'approved' : 'not_approved')} {getLineStatusLabel(line.status)}</TableCell>
+                                  <TableCell>
+                                    <Input
+                                      type="date"
+                                      value={line.deliveredDate ? line.deliveredDate.toISOString().split('T')[0] : ''}
+                                      onChange={(e) => handleMarkDelivered(line.id, e.target.value)}
+                                      className="w-36"
+                                    />
+                                  </TableCell>
+                                  <TableCell className="max-w-xs truncate">
+                                    {line.notes || '-'}
+                                  </TableCell>
+                                  <TableCell>
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => navigate(`/project/purchase-orders/${line.purchaseOrderId}`)}
+                                    >
+                                      Se ordre
+                                    </Button>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      ) : (
+                        <div className="text-center py-8">
+                          <Package className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+                          <h3 className="text-lg font-medium mb-2">Ingen bestillinger endnu</h3>
+                          <p className="text-muted-foreground mb-4">
+                            Registrér den første bestilling for dette materiale
+                          </p>
+                          <Button onClick={openNewOrderDialog} className="gap-2">
+                            <Plus className="h-4 w-4" />
+                            Registrér Bestilling
+                          </Button>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </CardContent>
             </Card>
           </TabsContent>
@@ -786,7 +933,7 @@ const ProjectMaterialDetail = () => {
                     id="orderQuantity"
                     type="number"
                     value={newOrder.orderedQuantity || ''}
-                    onChange={(e) => setNewOrder(prev => ({ ...prev, orderedQuantity: parseInt(e.target.value) || 0 }))}
+                    onChange={(e) => setNewOrder(prev => ({ ...prev, orderedQuantity: parseFloat(e.target.value) || 0 }))}
                     placeholder="0"
                   />
                   <div className="flex items-center px-3 border rounded-md bg-muted">
@@ -815,21 +962,39 @@ const ProjectMaterialDetail = () => {
                   rows={3}
                 />
               </div>
-              
+
+              {material && !validateOrderCreation(material.id).canOrder && (
+                <div className="space-y-2 border border-orange-200 bg-orange-50 rounded-md p-3">
+                  <div className="flex items-start gap-2">
+                    <Checkbox
+                      id="approvalOverride"
+                      checked={newOrder.approvalOverride}
+                      onCheckedChange={(checked) => setNewOrder(prev => ({ ...prev, approvalOverride: checked as boolean }))}
+                    />
+                    <Label htmlFor="approvalOverride" className="text-sm text-orange-800">
+                      Bestil alligevel — materialet er ikke fuldt godkendt endnu
+                    </Label>
+                  </div>
+                  {newOrder.approvalOverride && (
+                    <Textarea
+                      value={newOrder.approvalOverrideReason}
+                      onChange={(e) => setNewOrder(prev => ({ ...prev, approvalOverrideReason: e.target.value }))}
+                      placeholder="Begrundelse (påkrævet)..."
+                      rows={2}
+                    />
+                  )}
+                </div>
+              )}
+
               <div className="flex gap-2 pt-4">
-                <Button onClick={handleAddOrder} className="flex-1">
-                  Opret Bestilling
+                <Button onClick={handleAddOrder} className="flex-1" disabled={submittingOrder}>
+                  {submittingOrder ? 'Registrerer...' : 'Registrér Bestilling'}
                 </Button>
-                <Button 
-                  variant="outline" 
+                <Button
+                  variant="outline"
                   onClick={() => {
                     setShowNewOrderDialog(false);
-                    setNewOrder({
-                      supplierId: '',
-                      orderedQuantity: 0,
-                      expectedDelivery: '',
-                      comment: '',
-                    });
+                    resetNewOrderForm();
                   }}
                 >
                   Annuller

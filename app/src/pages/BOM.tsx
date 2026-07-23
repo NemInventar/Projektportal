@@ -44,21 +44,24 @@ import { useProject } from '@/contexts/ProjectContext';
 import { useProjectMaterials } from '@/contexts/ProjectMaterialsContext';
 import { useStandardSuppliers } from '@/contexts/StandardSuppliersContext';
 import { usePurchaseOrders } from '@/contexts/PurchaseOrdersContext';
+import { useAuth } from '@/contexts/AuthContext';
 
 const BOM = () => {
   const { activeProject } = useProject();
-  const { 
-    projectMaterials, 
+  const {
+    projectMaterials,
     getApprovalStatus,
     validateOrderCreation
   } = useProjectMaterials();
   const { suppliers } = useStandardSuppliers();
-  const { 
+  const {
     getTotalOrderedQty,
     getNextDeliveryDate,
+    getPOLinesByMaterial,
     findOrCreateDraftPO,
     createPurchaseOrderLine
   } = usePurchaseOrders();
+  const { user } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
   
@@ -123,17 +126,25 @@ const BOM = () => {
   };
 
   const getOrderStatusBadge = (materialId: string) => {
-    const totalOrdered = getTotalOrderedQty(materialId);
-    if (totalOrdered === 0) {
-      return <Badge variant="outline">Ikke bestilt</Badge>;
+    const lines = getPOLinesByMaterial(materialId).filter(line => line.status !== 'cancelled');
+    if (lines.length === 0) {
+      return <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">Ikke bestilt</Badge>;
+    }
+    if (lines.every(line => line.status === 'delivered')) {
+      return <Badge variant="default" className="bg-green-600 text-white">Leveret</Badge>;
     }
     return <Badge variant="default" className="bg-blue-100 text-blue-800">Bestilt</Badge>;
   };
 
+  const getSupplierBadge = (supplierId?: string) => {
+    if (!supplierId) {
+      return <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">Ingen leverandør</Badge>;
+    }
+    return <span>{getSupplierName(supplierId)}</span>;
+  };
+
   const hasApprovalOverride = (materialId: string) => {
-    // TODO: Check if any PO lines for this material have approval override
-    // This would require access to purchase order lines data
-    return false; // Placeholder for now
+    return getPOLinesByMaterial(materialId).some(line => line.approvalOverride);
   };
 
   const formatNextDelivery = (materialId: string) => {
@@ -256,13 +267,13 @@ const BOM = () => {
 
     try {
       // Find or create draft PO
-      const po = findOrCreateDraftPO(activeProject.id, currentSupplier);
+      const po = await findOrCreateDraftPO(activeProject.id, currentSupplier);
 
       // Create PO lines
-      validLines.forEach(line => {
+      for (const line of validLines) {
         const material = currentProjectMaterials.find(m => m.id === line.materialId)!;
-        
-        createPurchaseOrderLine({
+
+        await createPurchaseOrderLine({
           purchaseOrderId: po.id,
           projectMaterialId: line.materialId,
           supplierId: currentSupplier,
@@ -278,10 +289,10 @@ const BOM = () => {
           // Approval override fields
           approvalOverride: line.approvalOverride,
           approvalOverrideReason: line.approvalOverride ? line.approvalOverrideReason : undefined,
-          approvalOverrideBy: line.approvalOverride ? 'current_user' : undefined, // TODO: Get actual user
+          approvalOverrideBy: line.approvalOverride ? (user?.email || 'ukendt') : undefined,
           approvalOverrideAt: line.approvalOverride ? new Date() : undefined,
         });
-      });
+      }
 
       toast({
         title: "Bestilling oprettet",
@@ -295,6 +306,7 @@ const BOM = () => {
       setCurrentSupplier('');
 
     } catch (error) {
+      console.error('Error creating order:', error);
       toast({
         title: "Fejl ved bestilling",
         description: "Der opstod en fejl ved oprettelse af bestillingen",
@@ -452,7 +464,7 @@ const BOM = () => {
                           />
                         </TableCell>
                         <TableCell className="font-medium">{material.name}</TableCell>
-                        <TableCell>{getSupplierName(material.supplierId)}</TableCell>
+                        <TableCell>{getSupplierBadge(material.supplierId)}</TableCell>
                         <TableCell>{material.unit}</TableCell>
                         <TableCell>
                           {material.unitPrice ? (

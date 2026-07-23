@@ -47,8 +47,7 @@ const ProjectMaterials = () => {
   } = useProjectMaterials();
   const {
     getTotalOrderedQty,
-    getNextDeliveryDate,
-    migrateMaterialOrders
+    getNextDeliveryDate
   } = usePurchaseOrders();
   const { materials: standardMaterials } = useStandardMaterials();
   const { suppliers } = useStandardSuppliers();

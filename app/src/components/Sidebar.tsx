@@ -1,6 +1,8 @@
 import React from 'react';
 import { useProject } from '@/contexts/ProjectContext';
 import { useLeads } from '@/features/leads';
+import { useProjectMaterials } from '@/contexts/ProjectMaterialsContext';
+import { usePurchaseOrders } from '@/contexts/PurchaseOrdersContext';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -18,17 +20,30 @@ import {
   Building2,
   Contact,
   Layers,
-  Factory
+  Factory,
+  AlertTriangle
 } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
 const Sidebar = () => {
   const { activeProject } = useProject();
   const { overdueCount } = useLeads();
+  const { projectMaterials, getApprovalStatus } = useProjectMaterials();
+  const { getPOLinesByMaterial } = usePurchaseOrders();
   const navigate = useNavigate();
   const location = useLocation();
 
   const isActive = (path: string) => location.pathname === path;
+
+  // BOM-advarsel: materialer på det aktive projekt der enten ikke er fuldt
+  // godkendt eller slet ikke er bestilt endnu.
+  const bomWarningCount = activeProject
+    ? projectMaterials.filter(m => m.projectId === activeProject.id).filter(m => {
+        const notApproved = getApprovalStatus(m.id) !== 'fully_approved';
+        const notOrdered = getPOLinesByMaterial(m.id).filter(l => l.status !== 'cancelled').length === 0;
+        return notApproved || notOrdered;
+      }).length
+    : 0;
 
   const mainMenuItems: Array<{
     label: string;
@@ -36,6 +51,7 @@ const Sidebar = () => {
     path: string;
     active: boolean;
     badge?: number;
+    warning?: boolean;
   }> = [
     {
       label: 'Leads',
@@ -131,7 +147,9 @@ const Sidebar = () => {
       label: 'BOM',
       icon: ClipboardList,
       path: '/project/bom',
-      active: isActive('/project/bom')
+      active: isActive('/project/bom'),
+      badge: bomWarningCount > 0 ? bomWarningCount : undefined,
+      warning: true,
     },
   ] : [];
 
@@ -223,9 +241,28 @@ const Sidebar = () => {
                       item.active && "bg-primary text-primary-foreground"
                     )}
                     onClick={() => navigate(item.path)}
+                    title={item.badge ? `${item.badge} materiale(r) mangler godkendelse eller bestilling` : undefined}
                   >
                     <item.icon className="h-4 w-4" />
                     <span className="flex-1 text-left">{item.label}</span>
+                    {item.badge ? (
+                      item.warning ? (
+                        <Badge
+                          variant="secondary"
+                          className="h-5 min-w-5 px-1.5 text-xs bg-orange-100 text-orange-800 border-orange-200 gap-0.5"
+                        >
+                          <AlertTriangle className="h-3 w-3" />
+                          {item.badge}
+                        </Badge>
+                      ) : (
+                        <Badge
+                          variant="secondary"
+                          className="h-5 min-w-5 px-1.5 text-xs bg-red-100 text-red-800 border-red-200"
+                        >
+                          {item.badge}
+                        </Badge>
+                      )
+                    ) : null}
                   </Button>
                 ))}
               </div>

@@ -25,10 +25,11 @@ import { useToast } from '@/hooks/use-toast';
 import { useProject } from '@/contexts/ProjectContext';
 import { useProjectProducts } from '@/contexts/ProjectProductsContext';
 import { useProjectMaterials } from '@/contexts/ProjectMaterialsContext';
+import { usePurchaseOrders } from '@/contexts/PurchaseOrdersContext';
 import { ProjectProduct, PRODUCT_TYPES } from '@/types/products';
-import { 
-  ArrowLeft, 
-  Save, 
+import {
+  ArrowLeft,
+  Save,
   Package,
   Tag,
   DollarSign,
@@ -38,7 +39,8 @@ import {
   Plus,
   BarChart3,
   Edit,
-  Trash2
+  Trash2,
+  XCircle
 } from 'lucide-react';
 import MaterialSelectModal from '@/components/MaterialSelectModal';
 import LaborModal from '@/components/LaborModal';
@@ -65,6 +67,17 @@ const ProductDetail = () => {
     deleteOtherCostLine
   } = useProjectProducts();
   const { projectMaterials } = useProjectMaterials();
+  const { getPOLinesByMaterial } = usePurchaseOrders();
+
+  const getMaterialProcurementFlags = (materialId?: string) => {
+    if (!materialId) return null;
+    const material = projectMaterials.find(m => m.id === materialId);
+    const lines = getPOLinesByMaterial(materialId).filter(l => l.status !== 'cancelled');
+    const noSupplier = !material?.supplierId;
+    const notOrdered = lines.length === 0;
+    const delivered = lines.length > 0 && lines.every(l => l.status === 'delivered');
+    return { noSupplier, notOrdered, delivered };
+  };
 
   const [product, setProduct] = useState<ProjectProduct | null>(null);
   const [formData, setFormData] = useState({
@@ -663,7 +676,8 @@ const ProductDetail = () => {
                     product && getProductMaterialLines(product.id).map((line) => {
                       const material = projectMaterials.find(m => m.id === line.projectMaterialId);
                       const lineTotal = line.qty * (line.unitCostOverride ?? material?.unitPrice ?? 0);
-                      
+                      const flags = getMaterialProcurementFlags(line.projectMaterialId);
+
                       return (
                         <div key={line.id} className="p-4 border-b hover:bg-muted/50">
                           <div className="grid grid-cols-12 gap-4 items-center text-sm">
@@ -673,6 +687,26 @@ const ProductDetail = () => {
                                 <div className="text-muted-foreground text-xs">{line.lineDescription}</div>
                               )}
                               <div className="text-muted-foreground text-xs">{material?.name}</div>
+                              {flags && (
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  {flags.noSupplier && (
+                                    <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200 text-xs">
+                                      <XCircle className="h-3 w-3 mr-1" />
+                                      Ingen leverandør
+                                    </Badge>
+                                  )}
+                                  {flags.notOrdered ? (
+                                    <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200 text-xs">
+                                      <XCircle className="h-3 w-3 mr-1" />
+                                      Ikke bestilt
+                                    </Badge>
+                                  ) : flags.delivered ? (
+                                    <Badge variant="default" className="bg-green-600 text-white text-xs">Leveret</Badge>
+                                  ) : (
+                                    <Badge variant="default" className="bg-blue-100 text-blue-800 text-xs">Bestilt</Badge>
+                                  )}
+                                </div>
+                              )}
                             </div>
                             <div className="col-span-2">
                               {line.calcEnabled ? (

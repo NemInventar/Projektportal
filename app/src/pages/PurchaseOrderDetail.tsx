@@ -128,10 +128,12 @@ const PurchaseOrderDetail = () => {
     switch (status) {
       case 'ordered':
         return <Badge variant="outline" className="bg-blue-100 text-blue-800">Bestilt</Badge>;
-      case 'partially_received':
-        return <Badge variant="default" className="bg-yellow-100 text-yellow-800">Delvist modtaget</Badge>;
-      case 'received':
-        return <Badge variant="default" className="bg-green-100 text-green-800">Modtaget</Badge>;
+      case 'confirmed':
+        return <Badge variant="default" className="bg-green-100 text-green-800">Bekræftet</Badge>;
+      case 'delivered':
+        return <Badge variant="default" className="bg-green-600 text-white">Leveret</Badge>;
+      case 'cancelled':
+        return <Badge variant="destructive">Annulleret</Badge>;
       default:
         return <Badge variant="outline">{status}</Badge>;
     }
@@ -158,29 +160,52 @@ const PurchaseOrderDetail = () => {
     }, 0);
   };
 
-  const handleStatusChange = (newStatus: string) => {
-    updatePurchaseOrder(purchaseOrder.id, { status: newStatus });
-    toast({
-      title: "Status opdateret",
-      description: `Ordrestatus ændret til ${newStatus}`,
-    });
+  const handleStatusChange = async (newStatus: string) => {
+    try {
+      await updatePurchaseOrder(purchaseOrder.id, { status: newStatus as any });
+      toast({
+        title: "Status opdateret",
+        description: `Ordrestatus ændret til ${newStatus}`,
+      });
+    } catch (error) {
+      console.error('Error updating PO status:', error);
+      toast({ title: "Fejl", description: "Status kunne ikke gemmes", variant: "destructive" });
+    }
   };
 
-  const handleNotesUpdate = () => {
-    updatePurchaseOrder(purchaseOrder.id, { notes });
-    setEditingNotes(false);
-    toast({
-      title: "Noter opdateret",
-      description: "Ordrenoter er blevet gemt",
-    });
+  const handleNotesUpdate = async () => {
+    try {
+      await updatePurchaseOrder(purchaseOrder.id, { notes });
+      setEditingNotes(false);
+      toast({
+        title: "Noter opdateret",
+        description: "Ordrenoter er blevet gemt",
+      });
+    } catch (error) {
+      console.error('Error updating PO notes:', error);
+      toast({ title: "Fejl", description: "Noter kunne ikke gemmes", variant: "destructive" });
+    }
   };
 
-  const handleLineUpdate = (lineId: string, field: string, value: any) => {
-    updatePurchaseOrderLine(lineId, { [field]: value });
-    toast({
-      title: "Linje opdateret",
-      description: "Ordrelinjen er blevet opdateret",
-    });
+  const handleLineUpdate = async (lineId: string, field: string, value: any) => {
+    try {
+      // Marker en linje leveret uden en dato -> foreslå dagens dato med det samme
+      const updates: Record<string, any> = { [field]: value };
+      if (field === 'status' && value === 'delivered') {
+        const line = poLines.find(l => l.id === lineId);
+        if (line && !line.deliveredDate) {
+          updates.deliveredDate = new Date();
+        }
+      }
+      await updatePurchaseOrderLine(lineId, updates);
+      toast({
+        title: "Linje opdateret",
+        description: "Ordrelinjen er blevet opdateret",
+      });
+    } catch (error) {
+      console.error('Error updating PO line:', error);
+      toast({ title: "Fejl", description: "Linjen kunne ikke gemmes", variant: "destructive" });
+    }
   };
 
   const getMaterialName = (materialId: string) => {
@@ -338,6 +363,7 @@ const PurchaseOrderDetail = () => {
                       <TableHead>Total</TableHead>
                       <TableHead>Forventet levering</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Leveret dato</TableHead>
                       <TableHead>Noter</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -398,7 +424,30 @@ const PurchaseOrderDetail = () => {
                             />
                           </TableCell>
                           <TableCell>
-                            {getLineStatusBadge(line.status)}
+                            <Select
+                              value={line.status}
+                              onValueChange={(value) => handleLineUpdate(line.id, 'status', value)}
+                              disabled={purchaseOrder.status === 'cancelled'}
+                            >
+                              <SelectTrigger className="w-36">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="ordered">Bestilt</SelectItem>
+                                <SelectItem value="confirmed">Bekræftet</SelectItem>
+                                <SelectItem value="delivered">Leveret</SelectItem>
+                                <SelectItem value="cancelled">Annulleret</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              type="date"
+                              value={line.deliveredDate ? line.deliveredDate.toISOString().split('T')[0] : ''}
+                              onChange={(e) => handleLineUpdate(line.id, 'deliveredDate', e.target.value ? new Date(e.target.value) : null)}
+                              className="w-36"
+                              disabled={purchaseOrder.status === 'cancelled'}
+                            />
                           </TableCell>
                           <TableCell>
                             <Input

@@ -48,6 +48,8 @@ import { useToast } from '@/hooks/use-toast';
 import { useProject } from '@/contexts/ProjectContext';
 import { useStandardMaterials } from '@/contexts/StandardMaterialsContext';
 import { useStandardSuppliers } from '@/contexts/StandardSuppliersContext';
+import { usePurchaseOrders } from '@/contexts/PurchaseOrdersContext';
+import { XCircle } from 'lucide-react';
 
 interface ProjectMaterial {
   id: string;
@@ -78,6 +80,7 @@ const ProjectMaterialsV1: React.FC = () => {
   const { activeProject } = useProject();
   const { materials: standardMaterials } = useStandardMaterials();
   const { suppliers } = useStandardSuppliers();
+  const { getPOLinesByMaterial } = usePurchaseOrders();
   const { toast } = useToast();
   const navigate = useNavigate();
   
@@ -249,6 +252,33 @@ const ProjectMaterialsV1: React.FC = () => {
     if (!supplierId) return '-';
     const supplier = suppliers.find(s => s.id === supplierId);
     return supplier?.name || 'Ukendt leverandør';
+  };
+
+  const getProcurementBadges = (material: ProjectMaterial) => {
+    const lines = getPOLinesByMaterial(material.id).filter(l => l.status !== 'cancelled');
+    const notOrdered = lines.length === 0;
+    const delivered = lines.length > 0 && lines.every(l => l.status === 'delivered');
+
+    return (
+      <div className="flex flex-wrap gap-1">
+        {!material.supplierId && (
+          <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">
+            <XCircle className="h-3 w-3 mr-1" />
+            Ingen leverandør
+          </Badge>
+        )}
+        {notOrdered ? (
+          <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">
+            <XCircle className="h-3 w-3 mr-1" />
+            Ikke bestilt
+          </Badge>
+        ) : delivered ? (
+          <Badge variant="default" className="bg-green-600 text-white">Leveret</Badge>
+        ) : (
+          <Badge variant="default" className="bg-blue-100 text-blue-800">Bestilt</Badge>
+        )}
+      </div>
+    );
   };
 
   const resetForm = () => {
@@ -925,6 +955,7 @@ const ProjectMaterialsV1: React.FC = () => {
                     <TableHead>Enhed</TableHead>
                     <TableHead>Generisk</TableHead>
                     <TableHead>Leverandør</TableHead>
+                    <TableHead>Indkøbsstatus</TableHead>
                     <TableHead>Enhedspris</TableHead>
                     <TableHead>Prisstatus</TableHead>
                     <TableHead>Lead time</TableHead>
@@ -934,8 +965,8 @@ const ProjectMaterialsV1: React.FC = () => {
                 </TableHeader>
                 <TableBody>
                   {filteredMaterials.map((material) => (
-                    <TableRow 
-                      key={material.id} 
+                    <TableRow
+                      key={material.id}
                       className="cursor-pointer hover:bg-muted/50"
                       onClick={() => handleEdit(material)}
                     >
@@ -948,6 +979,7 @@ const ProjectMaterialsV1: React.FC = () => {
                         </Badge>
                       </TableCell>
                       <TableCell>{getSupplierName(material.supplierId)}</TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()}>{getProcurementBadges(material)}</TableCell>
                       <TableCell>
                         {material.unitPrice ? (
                           `${material.unitPrice.toLocaleString('da-DK')} ${material.currency}`
