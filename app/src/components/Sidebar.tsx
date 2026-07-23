@@ -74,6 +74,12 @@ const Sidebar = () => {
       active: isActive('/portfolio/materials')
     },
     {
+      label: 'Produkt-indkøb',
+      icon: Package,
+      path: '/products/procurement-status',
+      active: isActive('/products/procurement-status')
+    },
+    {
       label: 'Firmaer',
       icon: Building2,
       path: '/firmaer',

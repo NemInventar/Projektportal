@@ -26,6 +26,9 @@ import { useProject } from '@/contexts/ProjectContext';
 import { useProjectProducts } from '@/contexts/ProjectProductsContext';
 import { useProjectMaterials } from '@/contexts/ProjectMaterialsContext';
 import { usePurchaseOrders } from '@/contexts/PurchaseOrdersContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/integrations/supabase/client';
+import { Checkbox } from '@/components/ui/checkbox';
 import { ProjectProduct, PRODUCT_TYPES } from '@/types/products';
 import {
   ArrowLeft,
@@ -40,7 +43,9 @@ import {
   BarChart3,
   Edit,
   Trash2,
-  XCircle
+  XCircle,
+  ClipboardCheck,
+  CheckCircle
 } from 'lucide-react';
 import MaterialSelectModal from '@/components/MaterialSelectModal';
 import LaborModal from '@/components/LaborModal';
@@ -68,6 +73,7 @@ const ProductDetail = () => {
   } = useProjectProducts();
   const { projectMaterials } = useProjectMaterials();
   const { getPOLinesByMaterial } = usePurchaseOrders();
+  const { user } = useAuth();
 
   const getMaterialProcurementFlags = (materialId?: string) => {
     if (!materialId) return null;
@@ -80,6 +86,25 @@ const ProductDetail = () => {
   };
 
   const [product, setProduct] = useState<ProjectProduct | null>(null);
+
+  // Produktions-tjekliste — fleksibel liste (project_product_production_checklist),
+  // ikke faste kolonner, så flere trin kan tilføjes senere uden skema-ændring.
+  interface ChecklistItem {
+    id: string;
+    item_key: string;
+    item_label: string;
+    status: 'pending' | 'done';
+    completed_by: string | null;
+    completed_at: string | null;
+    sort_order: number;
+  }
+  const DEFAULT_CHECKLIST_ITEMS = [
+    { item_key: 'kosovo_review', item_label: 'Review af produkt med Kosovo-fabrik', sort_order: 1 },
+    { item_key: 'drawings_created', item_label: 'Produktionstegninger oprettet', sort_order: 2 },
+    { item_key: 'drawings_approved', item_label: 'Produktionstegninger reviewet og godkendt', sort_order: 3 },
+  ];
+  const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([]);
+  const [checklistLoading, setChecklistLoading] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
     productType: 'other' as const,
@@ -132,6 +157,64 @@ const ProductDetail = () => {
       }
     }
   }, [id, products]);
+
+  // Load produktions-tjekliste for produktet — seed default-trin første gang produktet åbnes
+  useEffect(() => {
+    const loadChecklist = async () => {
+      if (!id) return;
+      setChecklistLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('project_product_production_checklist')
+          .select('*')
+          .eq('project_product_id', id)
+          .order('sort_order');
+
+        if (error) throw error;
+
+        if (!data || data.length === 0) {
+          const { data: seeded, error: seedError } = await supabase
+            .from('project_product_production_checklist')
+            .insert(DEFAULT_CHECKLIST_ITEMS.map(item => ({ ...item, project_product_id: id })))
+            .select();
+          if (seedError) throw seedError;
+          setChecklistItems((seeded || []) as ChecklistItem[]);
+        } else {
+          setChecklistItems(data as ChecklistItem[]);
+        }
+      } catch (error) {
+        console.error('Error loading production checklist:', error);
+      } finally {
+        setChecklistLoading(false);
+      }
+    };
+
+    if (id && id !== 'new') {
+      loadChecklist();
+    }
+  }, [id]);
+
+  const handleToggleChecklistItem = async (itemId: string, currentStatus: 'pending' | 'done') => {
+    const newStatus: 'pending' | 'done' = currentStatus === 'done' ? 'pending' : 'done';
+    const payload: Partial<ChecklistItem> = {
+      status: newStatus,
+      completed_by: newStatus === 'done' ? (user?.email || 'Ukendt bruger') : null,
+      completed_at: newStatus === 'done' ? new Date().toISOString() : null,
+    };
+    try {
+      const { error } = await supabase
+        .from('project_product_production_checklist')
+        .update(payload)
+        .eq('id', itemId);
+      if (error) throw error;
+
+      setChecklistItems(prev => prev.map(item => item.id === itemId ? { ...item, ...payload } : item));
+      toast({ title: newStatus === 'done' ? "Markeret udført" : "Markering fjernet" });
+    } catch (error) {
+      console.error('Error updating checklist item:', error);
+      toast({ title: "Fejl", description: "Kunne ikke gemme tjekliste-status", variant: "destructive" });
+    }
+  };
 
   // Track changes
   useEffect(() => {
@@ -379,6 +462,10 @@ const ProductDetail = () => {
             <TabsTrigger value="oevrige" className="gap-2">
               <Plus className="h-4 w-4" />
               Øvrige
+            </TabsTrigger>
+            <TabsTrigger value="produktion" className="gap-2">
+              <ClipboardCheck className="h-4 w-4" />
+              Produktion
             </TabsTrigger>
           </TabsList>
 
@@ -1085,7 +1172,53 @@ const ProductDetail = () => {
                 </div>
               </CardContent>
             </Card>
-            
+
+          </TabsContent>
+
+          {/* Produktion Tab — tjekliste for produktionsklargøring efter vundet sag */}
+          <TabsContent value="produktion">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <ClipboardCheck className="h-5 w-5" />
+                  Produktionstjekliste
+                </CardTitle>
+                <p className="text-sm text-muted-foreground">
+                  Trin der skal gennemføres efter tilbud er vundet, før/under produktion.
+                </p>
+              </CardHeader>
+              <CardContent>
+                {checklistLoading ? (
+                  <div className="text-center py-6 text-muted-foreground">Indlæser...</div>
+                ) : (
+                  <div className="space-y-3">
+                    {checklistItems.map(item => (
+                      <div
+                        key={item.id}
+                        className={`flex items-start gap-3 p-3 rounded-lg border ${item.status === 'done' ? 'bg-green-50 border-green-200' : 'bg-muted/30'}`}
+                      >
+                        <Checkbox
+                          checked={item.status === 'done'}
+                          onCheckedChange={() => handleToggleChecklistItem(item.id, item.status)}
+                          className="mt-0.5"
+                        />
+                        <div className="flex-1">
+                          <div className={`font-medium ${item.status === 'done' ? 'text-green-800' : ''}`}>
+                            {item.item_label}
+                          </div>
+                          {item.status === 'done' && item.completed_by && (
+                            <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
+                              <CheckCircle className="h-3 w-3" />
+                              {item.completed_by} · {item.completed_at ? new Date(item.completed_at).toLocaleDateString('da-DK') : ''}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </TabsContent>
 
         </Tabs>

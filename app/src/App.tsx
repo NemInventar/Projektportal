@@ -30,6 +30,7 @@ import Index from "./pages/Index";
 import ProjectOverview from "./pages/ProjectOverview";
 import Products from "./pages/Products";
 import ProductDetail from "./pages/ProductDetail";
+import ProductProcurementStatus from "./pages/ProductProcurementStatus";
 import Materials from "./pages/Materials";
 import Suppliers from "./pages/Suppliers";
 import Quotes from "./pages/Quotes";
@@ -145,6 +146,7 @@ const App = () => (
 
           {/* Global tilbudsoversigt */}
           <Route path="/quotes" element={<ProtectedRoute><AppProviders><AllQuotes /></AppProviders></ProtectedRoute>} />
+          <Route path="/products/procurement-status" element={<ProtectedRoute><AppProviders><ProductProcurementStatus /></AppProviders></ProtectedRoute>} />
 
           {/* Firmaer (kunder, leverandører, partnere) */}
           <Route path="/firmaer" element={<ProtectedRoute><AppProviders><Companies /></AppProviders></ProtectedRoute>} />
