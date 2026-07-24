@@ -116,29 +116,35 @@ const ProductProcurementStatus: React.FC = () => {
     loadData();
   }, []);
 
-  const filteredRows = useMemo(() => {
+  // Projekt + søgning, men UDEN statusFilter — dette er scopet som
+  // summary-kortene skal vise (kortene ER status-fordelingen, så de skal
+  // ikke selv filtreres på status).
+  const projectScopedRows = useMemo(() => {
     const s = search.trim().toLowerCase();
     return rows.filter(r => {
       if (projectFilter !== 'all' && r.project_id !== projectFilter) return false;
-      if (statusFilter !== 'all' && r.status !== statusFilter) return false;
       if (s.length > 0) {
         const hay = [r.product_name, r.project_name, r.project_number].filter(Boolean).join(' ').toLowerCase();
         if (!hay.includes(s)) return false;
       }
       return true;
     });
-  }, [rows, projectFilter, statusFilter, search]);
+  }, [rows, projectFilter, search]);
+
+  const filteredRows = useMemo(() => {
+    return projectScopedRows.filter(r => statusFilter === 'all' || r.status === statusFilter);
+  }, [projectScopedRows, statusFilter]);
 
   const summary = useMemo(() => {
     return {
-      total: rows.length,
-      fully: rows.filter(r => r.status === 'fully_procured').length,
-      partially: rows.filter(r => r.status === 'partially_procured').length,
-      notProcured: rows.filter(r => r.status === 'not_procured').length,
-      noMaterials: rows.filter(r => r.status === 'no_materials_linked').length,
-      noSoldQty: rows.filter(r => r.status === 'no_sold_qty').length,
+      total: projectScopedRows.length,
+      fully: projectScopedRows.filter(r => r.status === 'fully_procured').length,
+      partially: projectScopedRows.filter(r => r.status === 'partially_procured').length,
+      notProcured: projectScopedRows.filter(r => r.status === 'not_procured').length,
+      noMaterials: projectScopedRows.filter(r => r.status === 'no_materials_linked').length,
+      noSoldQty: projectScopedRows.filter(r => r.status === 'no_sold_qty').length,
     };
-  }, [rows]);
+  }, [projectScopedRows]);
 
   const getStatusBadge = (status: ProductProcurementRow['status']) => {
     switch (status) {
