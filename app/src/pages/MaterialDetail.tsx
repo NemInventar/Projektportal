@@ -66,7 +66,7 @@ const MaterialDetail = () => {
     removeDocument,
     getMaterialDocuments 
   } = useStandardMaterials();
-  const { suppliers } = useStandardSuppliers();
+  const { suppliers, addSupplier } = useStandardSuppliers();
 
   const isNew = id === 'new';
   const material = isNew ? null : materials.find(m => m.id === id);
@@ -375,7 +375,7 @@ const MaterialDetail = () => {
     });
   };
 
-  const handleCreateSupplier = () => {
+  const handleCreateSupplier = async () => {
     if (!newSupplierData.name.trim()) {
       toast({
         title: "Fejl",
@@ -385,27 +385,40 @@ const MaterialDetail = () => {
       return;
     }
 
-    // In a real app, this would call addSupplier from StandardSuppliersContext
-    // For now, we'll simulate it by creating a temporary supplier
-    const tempSupplierId = `temp_${Date.now()}`;
-    
-    // Add to form data and close dialog
-    setFormData(prev => ({ ...prev, primarySupplierId: tempSupplierId }));
-    
-    // Reset form
-    setNewSupplierData({
-      name: '',
-      cvr: '',
-      contactPerson: '',
-      email: '',
-      phone: '',
-    });
-    setShowNewSupplierDialog(false);
-    
-    toast({
-      title: "Leverandør oprettet",
-      description: `Leverandøren "${newSupplierData.name.trim()}" er blevet tilføjet`,
-    });
+    try {
+      const created = await addSupplier({
+        name: newSupplierData.name.trim(),
+        cvr: newSupplierData.cvr || undefined,
+        contactPerson: newSupplierData.contactPerson || undefined,
+        email: newSupplierData.email || undefined,
+        phone: newSupplierData.phone || undefined,
+        country: 'Danmark',
+        status: 'Aktiv',
+      });
+
+      setFormData(prev => ({ ...prev, primarySupplierId: created.id }));
+
+      setNewSupplierData({
+        name: '',
+        cvr: '',
+        contactPerson: '',
+        email: '',
+        phone: '',
+      });
+      setShowNewSupplierDialog(false);
+
+      toast({
+        title: "Leverandør oprettet",
+        description: `Leverandøren "${newSupplierData.name.trim()}" er blevet tilføjet`,
+      });
+    } catch (error) {
+      toast({
+        title: "Fejl",
+        description: "Der opstod en fejl ved oprettelse af leverandøren",
+        variant: "destructive",
+      });
+      console.error('Error creating supplier:', error);
+    }
   };
 
   const getSupplierName = (supplierId: string) => {

@@ -27,7 +27,7 @@ interface StandardSuppliersContextType {
   suppliers: StandardSupplier[];
   loading: boolean;
   setSuppliers: (suppliers: StandardSupplier[]) => void;
-  addSupplier: (supplier: Omit<StandardSupplier, 'id' | 'createdAt' | 'updatedAt' | 'isStandard'>) => Promise<void>;
+  addSupplier: (supplier: Omit<StandardSupplier, 'id' | 'createdAt' | 'updatedAt' | 'isStandard'>) => Promise<StandardSupplier>;
   updateSupplier: (id: string, updates: Partial<StandardSupplier>) => Promise<void>;
   archiveSupplier: (id: string) => Promise<void>;
   reload: () => Promise<void>;
@@ -114,15 +114,18 @@ export const StandardSuppliersProvider: React.FC<{ children: ReactNode }> = ({ c
       is_partner: false,
       is_standard: true,
     };
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('companies_2026_04_27')
-      .insert(row);
+      .insert(row)
+      .select()
+      .single();
     if (error) {
       console.error('Error adding supplier:', error);
       throw error;
     }
     // Reload fra view'et — view'et giver det compat-formatterede shape.
     await loadSuppliers();
+    return rowToSupplier(data);
   };
 
   const updateSupplier = async (id: string, updates: Partial<StandardSupplier>) => {
