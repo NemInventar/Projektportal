@@ -48,6 +48,7 @@ import {
   CheckCircle
 } from 'lucide-react';
 import MaterialSelectModal from '@/components/MaterialSelectModal';
+import PromoteToCatalogDialog from '@/components/PromoteToCatalogDialog';
 import LaborModal from '@/components/LaborModal';
 import TransportModal from '@/components/TransportModal';
 import OtherCostModal from '@/components/OtherCostModal';
@@ -120,6 +121,7 @@ const ProductDetail = () => {
   
   // Dialog states
   const [showMaterialDialog, setShowMaterialDialog] = useState(false);
+  const [promotingMaterialId, setPromotingMaterialId] = useState<string | null>(null);
   const [showLaborDialog, setShowLaborDialog] = useState(false);
   const [showTransportDialog, setShowTransportDialog] = useState(false);
   const [showOtherCostDialog, setShowOtherCostDialog] = useState(false);
@@ -794,6 +796,21 @@ const ProductDetail = () => {
                                   )}
                                 </div>
                               )}
+                              {material && !material.standardMaterialId && (
+                                <div className="flex items-center gap-1 mt-1">
+                                  <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-xs">
+                                    Ad-hoc — ikke i katalog
+                                  </Badge>
+                                  <Button
+                                    size="sm"
+                                    variant="link"
+                                    className="h-auto p-0 text-xs"
+                                    onClick={() => setPromotingMaterialId(material.id)}
+                                  >
+                                    Promote to catalog entry
+                                  </Button>
+                                </div>
+                              )}
                             </div>
                             <div className="col-span-2">
                               {line.calcEnabled ? (
@@ -1235,7 +1252,20 @@ const ProductDetail = () => {
           editingLine={editingMaterialLine}
           onSuccess={handleRefresh}
         />
-        
+
+        {promotingMaterialId && (() => {
+          const material = projectMaterials.find(m => m.id === promotingMaterialId);
+          if (!material) return null;
+          return (
+            <PromoteToCatalogDialog
+              open={!!promotingMaterialId}
+              onOpenChange={(open) => { if (!open) setPromotingMaterialId(null); }}
+              projectMaterial={material}
+              onSuccess={handleRefresh}
+            />
+          );
+        })()}
+
         <LaborModal
           open={showLaborDialog}
           onOpenChange={setShowLaborDialog}

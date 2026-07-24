@@ -999,14 +999,16 @@ const ProjectMaterialsV1: React.FC = () => {
         <Card>
           <CardContent className="p-4">
             <div className="flex flex-wrap gap-4 items-center">
-              {/* Actions */}
-              <Button onClick={handleCreate} className="gap-2">
-                <Plus className="h-4 w-4" />
-                Opret materiale
-              </Button>
-              <Button onClick={() => setShowImportModal(true)} variant="outline" className="gap-2">
+              {/* Actions — katalog-import er default-vejen (Milot, 2026-07-23:
+                  vi vil så vidt muligt bruge rigtige materialer fra materiale-listen
+                  fremfor ad-hoc fritekst), ad-hoc oprettelse er sekundær/outline */}
+              <Button onClick={() => setShowImportModal(true)} className="gap-2">
                 <Download className="h-4 w-4" />
-                Importér fra standard
+                Vælg fra materialekatalog
+              </Button>
+              <Button onClick={handleCreate} variant="outline" className="gap-2">
+                <Plus className="h-4 w-4" />
+                Opret ad-hoc materiale
               </Button>
               <Button onClick={() => setShowBulkUploadModal(true)} variant="outline" className="gap-2">
                 <Upload className="h-4 w-4" />
@@ -1116,7 +1118,24 @@ const ProjectMaterialsV1: React.FC = () => {
                       className={`cursor-pointer hover:bg-muted/50 ${needsKosovoTransportWarning(material) ? 'bg-red-50 hover:bg-red-100' : ''}`}
                       onClick={() => handleEdit(material)}
                     >
-                      <TableCell className="font-medium">{material.name}</TableCell>
+                      <TableCell className="font-medium">
+                        {material.name}
+                        {!material.standardMaterialId && (
+                          <div className="flex items-center gap-1.5 mt-1" onClick={(e) => e.stopPropagation()}>
+                            <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-xs">
+                              Ikke i katalog
+                            </Badge>
+                            <Button
+                              variant="link"
+                              size="sm"
+                              className="h-auto p-0 text-xs"
+                              onClick={() => activeProject && navigate(`/projects/${activeProject.id}/materials/${material.id}`)}
+                            >
+                              Promote →
+                            </Button>
+                          </div>
+                        )}
+                      </TableCell>
                       <TableCell>{material.category}</TableCell>
                       <TableCell>{material.unit}</TableCell>
                       <TableCell>
@@ -1186,7 +1205,15 @@ const ProjectMaterialsV1: React.FC = () => {
                 {editingMaterial ? 'Redigér materialets oplysninger nedenfor.' : 'Udfyld oplysningerne for det nye materiale.'}
               </DialogDescription>
             </DialogHeader>
-            
+
+            {!editingMaterial && (
+              <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-md p-3">
+                Findes materialet i forvejen i standardkataloget? Brug "Vælg fra materialekatalog" i stedet —
+                det holder materialet koblet til rigtige leverandør-/pris-data. Brug kun dette til reelt
+                projektspecifikke engangs-materialer.
+              </p>
+            )}
+
             <div className="space-y-6">
               {/* Stamdata */}
               <div className="space-y-4">

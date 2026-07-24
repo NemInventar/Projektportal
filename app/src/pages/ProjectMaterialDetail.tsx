@@ -54,6 +54,7 @@ import { useStandardMaterials } from '@/contexts/StandardMaterialsContext';
 import { usePurchaseOrders } from '@/contexts/PurchaseOrdersContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { Checkbox } from '@/components/ui/checkbox';
+import PromoteToCatalogDialog from '@/components/PromoteToCatalogDialog';
 
 const ProjectMaterialDetail = () => {
   const { projectId, materialId } = useParams();
@@ -82,6 +83,7 @@ const ProjectMaterialDetail = () => {
   const { user } = useAuth();
 
   const [material, setMaterial] = useState<ProjectMaterial | null>(null);
+  const [showPromoteDialog, setShowPromoteDialog] = useState(false);
   const [showNewOrderDialog, setShowNewOrderDialog] = useState(false);
   const [submittingOrder, setSubmittingOrder] = useState(false);
   const [newOrder, setNewOrder] = useState({
@@ -542,6 +544,22 @@ const ProjectMaterialDetail = () => {
                 </div>
               </CardContent>
             </Card>
+
+            {!isNew && !material.standardMaterialId && (
+              <Card className="mt-6 border-amber-200 bg-amber-50">
+                <CardContent className="py-4 flex items-center justify-between gap-4">
+                  <div>
+                    <p className="font-medium text-amber-900">Ad-hoc materiale — ikke i standardkataloget</p>
+                    <p className="text-sm text-amber-800">
+                      Dette materiale er oprettet som en fri tekst-beskrivelse, ikke koblet til et rigtigt katalogmateriale.
+                    </p>
+                  </div>
+                  <Button variant="outline" className="bg-white shrink-0" onClick={() => setShowPromoteDialog(true)}>
+                    Promote to catalog entry
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
 
             <Card className="mt-6">
               <CardHeader>
@@ -1198,6 +1216,14 @@ const ProjectMaterialDetail = () => {
             </div>
           </DialogContent>
         </Dialog>
+
+        {material && (
+          <PromoteToCatalogDialog
+            open={showPromoteDialog}
+            onOpenChange={setShowPromoteDialog}
+            projectMaterial={material}
+          />
+        )}
       </div>
     </Layout>
   );

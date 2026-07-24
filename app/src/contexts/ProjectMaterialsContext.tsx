@@ -374,6 +374,7 @@ export const ProjectMaterialsProvider: React.FC<{ children: ReactNode }> = ({ ch
           price_status: updates.priceStatus,
           price_note: updates.priceNote,
           sourcing_decision: updates.sourcingDecision,
+          ...(updates.standardMaterialId !== undefined ? { standard_material_id: updates.standardMaterialId } : {}),
           kosovo_target_delivery_date:
             updates.kosovoTargetDeliveryDate === undefined
               ? undefined

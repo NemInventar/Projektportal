@@ -44,7 +44,7 @@ interface StandardMaterialsContextType {
   documents: MaterialDocument[];
   loading: boolean;
   setMaterials: (materials: StandardMaterial[]) => void;
-  addMaterial: (material: Omit<StandardMaterial, 'id' | 'createdAt' | 'updatedAt' | 'isStandard'>) => Promise<void>;
+  addMaterial: (material: Omit<StandardMaterial, 'id' | 'createdAt' | 'updatedAt' | 'isStandard'>) => Promise<StandardMaterial>;
   updateMaterial: (id: string, updates: Partial<StandardMaterial>) => Promise<void>;
   archiveMaterial: (id: string) => void;
   addPrice: (price: Omit<MaterialPrice, 'id' | 'createdAt'>) => Promise<void>;
@@ -342,6 +342,7 @@ export const StandardMaterialsProvider: React.FC<{ children: ReactNode }> = ({ c
 
       setMaterials(prev => [...prev, newMaterial]);
       console.log('Material added to state successfully');
+      return newMaterial;
     } catch (error) {
       console.error('Error adding material:', error);
       console.error('Error details:', error.message, error.details, error.hint);

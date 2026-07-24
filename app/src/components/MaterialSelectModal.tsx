@@ -332,7 +332,14 @@ const MaterialSelectModal: React.FC<MaterialSelectModalProps> = ({
                       >
                         <TableCell>
                           <div>
-                            <div className="font-medium">{material.name}</div>
+                            <div className="font-medium flex items-center gap-1.5">
+                              {material.name}
+                              {!material.standardMaterialId && (
+                                <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-xs">
+                                  Ikke i katalog
+                                </Badge>
+                              )}
+                            </div>
                             {material.description && (
                               <div className="text-sm text-muted-foreground">{material.description}</div>
                             )}
