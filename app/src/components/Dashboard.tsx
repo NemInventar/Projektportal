@@ -51,8 +51,23 @@ const PHASE_ORDER: Project['phase'][] = [
   'Produktion',
   'Garanti',
 ];
-const INACTIVE: Project['phase'][] = ['Tabt', 'Fravalgt', 'Arkiv'];
+// 'Afsluttet' = leveret, betalt, lukket. Inaktiv i listen (den skal ikke fylde i det
+// daglige), men den er noget helt andet end Tabt og Arkiv — og skal kunne skelnes.
+const INACTIVE: Project['phase'][] = ['Afsluttet', 'Tabt', 'Fravalgt', 'Arkiv'];
 const ALL_PHASES: Project['phase'][] = [...PHASE_ORDER, ...INACTIVE];
+
+// Projekttyper. SKAL matche CHECK-constraint'en projects_project_type_check i databasen.
+// 'intern' er load-bearing: den gør projektet til et internt omkostningssted som v_cashflow
+// tæller som drift (90001 Kontor DK, 90002 Fabrik Kosovo).
+const PROJECT_TYPES: { value: string; label: string }[] = [
+  { value: 'inventar',      label: 'Inventar (løst)' },
+  { value: 'fast_inventar', label: 'Fast inventar' },
+  { value: 'moebler',       label: 'Møbler' },
+  { value: 'montage',       label: 'Montage / installation' },
+  { value: 'konsulent',     label: 'Konsulent (Foresite)' },
+  { value: 'intern',        label: 'Internt omkostningssted' },
+  { value: 'andet',         label: 'Andet — ikke arbejde' },
+];
 
 const BADGE: Record<string, string> = {
   'Afventer opstart':       'bg-slate-100 text-slate-800 border-slate-200',
@@ -61,6 +76,7 @@ const BADGE: Record<string, string> = {
   'Kontrakt og planlægning':'bg-amber-100 text-amber-800 border-amber-200',
   Produktion:               'bg-green-100 text-green-800 border-green-200',
   Garanti:                  'bg-purple-100 text-purple-800 border-purple-200',
+  Afsluttet:                'bg-emerald-100 text-emerald-800 border-emerald-200',
   Tabt:                     'bg-red-100 text-red-800 border-red-200',
   Fravalgt:                 'bg-stone-100 text-stone-800 border-stone-200',
   Arkiv:                    'bg-gray-100 text-gray-800 border-gray-200',
@@ -209,7 +225,20 @@ function ProjectForm({ project, onSubmit, onCancel }: {
           </Select>
         </Field>
         <Field label="Projekttype">
-          <Input {...inp('projectType')} placeholder="fx nybygning, renovering..." />
+          {/* Var en fri tekstboks indtil 03-08-2026 og var derfor rådnet til ti varianter
+              ("Inventar"/"inventar", tom streng, NULL, "consulting", "furniture"…). Feltet
+              bærer nu pengelogik: 'intern' gør et projekt til et internt omkostningssted der
+              tælles som drift i v_cashflow, så en tastefejl kunne gøre Kontor DK til en tabt
+              sag. Databasen har en CHECK-constraint på de samme værdier — hold listerne ens.
+              Typen beskriver KUN arbejdet; om noget er en rigtig sag siger fasen. */}
+          <Select value={f.projectType || ''} onValueChange={v => set('projectType', v)}>
+            <SelectTrigger><SelectValue placeholder="vælg type" /></SelectTrigger>
+            <SelectContent>
+              {PROJECT_TYPES.map(t => (
+                <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </Field>
         <Field label="Kontrakttype">
           <Input {...inp('contractType')} placeholder="fx totalentreprise, fagentreprise..." />
@@ -544,6 +573,10 @@ export default function Dashboard() {
   }>>([]);
   const [editingValidUntilId, setEditingValidUntilId] = useState<string | null>(null);
 
+  // Ringeliste-krydset: telefon-opfølgninger pr. projektnummer (cold_calls) — så samme
+  // opfølgning ikke bogføres dobbelt mellem ERP'et og ringelisten. Read-only visning.
+  const [callFollowups, setCallFollowups] = useState<Record<string, { last: string | null; next: string | null }>>({});
+
   const updateValidUntilInSent = async (quoteId: string, newDate: string | null) => {
     const { error } = await supabase
       .from('project_quotes_2026_01_16_23_00')
@@ -615,6 +648,25 @@ export default function Dashboard() {
           cached_sell_total: q.cached_sell_total != null ? Number(q.cached_sell_total) : null,
         }));
       setSentQuotes(sentList);
+
+      // Ringeliste-krydset: har vi allerede fulgt op telefonisk på projektet?
+      try {
+        const projNums = projects.map(p => p.projectNumber).filter(Boolean) as string[];
+        if (projNums.length > 0) {
+          const { data: callRows } = await supabase
+            .from('cold_calls')
+            .select('project_number, called_at, followup_at')
+            .in('project_number', projNums);
+          const fu: Record<string, { last: string | null; next: string | null }> = {};
+          for (const r of (callRows || []) as Array<{ project_number: string; called_at: string | null; followup_at: string | null }>) {
+            const e = fu[r.project_number] ?? { last: null, next: null };
+            if (r.called_at && (!e.last || r.called_at > e.last)) e.last = r.called_at;
+            if (r.followup_at && (!e.next || r.followup_at > e.next)) e.next = r.followup_at;
+            fu[r.project_number] = e;
+          }
+          setCallFollowups(fu);
+        }
+      } catch { /* ringeliste-data er nice-to-have — dashboardet må aldrig vælte på det */ }
 
       const quoteIds = (quotesData || []).map(q => q.id);
       let quoteSums: Record<string, number> = {};
@@ -819,84 +871,121 @@ export default function Dashboard() {
       </div>
 
       {/* Venter på svar — synlig når der er sendte tilbud */}
-      {sentQuotes.length > 0 && (
+      {sentQuotes.length > 0 && (() => {
+        // Gruppér pr. projekt — roligere overblik. Rækkefølge: ældste sendte tilbud først (mest akutte projekt øverst).
+        const byProject = new Map<string, typeof sentQuotes>();
+        for (const q of sentQuotes) {
+          const arr = byProject.get(q.project_id) ?? [];
+          arr.push(q);
+          byProject.set(q.project_id, arr);
+        }
+        const groups = [...byProject.entries()];
+        return (
         <div className="rounded-lg border bg-white p-4 space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-blue-700 flex items-center gap-2">
               <Clock className="h-4 w-4" />
-              Venter på svar · {sentQuotes.length}
+              Venter på svar · {sentQuotes.length} tilbud i {groups.length} projekter
             </h2>
             <span className="text-xs text-muted-foreground">Ældste først</span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-            {sentQuotes.map((q) => {
-              const project = projects.find(p => p.id === q.project_id);
-              const expired = isValidityExpired(q.valid_until);
-              const isEditing = editingValidUntilId === q.id;
-              const goToQuote = () => {
-                if (project) setActiveProject(project);
-                navigate(`/project/quotes/${q.id}`);
-              };
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {groups.map(([projectId, qs]) => {
+              const project = projects.find(p => p.id === projectId);
+              const groupSum = qs.reduce((s, q) => s + (q.cached_sell_total ?? 0), 0);
+              const expiredCount = qs.filter(q => isValidityExpired(q.valid_until)).length;
+              const oldest = qs[0];
               return (
-                <div
-                  key={q.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={goToQuote}
-                  onKeyDown={(e) => { if (e.key === 'Enter') goToQuote(); }}
-                  className={`cursor-pointer text-left rounded-md border px-3 py-2.5 hover:bg-blue-50 hover:border-blue-300 transition-colors ${expired ? 'border-red-300 bg-red-50/40' : 'border-gray-200'}`}
-                  title={q.sent_at ? `Sendt ${formatDateDanish(q.sent_at)}` : undefined}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-xs text-muted-foreground truncate">
-                      {[project?.customer, project?.projectNumber].filter(Boolean).join(' · ') || 'Ukendt kunde'}
+                <div key={projectId} className={`rounded-md border overflow-hidden ${expiredCount ? 'border-red-200' : 'border-gray-200'}`}>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => project && handleGoToQuotes(project)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && project) handleGoToQuotes(project); }}
+                    className={`cursor-pointer flex items-center justify-between gap-3 px-3 py-2 ${expiredCount ? 'bg-red-50/50 hover:bg-red-50' : 'bg-gray-50/70 hover:bg-blue-50'}`}
+                  >
+                    <div className="min-w-0">
+                      <div className="font-semibold text-sm truncate">{project?.name || 'Ukendt projekt'}</div>
+                      <div className="text-xs text-muted-foreground truncate">
+                        {[project?.customer, project?.projectNumber].filter(Boolean).join(' · ') || 'Ukendt kunde'}
+                        {oldest?.sent_at ? ` · sendt ${relativeDanish(oldest.sent_at)}` : ''}
+                      </div>
+                      {(() => {
+                        const f = project?.projectNumber ? callFollowups[project.projectNumber] : undefined;
+                        if (!f) return null;
+                        return (
+                          <div className="text-xs text-emerald-700 truncate">
+                            📞 Fulgt op i ringelisten{f.last ? ` ${relativeDanish(f.last)}` : ''}{f.next ? ` · næste ${formatDateDanish(f.next)}` : ''}
+                          </div>
+                        );
+                      })()}
                     </div>
-                    {q.is_locked && <Lock className="h-3 w-3 text-muted-foreground shrink-0" />}
+                    <div className="text-right shrink-0">
+                      <div className="text-sm font-semibold">{formatCurrency(groupSum)}</div>
+                      <div className={`text-xs ${expiredCount ? 'text-red-700 font-medium' : 'text-muted-foreground'}`}>
+                        {qs.length} tilbud{expiredCount ? ` · ${expiredCount} udløbet` : ''}
+                      </div>
+                    </div>
                   </div>
-                  <div className="font-semibold text-sm truncate mt-0.5">
-                    {project?.name || 'Ukendt projekt'}
-                  </div>
-                  <div className="text-xs text-muted-foreground truncate mt-0.5">
-                    {q.quote_number ? `${q.quote_number} · ` : ''}{q.title || '(uden titel)'}
-                  </div>
-                  <div className="flex items-center justify-between gap-2 mt-1">
-                    <span className="text-xs text-muted-foreground">
-                      {q.sent_at ? `Sendt ${relativeDanish(q.sent_at)}` : 'Sendt (ukendt tid)'}
-                    </span>
-                    <span className="text-sm font-semibold">{formatCurrency(q.cached_sell_total)}</span>
-                  </div>
-                  <div className="mt-1 flex items-center gap-2 text-xs" onClick={(e) => e.stopPropagation()}>
-                    {isEditing ? (
-                      <Input
-                        type="date"
-                        autoFocus
-                        defaultValue={q.valid_until ?? ''}
-                        onBlur={(e) => updateValidUntilInSent(q.id, e.target.value || null)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                          if (e.key === 'Escape') setEditingValidUntilId(null);
-                        }}
-                        className="h-6 text-xs w-36 px-2"
-                      />
-                    ) : (
-                      <button
-                        onClick={() => setEditingValidUntilId(q.id)}
-                        className={`flex items-center gap-1 hover:underline ${expired ? 'text-red-700 font-medium' : 'text-muted-foreground'}`}
-                        title="Klik for at ændre (virker også på låste tilbud)"
-                      >
-                        {expired && <AlertTriangle className="h-3 w-3" />}
-                        {q.valid_until
-                          ? (expired ? `Udløbet ${formatDateDanish(q.valid_until)}` : `Gælder til ${formatDateDanish(q.valid_until)}`)
-                          : 'Sæt gælder-til dato'}
-                      </button>
-                    )}
+                  <div>
+                    {qs.map((q) => {
+                      const expired = isValidityExpired(q.valid_until);
+                      const isEditing = editingValidUntilId === q.id;
+                      const goToQuote = () => {
+                        if (project) setActiveProject(project);
+                        navigate(`/project/quotes/${q.id}`);
+                      };
+                      return (
+                        <div
+                          key={q.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={goToQuote}
+                          onKeyDown={(e) => { if (e.key === 'Enter') goToQuote(); }}
+                          className="cursor-pointer flex flex-wrap items-center gap-x-3 gap-y-0.5 px-3 py-1.5 border-t border-gray-100 hover:bg-blue-50 transition-colors"
+                          title={q.sent_at ? `Sendt ${formatDateDanish(q.sent_at)}` : undefined}
+                        >
+                          <span className="text-xs font-semibold text-muted-foreground w-7 shrink-0">{q.quote_number || '—'}</span>
+                          <span className="text-sm truncate flex-1 min-w-[8rem]">{q.title || '(uden titel)'}</span>
+                          {q.is_locked && <Lock className="h-3 w-3 text-muted-foreground shrink-0" />}
+                          <span className="text-xs" onClick={(e) => e.stopPropagation()}>
+                            {isEditing ? (
+                              <Input
+                                type="date"
+                                autoFocus
+                                defaultValue={q.valid_until ?? ''}
+                                onBlur={(e) => updateValidUntilInSent(q.id, e.target.value || null)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                                  if (e.key === 'Escape') setEditingValidUntilId(null);
+                                }}
+                                className="h-6 text-xs w-36 px-2"
+                              />
+                            ) : (
+                              <button
+                                onClick={() => setEditingValidUntilId(q.id)}
+                                className={`flex items-center gap-1 hover:underline ${expired ? 'text-red-700 font-medium' : 'text-muted-foreground'}`}
+                                title="Klik for at ændre (virker også på låste tilbud)"
+                              >
+                                {expired && <AlertTriangle className="h-3 w-3" />}
+                                {q.valid_until
+                                  ? (expired ? `Udløbet ${formatDateDanish(q.valid_until)}` : `Til ${formatDateDanish(q.valid_until)}`)
+                                  : 'Sæt gælder-til dato'}
+                              </button>
+                            )}
+                          </span>
+                          <span className="text-sm font-semibold w-24 text-right shrink-0">{formatCurrency(q.cached_sell_total)}</span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               );
             })}
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Card view */}
       {viewMode === 'cards' && (
