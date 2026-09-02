@@ -13,6 +13,10 @@ export interface Project {
     | 'Kontrakt og planlægning'
     | 'Produktion'
     | 'Garanti'
+    // Terminal tilstand for en leveret, betalt og lukket sag. Tilføjet 03-08-2026 fordi
+    // livscyklussen stoppede ved Garanti og derefter faldt ned i Arkiv — samme kasse som
+    // backtests og produktskabelonen. Der var ingen kasse til en færdig sag.
+    | 'Afsluttet'
     | 'Tabt'
     | 'Fravalgt'
     | 'Arkiv';

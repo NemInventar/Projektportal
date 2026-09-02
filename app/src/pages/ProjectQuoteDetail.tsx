@@ -4,7 +4,7 @@ import { pdf } from '@react-pdf/renderer';
 import { QuotePDF } from '@/components/QuotePDF';
 import { QuoteAppendixPDF } from '@/components/QuoteAppendixPDF';
 import { supabase } from '@/integrations/supabase/client';
-import { calculateLine } from '@/lib/quotePricing';
+import { calculateLine, COST_CATEGORIES, COST_CATEGORY_LABELS, type CategoryFactors, type PricingMode } from '@/lib/quotePricing';
 import Layout from '@/components/Layout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -226,26 +226,25 @@ interface QuoteLineItem {
 
 interface CostBreakdown {
   materials: number;
-  transport: number;
+  transport?: number;
+  material_transport?: number;
+  product_transport?: number;
   labor_production: number;
+  labor_korpus?: number;
   labor_dk: number;
   other: number;
 }
 
 interface QuoteLinePricing {
-  pricingMode: 'markup_pct' | 'gross_margin_pct' | 'target_unit_price' | 'profit_by_category';
+  pricingMode: PricingMode;
   markupPct?: number;
   grossMarginPct?: number;
   targetUnitPrice?: number;
   riskPerUnit: number;
-  profitByCategory?: {
-    materials?: number;
-    material_transport?: number;
-    product_transport?: number;
-    labor_production?: number;
-    labor_dk?: number;
-    other?: number;
-  };
+  /** Linjens egen overstyring (sparse) — kun de kategorier der afviger fra tilbud/defaults */
+  categoryFactors?: CategoryFactors | null;
+  /** Materialiseret af DB: linje → tilbud → defaults. Det GUI'en regner med i faktor-mode. */
+  effectiveCategoryFactors?: CategoryFactors | null;
 }
 
 const ProjectQuoteDetail = () => {
@@ -407,20 +406,21 @@ const ProjectQuoteDetail = () => {
   });
 
   // Form data for pricing
-  const [pricingFormData, setPricingFormData] = useState({
-    pricingMode: 'markup_pct' as const,
+  const [pricingFormData, setPricingFormData] = useState<{
+    pricingMode: PricingMode;
+    markupPct: number;
+    grossMarginPct: number;
+    targetUnitPrice: number;
+    riskPerUnit: number;
+    /** Sparse overstyring pr. kategori — tom = følg tilbud/defaults */
+    categoryFactors: CategoryFactors;
+  }>({
+    pricingMode: 'markup_pct',
     markupPct: 25,
     grossMarginPct: 20,
     targetUnitPrice: 0,
     riskPerUnit: 0,
-    profitByCategory: {
-      materials: 30,
-      material_transport: 30,
-      product_transport: 30,
-      labor_production: 30,
-      labor_dk: 30,
-      other: 30
-    }
+    categoryFactors: {},
   });
 
   // Form data for custom item
@@ -632,12 +632,13 @@ const ProjectQuoteDetail = () => {
           displayOrder: line.display_order,
           createdAt: line.created_at,
           pricing: {
-            pricingMode: (line.pricing_mode === 'target_unit_price' ? 'target_unit_price' : 'markup_pct'),
+            pricingMode: (line.pricing_mode === 'target_unit_price' || line.pricing_mode === 'category_factors' ? line.pricing_mode : 'markup_pct') as PricingMode,
             markupPct: line.markup_pct != null ? parseFloat(line.markup_pct) : 25,
             grossMarginPct: null, // Deprecated — bevares i type for kompatibilitet men altid null
             targetUnitPrice: line.target_unit_price != null ? parseFloat(line.target_unit_price) : null,
             riskPerUnit: line.risk_per_unit != null ? parseFloat(line.risk_per_unit) : 0,
-            profitByCategory: {}, // Deprecated — bevares i type
+            categoryFactors: line.category_factors ?? null,
+            effectiveCategoryFactors: line.effective_category_factors ?? null,
           },
           items: line.project_quote_line_items_2026_01_16_23_00?.map((item: any) => ({
             id: item.id,
@@ -1206,11 +1207,12 @@ const ProjectQuoteDetail = () => {
   const calculateLineTotals = (line: QuoteLine) => {
     // Calculate cost breakdown per unit (til visning + % af salgspris i UI)
     const totalCostBreakdown = line.items.reduce((acc, item) => {
-      const itemCost = item.costBreakdown || { materials: 0, material_transport: 0, product_transport: 0, labor_production: 0, labor_dk: 0, other: 0 };
+      const itemCost = item.costBreakdown || { materials: 0, material_transport: 0, product_transport: 0, labor_production: 0, labor_korpus: 0, labor_dk: 0, other: 0 };
       const materials = itemCost.materials || 0;
       const materialTransport = itemCost.material_transport || 0;
       const productTransport = itemCost.product_transport || itemCost.transport || 0;
       const laborProduction = itemCost.labor_production || 0;
+      const laborKorpus = itemCost.labor_korpus || 0;
       const laborDk = itemCost.labor_dk || 0;
       const other = itemCost.other || 0;
       return {
@@ -1218,19 +1220,21 @@ const ProjectQuoteDetail = () => {
         material_transport: acc.material_transport + (materialTransport * item.qty),
         product_transport: acc.product_transport + (productTransport * item.qty),
         labor_production: acc.labor_production + (laborProduction * item.qty),
+        labor_korpus: acc.labor_korpus + (laborKorpus * item.qty),
         labor_dk: acc.labor_dk + (laborDk * item.qty),
         other: acc.other + (other * item.qty)
       };
-    }, { materials: 0, material_transport: 0, product_transport: 0, labor_production: 0, labor_dk: 0, other: 0 });
+    }, { materials: 0, material_transport: 0, product_transport: 0, labor_production: 0, labor_korpus: 0, labor_dk: 0, other: 0 });
 
     const costBreakdownPerUnit = line.quantity > 0 ? {
       materials: totalCostBreakdown.materials / line.quantity,
       material_transport: totalCostBreakdown.material_transport / line.quantity,
       product_transport: totalCostBreakdown.product_transport / line.quantity,
       labor_production: totalCostBreakdown.labor_production / line.quantity,
+      labor_korpus: totalCostBreakdown.labor_korpus / line.quantity,
       labor_dk: totalCostBreakdown.labor_dk / line.quantity,
       other: totalCostBreakdown.other / line.quantity
-    } : { materials: 0, material_transport: 0, product_transport: 0, labor_production: 0, labor_dk: 0, other: 0 };
+    } : { materials: 0, material_transport: 0, product_transport: 0, labor_production: 0, labor_korpus: 0, labor_dk: 0, other: 0 };
 
     // Delegér sell/cost/profit-beregning til shared helper for konsistens med lister + dashboard
     const sharedItems = line.items.map(it => ({
@@ -1239,10 +1243,11 @@ const ProjectQuoteDetail = () => {
       cost_breakdown_json: it.costBreakdown,
     }));
     const sharedPricing = line.pricing ? {
-      pricing_mode: (line.pricing.pricingMode === 'target_unit_price' ? 'target_unit_price' : 'markup_pct') as 'markup_pct' | 'target_unit_price',
+      pricing_mode: line.pricing.pricingMode,
       markup_pct: line.pricing.markupPct ?? 25,
       target_unit_price: line.pricing.targetUnitPrice ?? null,
       risk_per_unit: line.pricing.riskPerUnit ?? 0,
+      category_factors: line.pricing.effectiveCategoryFactors ?? null,
     } : null;
     const t = calculateLine(sharedItems, line.quantity, sharedPricing);
 
@@ -1326,9 +1331,19 @@ const ProjectQuoteDetail = () => {
   };
 
   const handleUpdatePricing = async (lineId: string) => {
-    // V2: Kun 2 modes — markup_pct (default) og target_unit_price (fast pris)
-    // gross_margin_pct og profit_by_category er fjernet
-    const mode = pricingFormData.pricingMode === 'target_unit_price' ? 'target_unit_price' : 'markup_pct';
+    // Tre modes: markup_pct (default), target_unit_price (fast pris), category_factors (faktor pr. kostkategori, 02-09-2026)
+    const mode: PricingMode =
+      pricingFormData.pricingMode === 'target_unit_price' || pricingFormData.pricingMode === 'category_factors'
+        ? pricingFormData.pricingMode
+        : 'markup_pct';
+
+    if (mode === 'category_factors') {
+      const bad = Object.entries(pricingFormData.categoryFactors).find(([, v]) => v != null && (!Number.isFinite(v) || v < 0));
+      if (bad) {
+        toast({ title: "Ugyldig faktor", description: `Faktoren for ${COST_CATEGORY_LABELS[bad[0] as keyof typeof COST_CATEGORY_LABELS] ?? bad[0]} skal være et tal ≥ 0`, variant: "destructive" });
+        return;
+      }
+    }
 
     if (mode === 'markup_pct' && (pricingFormData.markupPct < 0 || pricingFormData.markupPct > 1000)) {
       toast({
@@ -1367,9 +1382,17 @@ const ProjectQuoteDetail = () => {
       if (mode === 'markup_pct') {
         updateData.markup_pct = pricingFormData.markupPct;
         // target_unit_price bevares men bruges ikke i denne mode
-      } else {
+      } else if (mode === 'target_unit_price') {
         updateData.target_unit_price = pricingFormData.targetUnitPrice;
         // markup_pct bevares men bruges ikke i denne mode
+      } else {
+        // category_factors: gem KUN overstyringerne (sparse). DB-triggeren løser effective_category_factors
+        // (linje → tilbud → pricing_factor_defaults) og recompute kører selv.
+        const sparse: Record<string, number> = {};
+        for (const [k, v] of Object.entries(pricingFormData.categoryFactors)) {
+          if (v != null && Number.isFinite(v)) sparse[k] = v;
+        }
+        updateData.category_factors = Object.keys(sparse).length > 0 ? sparse : null;
       }
 
       const { error } = await supabase
@@ -2135,14 +2158,7 @@ const ProjectQuoteDetail = () => {
         grossMarginPct: line.pricing.grossMarginPct || 20,
         targetUnitPrice: line.pricing.targetUnitPrice || 0,
         riskPerUnit: line.pricing.riskPerUnit,
-        profitByCategory: line.pricing.profitByCategory || {
-          materials: 30,
-          material_transport: 30,
-          product_transport: 30,
-          labor_production: 30,
-          labor_dk: 30,
-          other: 30
-        }
+        categoryFactors: { ...(line.pricing.categoryFactors ?? {}) },
       });
     } else {
       setPricingFormData({
@@ -2151,14 +2167,7 @@ const ProjectQuoteDetail = () => {
         grossMarginPct: 20,
         targetUnitPrice: 0,
         riskPerUnit: 0,
-        profitByCategory: {
-          materials: 30,
-          material_transport: 30,
-          product_transport: 30,
-          labor_production: 30,
-          labor_dk: 30,
-          other: 30
-        }
+        categoryFactors: {},
       });
     }
     setEditingPricing(line.id);
@@ -4462,6 +4471,7 @@ const ProjectQuoteDetail = () => {
                                 <td className="border border-gray-300 px-3 py-2 font-semibold text-blue-700">
                                   Profit ({(() => {
                                     if (line.pricing?.pricingMode === 'target_unit_price') return 'Fast salgspris';
+                                    if (line.pricing?.pricingMode === 'category_factors') return 'Faktor pr. kategori';
                                     return 'Markup %';
                                   })()})
                                 </td>
@@ -4536,8 +4546,8 @@ const ProjectQuoteDetail = () => {
                             <div>
                               <Label>Prisfastsættelse</Label>
                               <Select
-                                value={pricingFormData.pricingMode === 'target_unit_price' ? 'target_unit_price' : 'markup_pct'}
-                                onValueChange={(value: 'markup_pct' | 'target_unit_price') =>
+                                value={pricingFormData.pricingMode}
+                                onValueChange={(value: PricingMode) =>
                                   setPricingFormData(prev => ({ ...prev, pricingMode: value }))
                                 }
                               >
@@ -4546,6 +4556,7 @@ const ProjectQuoteDetail = () => {
                                 </SelectTrigger>
                                 <SelectContent>
                                   <SelectItem value="markup_pct">Markup % på (cost + risk)</SelectItem>
+                                  <SelectItem value="category_factors">Faktor pr. kostkategori</SelectItem>
                                   <SelectItem value="target_unit_price">Jeg sætter salgspris</SelectItem>
                                 </SelectContent>
                               </Select>
@@ -4559,17 +4570,6 @@ const ProjectQuoteDetail = () => {
                                     type="number"
                                     value={pricingFormData.markupPct}
                                     onChange={(e) => setPricingFormData(prev => ({ ...prev, markupPct: parseFloat(e.target.value) || 0 }))}
-                                  />
-                                </div>
-                              )}
-                              
-                              {pricingFormData.pricingMode === 'gross_margin_pct' && (
-                                <div>
-                                  <Label>DB %</Label>
-                                  <Input
-                                    type="number"
-                                    value={pricingFormData.grossMarginPct}
-                                    onChange={(e) => setPricingFormData(prev => ({ ...prev, grossMarginPct: parseFloat(e.target.value) || 0 }))}
                                   />
                                 </div>
                               )}
@@ -4595,289 +4595,103 @@ const ProjectQuoteDetail = () => {
                               </div>
                             </div>
                             
-                            {/* Profit by Category UI */}
-                            {pricingFormData.pricingMode === 'profit_by_category' && (
-                              <div className="mt-4">
-                                <Label className="text-sm font-medium mb-2 block">Profit % pr. kategori</Label>
-                                <div className="border rounded-lg overflow-hidden">
-                                  <table className="w-full text-sm">
-                                    <thead className="bg-gray-50">
-                                      <tr>
-                                        <th className="px-3 py-2 text-left font-medium">Kategori</th>
-                                        <th className="px-3 py-2 text-right font-medium">Cost pr enhed (kr)</th>
-                                        <th className="px-3 py-2 text-right font-medium">Profit %</th>
-                                        <th className="px-3 py-2 text-right font-medium">Profit pr enhed (kr)</th>
-                                        <th className="px-3 py-2 text-right font-medium">Total pr enhed (kr)</th>
-                                        <th className="px-3 py-2 text-right font-medium">Total (kr)</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      <tr className="border-t">
-                                        <td className="px-3 py-2">Materialer</td>
-                                        <td className="px-3 py-2 text-right">{totals.costBreakdown.materials.toLocaleString('da-DK')}</td>
-                                        <td className="px-3 py-2">
-                                          <Input
-                                            type="number"
-                                            step="0.1"
-                                            className="w-20 text-right"
-                                            value={pricingFormData.profitByCategory?.materials || 30}
-                                            onChange={(e) => setPricingFormData(prev => ({
-                                              ...prev,
-                                              profitByCategory: {
-                                                ...prev.profitByCategory,
-                                                materials: parseFloat(e.target.value) || 0
-                                              }
-                                            }))}
-                                          />
-                                        </td>
-                                        <td className="px-3 py-2 text-right">
-                                          {(totals.costBreakdown.materials * (pricingFormData.profitByCategory?.materials || 30) / 100).toLocaleString('da-DK')}
-                                        </td>
-                                        <td className="px-3 py-2 text-right font-medium">
-                                          {(totals.costBreakdown.materials * (1 + (pricingFormData.profitByCategory?.materials || 30) / 100)).toLocaleString('da-DK')}
-                                        </td>
-                                        <td className="px-3 py-2 text-right font-medium">
-                                          {((totals.costBreakdown.materials * (1 + (pricingFormData.profitByCategory?.materials || 30) / 100)) * line.quantity).toLocaleString('da-DK')}
-                                        </td>
-                                      </tr>
-                                      <tr className="border-t">
-                                        <td className="px-3 py-2">Materialetransport</td>
-                                        <td className="px-3 py-2 text-right">{(totals.costBreakdown.material_transport || 0).toLocaleString('da-DK')}</td>
-                                        <td className="px-3 py-2">
-                                          <Input
-                                            type="number"
-                                            step="0.1"
-                                            className="w-20 text-right"
-                                            value={pricingFormData.profitByCategory?.material_transport || 30}
-                                            onChange={(e) => setPricingFormData(prev => ({
-                                              ...prev,
-                                              profitByCategory: {
-                                                ...prev.profitByCategory,
-                                                material_transport: parseFloat(e.target.value) || 0
-                                              }
-                                            }))}
-                                          />
-                                        </td>
-                                        <td className="px-3 py-2 text-right">
-                                          {((totals.costBreakdown.material_transport || 0) * (pricingFormData.profitByCategory?.material_transport || 30) / 100).toLocaleString('da-DK')}
-                                        </td>
-                                        <td className="px-3 py-2 text-right font-medium">
-                                          {((totals.costBreakdown.material_transport || 0) * (1 + (pricingFormData.profitByCategory?.material_transport || 30) / 100)).toLocaleString('da-DK')}
-                                        </td>
-                                        <td className="px-3 py-2 text-right font-medium">
-                                          {(((totals.costBreakdown.material_transport || 0) * (1 + (pricingFormData.profitByCategory?.material_transport || 30) / 100)) * line.quantity).toLocaleString('da-DK')}
-                                        </td>
-                                      </tr>
-                                      <tr className="border-t">
-                                        <td className="px-3 py-2">Produkttransport</td>
-                                        <td className="px-3 py-2 text-right">{(totals.costBreakdown.product_transport || totals.costBreakdown.transport || 0).toLocaleString('da-DK')}</td>
-                                        <td className="px-3 py-2">
-                                          <Input
-                                            type="number"
-                                            step="0.1"
-                                            className="w-20 text-right"
-                                            value={pricingFormData.profitByCategory?.product_transport || 30}
-                                            onChange={(e) => setPricingFormData(prev => ({
-                                              ...prev,
-                                              profitByCategory: {
-                                                ...prev.profitByCategory,
-                                                product_transport: parseFloat(e.target.value) || 0
-                                              }
-                                            }))}
-                                          />
-                                        </td>
-                                        <td className="px-3 py-2 text-right">
-                                          {((totals.costBreakdown.product_transport || totals.costBreakdown.transport || 0) * (pricingFormData.profitByCategory?.product_transport || 30) / 100).toLocaleString('da-DK')}
-                                        </td>
-                                        <td className="px-3 py-2 text-right font-medium">
-                                          {((totals.costBreakdown.product_transport || totals.costBreakdown.transport || 0) * (1 + (pricingFormData.profitByCategory?.product_transport || 30) / 100)).toLocaleString('da-DK')}
-                                        </td>
-                                        <td className="px-3 py-2 text-right font-medium">
-                                          {(((totals.costBreakdown.product_transport || totals.costBreakdown.transport || 0) * (1 + (pricingFormData.profitByCategory?.product_transport || 30) / 100)) * line.quantity).toLocaleString('da-DK')}
-                                        </td>
-                                      </tr>
-                                      <tr className="border-t">
-                                        <td className="px-3 py-2">Labor (produktion)</td>
-                                        <td className="px-3 py-2 text-right">{totals.costBreakdown.labor_production.toLocaleString('da-DK')}</td>
-                                        <td className="px-3 py-2">
-                                          <Input
-                                            type="number"
-                                            step="0.1"
-                                            className="w-20 text-right"
-                                            value={pricingFormData.profitByCategory?.labor_production || 30}
-                                            onChange={(e) => setPricingFormData(prev => ({
-                                              ...prev,
-                                              profitByCategory: {
-                                                ...prev.profitByCategory,
-                                                labor_production: parseFloat(e.target.value) || 0
-                                              }
-                                            }))}
-                                          />
-                                        </td>
-                                        <td className="px-3 py-2 text-right">
-                                          {(totals.costBreakdown.labor_production * (pricingFormData.profitByCategory?.labor_production || 30) / 100).toLocaleString('da-DK')}
-                                        </td>
-                                        <td className="px-3 py-2 text-right font-medium">
-                                          {(totals.costBreakdown.labor_production * (1 + (pricingFormData.profitByCategory?.labor_production || 30) / 100)).toLocaleString('da-DK')}
-                                        </td>
-                                        <td className="px-3 py-2 text-right font-medium">
-                                          {((totals.costBreakdown.labor_production * (1 + (pricingFormData.profitByCategory?.labor_production || 30) / 100)) * line.quantity).toLocaleString('da-DK')}
-                                        </td>
-                                      </tr>
-                                      <tr className="border-t">
-                                        <td className="px-3 py-2">Labor (DK montage)</td>
-                                        <td className="px-3 py-2 text-right">{totals.costBreakdown.labor_dk.toLocaleString('da-DK')}</td>
-                                        <td className="px-3 py-2">
-                                          <Input
-                                            type="number"
-                                            step="0.1"
-                                            className="w-20 text-right"
-                                            value={pricingFormData.profitByCategory?.labor_dk || 30}
-                                            onChange={(e) => setPricingFormData(prev => ({
-                                              ...prev,
-                                              profitByCategory: {
-                                                ...prev.profitByCategory,
-                                                labor_dk: parseFloat(e.target.value) || 0
-                                              }
-                                            }))}
-                                          />
-                                        </td>
-                                        <td className="px-3 py-2 text-right">
-                                          {(totals.costBreakdown.labor_dk * (pricingFormData.profitByCategory?.labor_dk || 30) / 100).toLocaleString('da-DK')}
-                                        </td>
-                                        <td className="px-3 py-2 text-right font-medium">
-                                          {(totals.costBreakdown.labor_dk * (1 + (pricingFormData.profitByCategory?.labor_dk || 30) / 100)).toLocaleString('da-DK')}
-                                        </td>
-                                        <td className="px-3 py-2 text-right font-medium">
-                                          {((totals.costBreakdown.labor_dk * (1 + (pricingFormData.profitByCategory?.labor_dk || 30) / 100)) * line.quantity).toLocaleString('da-DK')}
-                                        </td>
-                                      </tr>
-                                      <tr className="border-t">
-                                        <td className="px-3 py-2">Øvrigt</td>
-                                        <td className="px-3 py-2 text-right">{totals.costBreakdown.other.toLocaleString('da-DK')}</td>
-                                        <td className="px-3 py-2">
-                                          <Input
-                                            type="number"
-                                            step="0.1"
-                                            className="w-20 text-right"
-                                            value={pricingFormData.profitByCategory?.other || 30}
-                                            onChange={(e) => setPricingFormData(prev => ({
-                                              ...prev,
-                                              profitByCategory: {
-                                                ...prev.profitByCategory,
-                                                other: parseFloat(e.target.value) || 0
-                                              }
-                                            }))}
-                                          />
-                                        </td>
-                                        <td className="px-3 py-2 text-right">
-                                          {(totals.costBreakdown.other * (pricingFormData.profitByCategory?.other || 30) / 100).toLocaleString('da-DK')}
-                                        </td>
-                                        <td className="px-3 py-2 text-right font-medium">
-                                          {(totals.costBreakdown.other * (1 + (pricingFormData.profitByCategory?.other || 30) / 100)).toLocaleString('da-DK')}
-                                        </td>
-                                        <td className="px-3 py-2 text-right font-medium">
-                                          {((totals.costBreakdown.other * (1 + (pricingFormData.profitByCategory?.other || 30) / 100)) * line.quantity).toLocaleString('da-DK')}
-                                        </td>
-                                      </tr>
-                                      <tr className="border-t-2 bg-gray-50 font-semibold">
-                                        <td className="px-3 py-2">I alt (excl. risk)</td>
-                                        <td className="px-3 py-2 text-right">
-                                          {(() => {
-                                            const totalCostPerUnit = (totals.costBreakdown.materials || 0) + 
-                                              (totals.costBreakdown.material_transport || 0) + 
-                                              (totals.costBreakdown.product_transport || totals.costBreakdown.transport || 0) + 
-                                              (totals.costBreakdown.labor_production || 0) + 
-                                              (totals.costBreakdown.labor_dk || 0) + 
-                                              (totals.costBreakdown.other || 0);
-                                            return totalCostPerUnit.toLocaleString('da-DK');
-                                          })()}
-                                        </td>
-                                        <td className="px-3 py-2 text-right">-</td>
-                                        <td className="px-3 py-2 text-right">
-                                          {(() => {
-                                            const totalProfitPerUnit = 
-                                              (totals.costBreakdown.materials * (pricingFormData.profitByCategory?.materials || 30) / 100) +
-                                              ((totals.costBreakdown.material_transport || 0) * (pricingFormData.profitByCategory?.material_transport || 30) / 100) +
-                                              ((totals.costBreakdown.product_transport || totals.costBreakdown.transport || 0) * (pricingFormData.profitByCategory?.product_transport || 30) / 100) +
-                                              (totals.costBreakdown.labor_production * (pricingFormData.profitByCategory?.labor_production || 30) / 100) +
-                                              (totals.costBreakdown.labor_dk * (pricingFormData.profitByCategory?.labor_dk || 30) / 100) +
-                                              (totals.costBreakdown.other * (pricingFormData.profitByCategory?.other || 30) / 100);
-                                            return totalProfitPerUnit.toLocaleString('da-DK');
-                                          })()}
-                                        </td>
-                                        <td className="px-3 py-2 text-right">
-                                          {(() => {
-                                            const totalCostPerUnit = (totals.costBreakdown.materials || 0) + 
-                                              (totals.costBreakdown.material_transport || 0) + 
-                                              (totals.costBreakdown.product_transport || totals.costBreakdown.transport || 0) + 
-                                              (totals.costBreakdown.labor_production || 0) + 
-                                              (totals.costBreakdown.labor_dk || 0) + 
-                                              (totals.costBreakdown.other || 0);
-                                            const totalProfitPerUnit = 
-                                              (totals.costBreakdown.materials * (pricingFormData.profitByCategory?.materials || 30) / 100) +
-                                              ((totals.costBreakdown.material_transport || 0) * (pricingFormData.profitByCategory?.material_transport || 30) / 100) +
-                                              ((totals.costBreakdown.product_transport || totals.costBreakdown.transport || 0) * (pricingFormData.profitByCategory?.product_transport || 30) / 100) +
-                                              (totals.costBreakdown.labor_production * (pricingFormData.profitByCategory?.labor_production || 30) / 100) +
-                                              (totals.costBreakdown.labor_dk * (pricingFormData.profitByCategory?.labor_dk || 30) / 100) +
-                                              (totals.costBreakdown.other * (pricingFormData.profitByCategory?.other || 30) / 100);
-                                            const totalSellingPricePerUnit = totalCostPerUnit + totalProfitPerUnit;
-                                            return totalSellingPricePerUnit.toLocaleString('da-DK');
-                                          })()}
-                                        </td>
-                                        <td className="px-3 py-2 text-right">
-                                          {(() => {
-                                            const totalCostPerUnit = (totals.costBreakdown.materials || 0) + 
-                                              (totals.costBreakdown.material_transport || 0) + 
-                                              (totals.costBreakdown.product_transport || totals.costBreakdown.transport || 0) + 
-                                              (totals.costBreakdown.labor_production || 0) + 
-                                              (totals.costBreakdown.labor_dk || 0) + 
-                                              (totals.costBreakdown.other || 0);
-                                            const totalProfitPerUnit = 
-                                              (totals.costBreakdown.materials * (pricingFormData.profitByCategory?.materials || 30) / 100) +
-                                              ((totals.costBreakdown.material_transport || 0) * (pricingFormData.profitByCategory?.material_transport || 30) / 100) +
-                                              ((totals.costBreakdown.product_transport || totals.costBreakdown.transport || 0) * (pricingFormData.profitByCategory?.product_transport || 30) / 100) +
-                                              (totals.costBreakdown.labor_production * (pricingFormData.profitByCategory?.labor_production || 30) / 100) +
-                                              (totals.costBreakdown.labor_dk * (pricingFormData.profitByCategory?.labor_dk || 30) / 100) +
-                                              (totals.costBreakdown.other * (pricingFormData.profitByCategory?.other || 30) / 100);
-                                            const totalSellingPricePerUnit = totalCostPerUnit + totalProfitPerUnit;
-                                            return (totalSellingPricePerUnit * line.quantity).toLocaleString('da-DK');
-                                          })()}
-                                        </td>
-                                      </tr>
-                                      <tr className="border-t bg-blue-50">
-                                        <td className="px-3 py-2 font-semibold">Resulterende DB%</td>
-                                        <td className="px-3 py-2 text-right">-</td>
-                                        <td className="px-3 py-2 text-right">-</td>
-                                        <td className="px-3 py-2 text-right">-</td>
-                                        <td className="px-3 py-2 text-right">-</td>
-                                        <td className="px-3 py-2 text-right font-semibold text-blue-600">
-                                          {(() => {
-                                            const totalCostPerUnit = (totals.costBreakdown.materials || 0) + 
-                                              (totals.costBreakdown.material_transport || 0) + 
-                                              (totals.costBreakdown.product_transport || totals.costBreakdown.transport || 0) + 
-                                              (totals.costBreakdown.labor_production || 0) + 
-                                              (totals.costBreakdown.labor_dk || 0) + 
-                                              (totals.costBreakdown.other || 0);
-                                            const totalProfitPerUnit = 
-                                              (totals.costBreakdown.materials * (pricingFormData.profitByCategory?.materials || 30) / 100) +
-                                              ((totals.costBreakdown.material_transport || 0) * (pricingFormData.profitByCategory?.material_transport || 30) / 100) +
-                                              ((totals.costBreakdown.product_transport || totals.costBreakdown.transport || 0) * (pricingFormData.profitByCategory?.product_transport || 30) / 100) +
-                                              (totals.costBreakdown.labor_production * (pricingFormData.profitByCategory?.labor_production || 30) / 100) +
-                                              (totals.costBreakdown.labor_dk * (pricingFormData.profitByCategory?.labor_dk || 30) / 100) +
-                                              (totals.costBreakdown.other * (pricingFormData.profitByCategory?.other || 30) / 100);
-                                            const totalSellingPricePerUnit = totalCostPerUnit + totalProfitPerUnit;
-                                            const dbPercent = totalSellingPricePerUnit > 0 ? (totalProfitPerUnit / totalSellingPricePerUnit) * 100 : 0;
-                                            return dbPercent.toFixed(0) + '%';
-                                          })()}
-                                        </td>
-                                      </tr>
-                                    </tbody>
-                                  </table>
+                            {/* Faktor pr. kostkategori (02-09-2026): sell = Σ kost_kategori × faktor + risk.
+                                Effektive faktorer løses i DB (linje → tilbud → pricing_factor_defaults) og ligger på linjen.
+                                Her redigeres KUN linjens overstyring; tomt felt = følg tilbud/default. */}
+                            {pricingFormData.pricingMode === 'category_factors' && (() => {
+                              const eff = line.pricing?.effectiveCategoryFactors ?? {};
+                              const ovr = pricingFormData.categoryFactors;
+                              const costOf = (k: string) => Number((totals.costBreakdown as any)[k] ?? 0);
+                              const factorOf = (k: string) => (ovr as any)[k] ?? (eff as any)[k] ?? 1;
+                              const rows = COST_CATEGORIES.filter(k => costOf(k) > 0 || (ovr as any)[k] != null);
+                              const sellPerUnit = COST_CATEGORIES.reduce((a, k) => a + costOf(k) * factorOf(k), 0) + (pricingFormData.riskPerUnit || 0);
+                              const costPerUnitExKorpus = COST_CATEGORIES.filter(k => k !== 'labor_korpus').reduce((a, k) => a + costOf(k), 0) + (pricingFormData.riskPerUnit || 0);
+                              const dbPct = sellPerUnit > 0 ? ((sellPerUnit - costPerUnitExKorpus) / sellPerUnit) * 100 : 0;
+                              return (
+                                <div className="mt-4">
+                                  <Label className="text-sm font-medium mb-2 block">Faktor pr. kostkategori</Label>
+                                  <p className="text-xs text-muted-foreground mb-2">
+                                    Tomt felt = tilbuddets/husets standard. Udfyld kun det der skal afvige på denne linje.
+                                    Egen produktion (Korpus) allokeres i prisen men tæller ikke som vareforbrug.
+                                  </p>
+                                  <div className="border rounded-lg overflow-hidden">
+                                    <table className="w-full text-sm">
+                                      <thead className="bg-gray-50">
+                                        <tr>
+                                          <th className="px-3 py-2 text-left font-medium">Kategori</th>
+                                          <th className="px-3 py-2 text-right font-medium">Kost pr. enhed</th>
+                                          <th className="px-3 py-2 text-right font-medium">Standard</th>
+                                          <th className="px-3 py-2 text-right font-medium">Linje-faktor</th>
+                                          <th className="px-3 py-2 text-right font-medium">Salg pr. enhed</th>
+                                          <th className="px-3 py-2 text-right font-medium">Salg i alt</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {rows.map(k => (
+                                          <tr key={k} className="border-t">
+                                            <td className="px-3 py-2">{COST_CATEGORY_LABELS[k]}</td>
+                                            <td className="px-3 py-2 text-right">{formatCurrency(costOf(k))}</td>
+                                            <td className="px-3 py-2 text-right text-muted-foreground">×{Number((eff as any)[k] ?? 1).toLocaleString('da-DK')}</td>
+                                            <td className="px-3 py-2">
+                                              <div className="flex items-center gap-1 justify-end">
+                                                <Input
+                                                  type="number"
+                                                  step="0.1"
+                                                  min="0"
+                                                  className="w-24 text-right"
+                                                  placeholder={String((eff as any)[k] ?? 1)}
+                                                  value={(ovr as any)[k] ?? ''}
+                                                  onChange={(e) => {
+                                                    const raw = e.target.value;
+                                                    setPricingFormData(prev => {
+                                                      const next = { ...prev.categoryFactors } as any;
+                                                      if (raw === '') delete next[k]; else next[k] = parseFloat(raw);
+                                                      return { ...prev, categoryFactors: next };
+                                                    });
+                                                  }}
+                                                />
+                                                {(ovr as any)[k] != null && (
+                                                  <Button size="sm" variant="ghost" title="Følg standard" onClick={() => setPricingFormData(prev => { const next = { ...prev.categoryFactors } as any; delete next[k]; return { ...prev, categoryFactors: next }; })}>↺</Button>
+                                                )}
+                                              </div>
+                                            </td>
+                                            <td className="px-3 py-2 text-right font-medium">{formatCurrency(costOf(k) * factorOf(k))}</td>
+                                            <td className="px-3 py-2 text-right font-medium">{formatCurrency(costOf(k) * factorOf(k) * line.quantity)}</td>
+                                          </tr>
+                                        ))}
+                                        {(pricingFormData.riskPerUnit || 0) > 0 && (
+                                          <tr className="border-t">
+                                            <td className="px-3 py-2">Risikotillæg</td>
+                                            <td className="px-3 py-2 text-right">{formatCurrency(pricingFormData.riskPerUnit)}</td>
+                                            <td className="px-3 py-2 text-right text-muted-foreground">×1</td>
+                                            <td className="px-3 py-2 text-right">–</td>
+                                            <td className="px-3 py-2 text-right font-medium">{formatCurrency(pricingFormData.riskPerUnit)}</td>
+                                            <td className="px-3 py-2 text-right font-medium">{formatCurrency(pricingFormData.riskPerUnit * line.quantity)}</td>
+                                          </tr>
+                                        )}
+                                        <tr className="border-t-2 bg-green-50 font-semibold">
+                                          <td className="px-3 py-2">Salgspris</td>
+                                          <td className="px-3 py-2 text-right">{formatCurrency(costPerUnitExKorpus)}</td>
+                                          <td className="px-3 py-2 text-right">-</td>
+                                          <td className="px-3 py-2 text-right">-</td>
+                                          <td className="px-3 py-2 text-right text-green-700">{formatCurrency(sellPerUnit)}</td>
+                                          <td className="px-3 py-2 text-right text-green-700">{formatCurrency(sellPerUnit * line.quantity)}</td>
+                                        </tr>
+                                        <tr className="border-t bg-blue-50">
+                                          <td className="px-3 py-2 font-semibold">DG (vareforbrug, uden egen produktion)</td>
+                                          <td className="px-3 py-2 text-right">-</td>
+                                          <td className="px-3 py-2 text-right">-</td>
+                                          <td className="px-3 py-2 text-right">-</td>
+                                          <td className="px-3 py-2 text-right">-</td>
+                                          <td className="px-3 py-2 text-right font-semibold text-blue-600">{dbPct.toFixed(0)}%</td>
+                                        </tr>
+                                      </tbody>
+                                    </table>
+                                  </div>
                                 </div>
-                              </div>
-                            )}
-                            
+                              );
+                            })()}
+
                             <div className="flex gap-2 pt-4">
                               <Button 
                                 size="sm" 
@@ -4898,7 +4712,15 @@ const ProjectQuoteDetail = () => {
                         ) : (
                           <div className="flex justify-between items-center">
                             <div className="text-sm space-y-1">
-                              <div>Mode: {line.pricing?.pricingMode === 'markup_pct' ? 'Markup %' : line.pricing?.pricingMode === 'gross_margin_pct' ? 'DB %' : 'Target pris'}</div>
+                              <div>Mode: {line.pricing?.pricingMode === 'markup_pct' ? 'Markup %' : line.pricing?.pricingMode === 'category_factors' ? 'Faktor pr. kategori' : 'Fast salgspris'}</div>
+                              {line.pricing?.pricingMode === 'category_factors' && line.pricing.effectiveCategoryFactors && (
+                                <div className="text-muted-foreground">
+                                  {COST_CATEGORIES
+                                    .filter(k => (totals.costBreakdown as any)[k] > 0)
+                                    .map(k => `${COST_CATEGORY_LABELS[k]} ×${(line.pricing!.effectiveCategoryFactors![k] ?? 1).toLocaleString('da-DK')}${line.pricing!.categoryFactors?.[k] != null ? ' (linje)' : ''}`)
+                                    .join(' · ')}
+                                </div>
+                              )}
                               <div>Risk: {line.pricing?.riskPerUnit || 0} kr/{line.unit}</div>
                             </div>
                             <Button 

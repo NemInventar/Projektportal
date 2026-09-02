@@ -5,8 +5,8 @@ export const COMPANY_INFO = {
   name: 'Nem Inventar ApS',
   cvr: '45085473',
   address: {
-    line1: 'C/O Caspian Office Club A/S',
-    line2: 'Svanevej 22',
+    line1: 'Mågevej 73, st. tv.',
+    line2: '',
     zip: '2400',
     city: 'København NV',
   },
@@ -34,7 +34,9 @@ export const EMPLOYEES = [
 ] as const;
 
 export const formatCompanyAddress = (): string =>
-  `${COMPANY_INFO.address.line1}, ${COMPANY_INFO.address.line2}, ${COMPANY_INFO.address.zip} ${COMPANY_INFO.address.city}`;
+  [COMPANY_INFO.address.line1, COMPANY_INFO.address.line2, `${COMPANY_INFO.address.zip} ${COMPANY_INFO.address.city}`]
+    .filter((s) => s && s.trim().length > 0)
+    .join(', ');
 
 export const formatCompanyBankLine = (): string =>
   `Bank: ${COMPANY_INFO.bank.name} · Reg ${COMPANY_INFO.bank.regNo} · Konto ${COMPANY_INFO.bank.accountNo}`;
