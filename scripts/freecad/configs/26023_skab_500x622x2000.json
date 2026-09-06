@@ -1,0 +1,17 @@
+{
+  "_": "Gert / 26023 Islands Brygge 79c - eet hoejskab, 1 laage. Maal fra kundens SketchUp-model (500-modul, 622 dyb). Hoejde 2000 efter Joachims oenske 06-09-2026 (vaeggen har 2200 + 100 sokkel).",
+  "dwg_prefix": "GH.500",
+  "title": "Tall cabinet, 1 door",
+  "project": "26023 Islands Brygge 79c - wardrobe",
+  "techref": "Customer SketchUp model Islands_brygge_79c.skp",
+  "status": "FOR REVIEW",
+  "rev": "A",
+  "W": 500, "H": 2000, "D": 622,
+  "T": 19, "T_back": 6,
+  "material": "MDF oak veneer A/B 19 mm, oak edge band",
+  "material_back": "Oak veneer plywood 6 mm",
+  "finish": "Oil, Rubio Oil Plus 2C (or Shinnoki Natural Oak alt.)",
+  "hinge_side": "right",
+  "shelf_pins": true,
+  "back_screws": true
+}

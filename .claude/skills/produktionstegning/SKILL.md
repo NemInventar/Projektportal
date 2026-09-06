@@ -183,3 +183,36 @@ Tager 2–3 minutter. `xvfb` og `librsvg2-bin` er kun nødvendige for PNG-previe
 - [ ] Scripts committet i `Projektportal/scripts/freecad/`
 - [ ] `skill_run` logget
 - [ ] Joachim ved hvad der er åbent (orientering, fastgørelse, mål der skal bekræftes)
+
+
+## nicad — den parametriske skab-motor (tilfoejet 06-09-2026)
+
+Staalben-scriptet er stadig referencen for *en enkelt fri del*. Til **skabe** (korpus + laage + beslag)
+bruges `Projektportal/scripts/freecad/nicad/` med `build.py`:
+
+```
+FreeCADCmd.exe scripts\freecad\build.py --config configs\<navn>.json --out "<mappe>"
+```
+
+Een koersel (~20 s) giver: STEP pr. del + samling, DXF pr. bearbejdningsflade (lag = operation),
+produktionstegninger som EN PDF (samlingsark + et ark pr. del, Milots A3-layout), FCStd med
+parameterark, JSON med alle maal og deres kilde (CONFIG / AFLEDT). Kontrol-PNG'er i `_render/`.
+
+- **Konfiguration** = JSON. Noegler og graenser staar i `nicad/cabinet.py` (`DEFAULTS`, `LIMITS`).
+  Foerste config: `configs/26023_skab_500x622x2000.json` (Gert, eet hoejskab, 1 laage).
+- **Afledte maal** (haengselantal efter hoejde, skruedeling, laagemaal, bagplade, not) kommer med paa
+  tegningen i roed blok. Status er `FOR REVIEW` indtil Joachim/Milot siger andet.
+- Motorens moduler: `cabinet.py` (geometri, rent Python) · `solids.py` (FreeCAD-solids) · `dxf.py` ·
+  `views.py` (HLR-projektion med styret orientering - brug den, TechDraw.project spejler akser) ·
+  `sheet.py` (A3-ark, titelfelt, maal, PDF/SVG/PNG) · `drawings.py` (arkene).
+- FreeCAD lokalt: portable 1.1.3 i `C:\dev\freecad\FreeCAD_1.1.3-Windows-x86_64-py311\FreeCADCmd.exe`
+  (ezdxf er installeret i dens egen Python). Blender er ikke installeret; renders laves med matplotlib.
+- Naeste skridt (ikke lavet): flere laager, sokkel/ben, hylder/boejlestang, locker-features
+  (perforering, laas, ophaengsslids) som konfigurationer i samme motor. Locker 006.001.000 ligger
+  indtil videre som eget script i `scripts/freecad/locker/`.
+
+Faldgruber betalt 06-09: TechDraw.project returnerer i FreeCAD 1.1 fire grupper (synlig, synlig-omrids,
+skjult, skjult-omrids) - ikke ti. Kugler projiceres ikke (ingen silhuet); brug tynde skiver med normalen
+langs synsretningen som probe. Kig ALTID paa PNG'erne: foerste koersel havde spejlvendte visninger og
+en isometri der loeb ud af arket.
+
