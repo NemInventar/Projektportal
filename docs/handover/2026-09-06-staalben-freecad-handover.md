@@ -3,6 +3,9 @@
 **Dato:** 06-09-2026 · **Fra:** cloud-session (claude.ai/code) · **Til:** lokal Claude Code-session
 **Branch:** `claude/blender-download-v3umuo` — alt er committet og pushet.
 
+> **Kanonisk handoff:** `handoffs_2026_05_28` id **`7909626d`** — start den lokale session med
+> `pick up handoff 7909626d`. Denne fil er kun uddybende noter; rowen i Supabase er det der tæller.
+
 ## Hvor vi er
 
 | Leverance | Status | Hvor |
