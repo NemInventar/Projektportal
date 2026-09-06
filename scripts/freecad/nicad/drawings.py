@@ -57,7 +57,10 @@ def _chain(page, view, positions, axis, level, total, side="left"):
     """Kaede af maal langs en akse: kant -> foerste, foerste -> anden, anden -> sidste.
     Regulaer deling skrives som 'n x pitch = span'. side='right' laegger lodrette kaeder til hoejre for visningen."""
     pos = sorted(set(round(x, 2) for x in positions))
-    chain = [0.0] + pos[:2] + ([pos[-1]] if len(pos) > 2 else [])
+    if len(pos) == 1 and pos[0] > total / 2:          # enkelt position: maal fra naermeste kant
+        chain = [pos[0], total]
+    else:
+        chain = [0.0] + pos[:2] + ([pos[-1]] if len(pos) > 2 else [])
     regular = len(pos) > 2 and all(abs((pos[i + 1] - pos[i]) - (pos[1] - pos[0])) < 0.05 for i in range(len(pos) - 1))
     labels = []
     for i, (x1, x2) in enumerate(zip(chain, chain[1:])):

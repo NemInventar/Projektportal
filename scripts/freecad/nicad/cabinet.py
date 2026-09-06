@@ -215,7 +215,7 @@ class Cabinet:
             lk = c["lock"]
             lock_ab = None
             if lk:
-                la = dw - lk["edge"] if hinge_right else lk["edge"]          # laas i modsat kant af haengslerne
+                la = lk["edge"] if hinge_right else dw - lk["edge"]          # laas i modsat kant af haengslerne (set forfra: haengsler hoejre -> laas venstre)
                 lb = dh - lk["end"] if lk.get("from", "top") == "top" else lk["end"]
                 lock_ab = (la, lb)
                 dr.lock = dict(a=la, b=lb, sq=lk["sq"], r=lk["r"], ear_r=lk["ear_r"])
@@ -223,7 +223,7 @@ class Cabinet:
                 dr.groups["lock_pocket"] = f"Ø{lk['pocket_d']:g} x {lk['pocket_depth']:g} pocket for lock, thru Ø{2 * lk['r']:g} clipped to {lk['sq']:g} + R{lk['ear_r']:g} ears"
                 bp = lk.get("bumpers")
                 if bp:
-                    ba = dw - bp["edge"] if hinge_right else bp["edge"]
+                    ba = bp["edge"] if hinge_right else dw - bp["edge"]
                     for b in (bp["end"], dh / 2, dh - bp["end"]):
                         dr.hole(ba, b, bp["d"], bp["depth"], "-", "bumper")
                     dr.groups["bumper"] = f"3x Ø{bp['d']:g} x {bp['depth']:g}, {bp['edge']:g} from lock edge"
