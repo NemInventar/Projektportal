@@ -1,2 +1,6 @@
 # Superpowers-værktøjets session-state (server.pid, brainstorm-arbejdsfiler) — aldrig i git
 .superpowers/
+
+# Python bytecode fra FreeCAD/Blender-scripts
+__pycache__/
+*.pyc
