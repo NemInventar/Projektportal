@@ -27,17 +27,30 @@ def scale_txt(S):
 
 
 def _groups(p):
-    """Grupper af huller/lommer til maalsaetning: navn -> (liste af (a,b), beskrivelse)."""
-    g = {}
+    """Grupper af huller/lommer til maalsaetning: navn -> liste af (a,b). Sideeffekt: p.short[navn] = kort label."""
+    g, short = {}, {}
     for h in p.holes:
         key = h.get("group") or f"Ø{h['d']:g}"
         g.setdefault(key, []).append((h["a"], h["b"]))
+        short[key] = (h["d"], h["depth"])
     for pk in p.pockets:
         key = pk.get("group") or f"pocket Ø{pk['d']:g}"
         g.setdefault(key, []).append((pk["a"], pk["b"]))
+        short[key] = (pk["d"], pk["depth"])
     if p.csk:
         g["csk"] = [(c["a"], c["b"]) for c in p.csk]
+    p.short = {}
+    for k, pts in g.items():
+        if k == "csk":
+            p.short[k] = f"{len(pts)}x csk"
+        else:
+            d, depth = short[k]
+            p.short[k] = f"{len(pts)}x Ø{d:g}" + (f" x {depth:g}" if depth is not None else " thru")
     return g
+
+
+def _fits(y0, h, y_max):
+    return y0 + h <= y_max
 
 
 def _chain(page, view, positions, axis, level, total, side="left"):
@@ -89,7 +102,8 @@ def part_sheet(p, solid, cab, meta, sheet_no, sheet_of):
         vw = views.View(k, 1.0 / S, x, y_top)
         vw.draw(page)
         vws[face] = vw
-        label = ("FACE + (inside)" if face == "+" else "FACE - (outside)") if p.dwg.endswith((".002", ".003", ".004")) else ("FACE + (front)" if face == "+" else "FACE - (back)")
+        base = p.dwg.split("_")[0]
+        label = ("FACE + (inside)" if face == "+" else "FACE - (outside)") if base.endswith((".002", ".003", ".004")) else ("FACE + (front)" if face == "+" else "FACE - (back)")
         page.text(x, y_top - 14, f"{label}  {scale_txt(S)}", size=3.2, bold=True)
         x += vw.w + 40
     # kantvisning (tykkelse), set langs -a fra a=A siden
@@ -98,7 +112,7 @@ def part_sheet(p, solid, cab, meta, sheet_no, sheet_of):
     ve.draw(page)
     page.text(x, y_top - 14, f"EDGE  {scale_txt(S)}", size=3.2, bold=True)
     page.dim_h(ve.X(ve.u0), ve.X(ve.u1), ve.Y(ve.v1), ve.Y(ve.v1) - 6, f"{T:g}")
-    x_call = x + ve.w + 12                       # kolonne til henvisninger, hoejre for alle visninger
+    x_after = x + ve.w + 8
 
     # hovedmaal paa foerste visning
     v0 = vws["+"]
@@ -110,6 +124,7 @@ def part_sheet(p, solid, cab, meta, sheet_no, sheet_of):
     level = {"+": 1, "-": 1}
     vlevel = {("+", "left"): 1, ("+", "right"): 0, ("-", "left"): 0, ("-", "right"): 0}
     ncall = 0
+    group_notes = []
     for name, pts in groups.items():
         face = None
         for h in p.holes + p.pockets:
@@ -130,14 +145,31 @@ def part_sheet(p, solid, cab, meta, sheet_no, sheet_of):
             _chain(page, vw, [b for _, b in pts], "b", vlevel[(face, side)], p.B, side=side)
             vlevel[(face, side)] += 1
             level[face] += 1
-        desc = p.groups.get(name, name)
-        a0, b0 = max(pts, key=lambda q: (q[1], -q[0]))
-        ty = y_top + 4 + 9 * ncall
-        page.callout(vw.X(A_(a0)), vw.Y(b0), x_call, ty, [desc])
+        # kort henvisning taet paa det oeverste hul i gruppen (som Milot); lang tekst i noterne
+        a0, b0 = max(pts, key=lambda q: (q[1], A_(q[0])))
+        px_, py_ = vw.X(A_(a0)), vw.Y(b0)
+        k = ncall
+        off = 7 + 6 * (k // 2)
+        above = (k % 2 == 0) and (py_ - off > y_top - 2)
+        if above:
+            page.callout(px_ + 1.2, py_ - 1.2, px_ + 9 + 3 * (k // 2), py_ - off, [p.short.get(name, name)])
+        else:
+            page.callout(px_ + 1.2, py_ + 1.2, px_ + 9 + 3 * (k // 2), py_ + off + 3, [p.short.get(name, name)])
+        group_notes.append(f"{p.short.get(name, name)}: {p.groups.get(name, name)}")
         ncall += 1
 
-    # not (rabbet): henvisning + snit-detalje 2:1
-    dx, dy = 272.0, 30.0
+    # kantboringer (top/bund): kaedemaal langs b paa '+'-visningen + kort henvisning
+    if p.edge_holes:
+        pos = sorted(set(eh["pos_b"] for eh in p.edge_holes))
+        _chain(page, v0, pos, "b", vlevel[("+", "right")], p.B, side="right")
+        vlevel[("+", "right")] += 1
+        eh0 = p.edge_holes[0]
+        page.callout(v0.X(p.A) + 0.5, v0.Y(pos[-1]), v0.X(p.A) + 10, v0.Y(pos[-1]) - 8, [f"{len(p.edge_holes)}x Ø{eh0['d']:g} x {eh0['depth']:g} in edges"])
+        group_notes.append(f"{len(p.edge_holes)}x Ø{eh0['d']:g} x {eh0['depth']:g}: pilot holes in both side edges at t = {eh0['t']:g}, positions {', '.join(f'{x:g}' for x in pos)} from front")
+
+    # detaljer i hoejre kolonne
+    dx, dy = max(272.0, x_after + 14), 36.0
+    y_views_end = max(v.Y(v.v0) for v in list(vws.values()) + [ve]) + 10 + 8 * max(level.values()) + 6
     if p.rabbets:
         rb = p.rabbets[0]
         w, dt = rb["width"], rb["depth_t"]
@@ -158,44 +190,99 @@ def part_sheet(p, solid, cab, meta, sheet_no, sheet_of):
         page.text(x0, y0 + T * s2 + 8, "inside face  (back panel " + f"{c['T_back']:g} mm sits in rabbet, screwed)", size=2.5)
         dy += T * s2 + 30
 
-    # haengselkop-detalje 1:1
+    # haengselkop-detalje 1:1 (set fra bagsiden, haengselkanten til venstre) - med evt. udsparing
     cups = [pk for pk in p.pockets if pk.get("group") == "hinge_cup"]
     if cups:
         cup = cups[0]
         page.text(dx, dy - 4, "DETAIL B  hinge cup, seen from back  1:1", size=3.2, bold=True)
         r = cup["d"] / 2
-        edge_left = cup["a"] < p.A / 2          # kopcentret naermest a=0?
-        # tegn et 90 x 70 udsnit af laagens bagside med kanten til venstre
-        ex, ey = dx + 10, dy + 5
-        edge_x = ex
-        cx = edge_x + c["hinge_cup_edge"]
-        cy = ey + 35
-        page.line(edge_x, ey, edge_x, ey + 70, w=0.5)
-        page.line(edge_x, ey, edge_x + 90, ey, w=0.18, dash="3 1.5"); page.line(edge_x, ey + 70, edge_x + 90, ey + 70, w=0.18, dash="3 1.5")
-        page.circle(cx, cy, r, w=0.5)
+        ex, ey = dx + 18, dy + 22
+        cy = ey + 38
+        he = c["hinge_cup_edge"]
+        cx = ex + he
+        nt = c["hinge_notch"]
+        if nt:                                   # kant med udsparing: ned, ind, rundt, op
+            d, L, rr = nt["depth"], nt["length"], nt["r"]
+            b0, b1 = cy - L / 2, cy + L / 2
+            page.poly([(ex, ey), (ex, b0)], w=0.5)
+            page.poly([(ex, b0), (ex + d - rr, b0)], w=0.5)
+            page.poly([(ex + d - rr + rr * math.cos(math.radians(-90 + 90 * i / 8)), b0 + rr + rr * math.sin(math.radians(-90 + 90 * i / 8))) for i in range(9)], w=0.5)
+            page.poly([(ex + d, b0 + rr), (ex + d, b1 - rr)], w=0.5)
+            page.poly([(ex + d - rr + rr * math.cos(math.radians(0 + 90 * i / 8)), b1 - rr + rr * math.sin(math.radians(0 + 90 * i / 8))) for i in range(9)], w=0.5)
+            page.poly([(ex + d - rr, b1), (ex, b1), (ex, ey + 76)], w=0.5)
+            page.dim_h(ex, ex + d, b0, ey + 2, f"{d:g}")
+            page.dim_v(b0, b1, ex + d, ex - 8, f"{L:g}")
+            page.dim_v(b0, cy, ex + d, ex - 16, f"{L / 2:g}")
+            page.callout(ex + d - rr * 0.3, b1 - rr * 0.3, ex - 14, b1 + 8, [f"R{rr:g}"])
+            # koppen bryder ind i udsparingen - tegn kun den del der ligger i pladen
+            pts = [(cx + r * math.cos(th), cy + r * math.sin(th)) for th in [2 * math.pi * i / 96 for i in range(97)] if cx + r * math.cos(th) >= ex + d - 1e-6]
+            page.poly(pts, w=0.5)
+        else:
+            page.line(ex, ey, ex, ey + 76, w=0.5)
+            page.circle(cx, cy, r, w=0.5)
+        page.line(ex, ey, ex + 95, ey, w=0.18, dash="3 1.5"); page.line(ex, ey + 76, ex + 95, ey + 76, w=0.18, dash="3 1.5")
         page.line(cx - r - 3, cy, cx + r + 3, cy, w=0.18, dash="6 1 1 1"); page.line(cx, cy - r - 3, cx, cy + r + 3, w=0.18, dash="6 1 1 1")
         px = cx + c["hinge_pilot_da"]
         for db in (-c["hinge_pilot_db"], c["hinge_pilot_db"]):
             page.circle(px, cy + db, c["hinge_pilot_d"] / 2, w=0.35)
-        page.dim_h(edge_x, cx, cy - r, ey - 6, f"{c['hinge_cup_edge']:g}")
-        page.dim_h(cx, px, cy + r, ey + 76, f"{c['hinge_pilot_da']:g}")
-        page.dim_v(cy - c["hinge_pilot_db"], cy + c["hinge_pilot_db"], px, edge_x + 82, f"{2 * c['hinge_pilot_db']:g}")
-        page.callout(cx + r * 0.7071, cy - r * 0.7071, cx + 30, cy - 28, [f"Ø{cup['d']:g} x {cup['depth']:g} deep"])
-        page.callout(px + 1, cy + c["hinge_pilot_db"], px + 22, cy + 30, [f"2x Ø{c['hinge_pilot_d']:g} x {c['hinge_pilot_depth']:g}"])
-        dy += 95
+        page.dim_h(ex, cx, ey, ey - 6, f"{he:g}")
+        page.dim_h(ex, px, ey, ey - 14, f"{he + c['hinge_pilot_da']:g}")
+        page.dim_v(cy - c["hinge_pilot_db"], cy + c["hinge_pilot_db"], px, ex + 88, f"{2 * c['hinge_pilot_db']:g}")
+        page.dim_v(cy, cy + c["hinge_pilot_db"], px, ex + 80, f"{c['hinge_pilot_db']:g}")
+        page.callout(cx + r * 0.7071, cy + r * 0.7071, cx + 34, cy + 30, [f"R{r:g}  x {cup['depth']:g} deep"])
+        page.callout(px + 1, cy - c["hinge_pilot_db"], px + 20, cy - 33, [f"{2 * len(cups)}x Ø{c['hinge_pilot_d']:g} x {c['hinge_pilot_depth']:g}"])
+        dy += 106
 
-    # noter
-    ny = max(dy, 150.0)
+    # laase-detalje 1:1 (set fra bagsiden)
+    if p.lock:
+        from .solids import lock_outline
+        lk = p.lock
+        pk = next((q for q in p.pockets if q.get("group") == "lock_pocket"), None)
+        page.text(dx, dy - 4, "DETAIL C  lock, seen from back  1:1", size=3.2, bold=True)
+        cx, cy = dx + 40, dy + 30
+        if pk:
+            page.circle(cx, cy, pk["d"] / 2, w=0.5)
+        page.circle(cx, cy, lk["r"], w=0.35)
+        prof = [(cx + (a - lk["a"]), cy - (b - lk["b"])) for a, b in lock_outline(dict(lk), 240)]
+        page.poly(prof + [prof[0]], w=0.6, color="#c00")
+        page.line(cx - 22, cy, cx + 22, cy, w=0.18, dash="6 1 1 1"); page.line(cx, cy - 22, cx, cy + 22, w=0.18, dash="6 1 1 1")
+        page.dim_h(cx - lk["sq"] / 2, cx + lk["sq"] / 2, cy - lk["r"], cy - lk["r"] - 8, f"{lk['sq']:g}")
+        page.callout(cx + lk["r"] * 0.7071, cy - lk["r"] * 0.7071, cx + 26, cy - 22, [f"R{lk['r']:g} thru"])
+        if pk:
+            page.callout(cx + pk["d"] / 2 * 0.7071, cy + pk["d"] / 2 * 0.7071, cx + 30, cy + 26, [f"Ø{pk['d']:g} x {pk['depth']:g} deep pocket"])
+        page.callout(cx - lk["sq"] / 2 + 0.5, cy + lk["r"] - lk["ear_r"] + 1, cx - 40, cy + 30, [f"R{lk['ear_r']:g} ears for CNC"])
+        dy += 66
+
+    # noter: i hoejre kolonne under detaljerne hvis der er plads, ellers nederst til venstre under visningerne
     lines = [f"1. Material: {p.materiale}. Qty per cabinet: {p.qty}.",
-             "2. Face '+' / '-' as defined on the DXF. All blind depths from the face stated.",
-             "3. General tolerances ISO 2768-m. Panel size ±0.5.",
-             ] + [f"{i + 4}. {n}" for i, n in enumerate(p.noter)]
-    ny += page.notes(272, ny, "NOTES", lines)
+             "2. Face '+' / '-' as on the DXF. Blind depths from the face stated. Tolerances ISO 2768-m, panel ±0.5.",
+             ] + [f"{i + 3}. {n}" for i, n in enumerate(p.noter)] + [f"- {g}" for g in group_notes]
+    size = 2.4 if len(lines) <= 9 else 2.2
+    y_max_right = FRAME[1] + FRAME[3] - 45 - 4
+    y_max_left = FRAME[1] + FRAME[3] - 4
+    ny_right = max(dy, 120.0)
 
-    # afledte maal (roed)
+    def h_of(n, s):
+        return 4.5 + (s + 1.4) * n
+    if _fits(ny_right, h_of(len(lines), size), y_max_right):
+        nx, ny, y_max = dx, ny_right, y_max_right
+    elif _fits(y_views_end, h_of(len(lines), size), y_max_left):
+        nx, ny, y_max = 42.0, y_views_end, y_max_left
+    elif _fits(y_views_end, h_of(len(lines), 2.0), y_max_left):
+        nx, ny, y_max, size = 42.0, y_views_end, y_max_left, 2.0
+    else:                                       # drop gruppe-noterne (de staar som korte henvisninger paa visningen)
+        lines = [ln for ln in lines if not ln.startswith("- ")]
+        nx, ny, y_max = 42.0, y_views_end, y_max_left
+    ny += page.notes(nx, ny, "NOTES", lines, size=size)
     ant = cab.antagelser()
     if ant:
-        page.notes(272, min(ny + 6, 205), "DERIVED / ASSUMED - confirm before production", ant[:8], size=2.3, color="#8a1c1c")
+        h_red = 4.5 + 3.5 * min(len(ant), 8)
+        if _fits(ny + 4, h_red, y_max):
+            page.notes(nx, ny + 4, "DERIVED / ASSUMED - confirm before production", ant[:8], size=2.1, color="#8a1c1c")
+        elif nx != dx and _fits(max(dy, 120.0), h_red, y_max_right):
+            page.notes(dx, max(dy, 120.0), "DERIVED / ASSUMED - confirm before production", ant[:8], size=2.1, color="#8a1c1c")
+        elif _fits(ny + 4, 5, y_max):
+            page.text(nx, ny + 6, f"Derived values ({len(ant)}): see sheet 1 and the parameters JSON.", size=2.3, color="#8a1c1c")
 
     page.title_block(dict(meta, title=f"{p.navn}", dwg_no=p.dwg, sheet=f"{sheet_no}/{sheet_of}",
                           material=p.materiale, scale=f"{scale_txt(S)} (details 2:1, 1:1)"))
@@ -273,15 +360,34 @@ def assembly_sheet(cab, inst_shapes, meta, sheet_no, sheet_of):
         page.balloon(px, py, bx, py, item_of.get(p.dwg, "?"))
         k += 1
 
-    # samlingsnoter
+    # samlingsnoter + afledte maal - placeres hvor der er plads
     steps = ["1. Rabbet sides and top/bottom, drill all holes per part drawings (sheets 2-6).",
-             "2. Edge-band and finish visible faces before assembly.",
+             "2. Edge-band / finish visible faces before assembly.",
              f"3. Screw top and bottom between the sides: {len(c['screw_pos'])} screws per corner joint from the outside, countersunk.",
-             f"4. Slide back panel ({c['back_W']:g} x {c['back_H']:g} x {c['T_back']:g}) into the rabbet, screw from behind.",
-             f"5. Mount {c['hinge_count']} hinge plates on the {c['hinge_side']} side, hang door, adjust gaps to {c['door_gap']:g} mm.",
-             "6. Handle and interior (shelves, rail) per order - not part of this drawing."]
-    page.notes(FRAME[0] + 15, FRAME[1] + FRAME[3] - 62, "ASSEMBLY", steps, size=2.5)
+             f"4. Back panel ({c['back_W']:g} x {c['back_H']:g} x {c['T_back']:g}) into the rabbet" + (", screw from behind." if c["back_screws"] else "."),
+             f"5. Mount {c['hinge_count']} hinge plates on the {c['hinge_side']} side, hang door, adjust gaps to {c['door_gap']:g} mm."]
+    if c["lock"]:
+        steps.append("6. Fit lock in the door pocket, wall brackets and hanger inside the carcass.")
+    else:
+        steps.append("6. Handle and interior (shelves, rail) per order - not part of this drawing.")
+    h_steps = 4.5 + 3.9 * len(steps)
+    y_bottom = FRAME[1] + FRAME[3] - 6
+    y_after_front = max(vf.Y(0), vs.Y(0)) + 26
+    if _fits(y_after_front, h_steps, y_bottom):
+        page.notes(FRAME[0] + 15, y_after_front, "ASSEMBLY", steps, size=2.5)
+    else:
+        page.notes(x3, y_top + vt.h + 16, "ASSEMBLY", steps, size=2.3)
+    ant = cab.antagelser()
+    if ant:
+        h_red = 4.5 + 3.4 * min(len(ant), 9)
+        y_red = y_top + vt.h + 16
+        if _fits(y_red, h_red, ty - 4):
+            page.notes(x3, y_red, "DERIVED / ASSUMED - confirm before production", ant[:9], size=2.1, color="#8a1c1c")
+        elif _fits(y_after_front + h_steps + 4, h_red, y_bottom):
+            page.notes(FRAME[0] + 15, y_after_front + h_steps + 4, "DERIVED / ASSUMED - confirm before production", ant[:9], size=2.1, color="#8a1c1c")
+        else:
+            page.text(FRAME[0] + 15, y_bottom - 2, f"Derived values ({len(ant)}): see the parameters JSON.", size=2.3, color="#8a1c1c")
 
-    page.title_block(dict(meta, title=f"{c['title']} {W:g} x {H:g} x {D:g}", dwg_no=f"{c['dwg_prefix']}.000",
+    page.title_block(dict(meta, title=f"{c['title']} {W:g} x {H:g} x {D:g}", dwg_no=f"{c['dwg_prefix']}.000{c['variant_suffix']}",
                           sheet=f"{sheet_no}/{sheet_of}", material=c["material"], scale=scale_txt(S)))
     return page

@@ -68,14 +68,26 @@ def contour(sh, p):
     if not notches:
         sh.msp.add_lwpolyline([sh.uv(0, 0), sh.uv(A, 0), sh.uv(A, B), sh.uv(0, B)], close=True, dxfattribs={"layer": lay}); return
     bulge = math.tan(math.radians(90) / 4)
+    right = [n for n in notches if n.get("edge", "a1") == "a1"]
+    left = [n for n in notches if n.get("edge", "a1") == "a0"]
     pts = [(0, 0, 0), (A, 0, 0)]
-    for n in notches:
+    for n in right:                                   # op ad hoejre kant
         r, d = n["r"], n["depth"]
         b0, b1 = n["b"] - n["length"] / 2, n["b"] + n["length"] / 2
         pts += [(A, b0, 0), (A - d + r, b0, -bulge), (A - d, b0 + r, 0), (A - d, b1 - r, -bulge), (A - d + r, b1, 0), (A, b1, 0)]
     pts += [(A, B, 0), (0, B, 0)]
+    for n in sorted(left, key=lambda n: -n["b"]):     # ned ad venstre kant
+        r, d = n["r"], n["depth"]
+        b0, b1 = n["b"] - n["length"] / 2, n["b"] + n["length"] / 2
+        pts += [(0, b1, 0), (d - r, b1, -bulge), (d, b1 - r, 0), (d, b0 + r, -bulge), (d - r, b0, 0), (0, b0, 0)]
     out = [(*sh.uv(a, b), 0, 0, bl if sh.face == "+" else -bl) for a, b, bl in pts]
     sh.msp.add_lwpolyline(out, format="xyseb", close=True, dxfattribs={"layer": lay})
+
+
+def lock_profile(sh, p, lay):
+    from .solids import lock_outline
+    pts = [sh.uv(a, b) for a, b in lock_outline(p.lock, 240)]
+    sh.msp.add_lwpolyline(pts, close=True, dxfattribs={"layer": lay})
 
 
 def features_on(sh, p, face, csk_spec, ref=False):
@@ -86,6 +98,8 @@ def features_on(sh, p, face, csk_spec, ref=False):
         for h in p.holes:
             if h["depth"] is None:
                 sh.circle(h["a"], h["b"], h["d"], L(f"THRU_D{fmt(h['d'])}", 3))
+        if p.lock:
+            lock_profile(sh, p, L(f"THRU_LOCK_R{fmt(p.lock['r'])}_SQ{fmt(p.lock['sq'])}", 3))
     for h in p.holes:
         if h["depth"] is not None and h["face"] == face:
             sh.circle(h["a"], h["b"], h["d"], L(f"BLIND_D{fmt(h['d'])}_DEPTH{fmt(h['depth'])}", 4))
@@ -114,7 +128,7 @@ def faces_needed(p):
     f = set(h["face"] for h in p.holes if h["depth"] is not None)
     for coll in (p.pockets, p.slots, p.rabbets, p.csk):
         f |= set(x["face"] for x in coll)
-    has_thru = any(h["depth"] is None for h in p.holes) or p.notches or p.csk
+    has_thru = any(h["depth"] is None for h in p.holes) or p.notches or p.csk or p.lock
     if not f:
         f.add("+")
     counts = {fc: 0 for fc in f}

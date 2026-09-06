@@ -46,12 +46,13 @@ def main():
     cab = cabinet.Cabinet(cfg)
     c = cab.c
     pre = c["dwg_prefix"]
+    asm = f"{pre}.000{c['variant_suffix']}"       # samlingens tegningsnummer, fx 006.001.000_1
     dato = datetime.date.today().strftime("%d/%m/%Y")
     csk_spec = (c["screw_d"], c["screw_csk_d"], c["screw_csk_angle"])
     meta = dict(dept="Nem Inventar ApS", techref=cfg.get("techref", ""), created_by="nicad (FreeCAD headless)",
                 created_date=dato, approved_by="", doctype="Production drawing", status=cfg.get("status", "FOR REVIEW"),
                 project=c["project"], finish=c["finish"], rev=cfg.get("rev", "A"), date=dato,
-                model=f"{pre}.000.FCStd  ·  build.py --config {os.path.basename(cfg_path)}")
+                model=f"{asm}.FCStd  ·  build.py --config {os.path.basename(cfg_path)}")
 
     doc = App.newDocument("Cabinet")
     ark = doc.addObject("Spreadsheet::Sheet", "Parametre")
@@ -88,10 +89,10 @@ def main():
     comp = Part.makeCompound([o.Shape for _, _, o in inst])
     bb = comp.BoundBox
     print(f"[nicad] assembly bbox X {bb.XMin:.1f}..{bb.XMax:.1f}  Y {bb.YMin:.1f}..{bb.YMax:.1f}  Z {bb.ZMin:.1f}..{bb.ZMax:.1f}  overlap {overlap:.1f} mm3")
-    Import.export([o for _, _, o in inst], os.path.join(out, f"{pre}.000_assembly.step"))
+    Import.export([o for _, _, o in inst], os.path.join(out, f"{asm}_assembly.step"))
     rd = os.path.join(out, "_render"); os.makedirs(rd, exist_ok=True)
     for navn, _, o in inst:
-        Mesh.export([o], os.path.join(rd, f"{navn}.stl"))
+        Mesh.export([o], os.path.join(rd, f"{asm}_{navn}.stl"))
 
     # DXF
     from nicad import dxf as dxfmod
@@ -105,16 +106,16 @@ def main():
     pages = [drawings.assembly_sheet(cab, [(n, p, o.Shape) for n, p, o in inst], meta, 1, len(order) + 1)]
     for i, key in enumerate(order, start=2):
         pages.append(drawings.part_sheet(cab.parts[key], shapes[key], cab, meta, i, len(order) + 1))
-    pdf = os.path.join(out, f"{pre}.000_production-drawings_rev-{meta['rev']}.pdf")
+    pdf = os.path.join(out, f"{asm}_production-drawings_rev-{meta['rev']}.pdf")
     write_pdf(pages, pdf)
     for i, pg in enumerate(pages, start=1):
-        with open(os.path.join(rd, f"sheet_{i}.svg"), "w", encoding="utf-8") as f:
+        with open(os.path.join(rd, f"{asm}_sheet_{i}.svg"), "w", encoding="utf-8") as f:
             f.write(pg.svg())
-        write_png(pg, os.path.join(rd, f"sheet_{i}.png"))
+        write_png(pg, os.path.join(rd, f"{asm}_sheet_{i}.png"))
     print(f"[nicad] PDF: {os.path.basename(pdf)}  ({len(pages)} sheets, {os.path.getsize(pdf)} bytes)")
 
-    doc.saveAs(os.path.join(out, f"{pre}.000.FCStd"))
-    with open(os.path.join(out, f"{pre}.000_parameters.json"), "w", encoding="utf-8") as f:
+    doc.saveAs(os.path.join(out, f"{asm}.FCStd"))
+    with open(os.path.join(out, f"{asm}_parameters.json"), "w", encoding="utf-8") as f:
         json.dump(dict(config=cfg, resolved={k: v for k, v in c.items()}, sources=cab.src, derived=cab.antagelser(),
                        bom=[dict(item=i, qty=q, part=pn, desc=d) for i, q, pn, d in cab.bom()], parts=report,
                        assembly_bbox=[bb.XMin, bb.XMax, bb.YMin, bb.YMax, bb.ZMin, bb.ZMax], overlap_mm3=overlap,

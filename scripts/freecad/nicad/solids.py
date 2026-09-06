@@ -59,9 +59,45 @@ def rabbet_tool(rb, A, B, T):
 
 
 def notch_tool(n, A, B, T):
+    """Udsparing fra kant a1 (default) eller a0, gennem, R i de indvendige hjoerner."""
     r = n["r"]
     b0, b1 = n["b"] - n["length"] / 2, n["b"] + n["length"] / 2
-    return prism(rounded_rect(A - n["depth"], b0, A + 2 * r + EPS, b1, r), -EPS, T + 2 * EPS)
+    if n.get("edge", "a1") == "a1":
+        return prism(rounded_rect(A - n["depth"], b0, A + 2 * r + EPS, b1, r), -EPS, T + 2 * EPS)
+    return prism(rounded_rect(-(2 * r + EPS), b0, n["depth"], b1, r), -EPS, T + 2 * EPS)
+
+
+def lock_tool(lock, T):
+    """Gennemgaaende laasehul: cirkel R afskaaret til bredde sq, plus fire R ear_r-relieffer i hjoernerne
+    (centreret i (+-(sq/2 - ear_r), +-(r - ear_r)) - tangent til baade flade og topline)."""
+    a, b, sq, r, er = lock["a"], lock["b"], lock["sq"], lock["r"], lock["ear_r"]
+    h = T + 2 * EPS
+    band = Part.makeBox(sq, 2 * r + 2, h, V(a - sq / 2, b - r - 1, -EPS))
+    circ = Part.makeCylinder(r, h, V(a, b, -EPS))
+    prof = band.common(circ)
+    for sa in (-1, 1):
+        for sb in (-1, 1):
+            prof = prof.fuse(Part.makeCylinder(er, h, V(a + sa * (sq / 2 - er), b + sb * (r - er), -EPS)))
+    return prof
+
+
+def lock_outline(lock, n=180):
+    """Lukket 2D-kontur (a,b)-punkter til DXF/tegning: stjerneformet om centrum -> radial max."""
+    a, b, sq, r, er = lock["a"], lock["b"], lock["sq"], lock["r"], lock["ear_r"]
+    ears = [(sa * (sq / 2 - er), sb * (r - er)) for sa in (-1, 1) for sb in (-1, 1)]
+    pts = []
+    for i in range(n):
+        th = 2 * math.pi * i / n
+        c, s = math.cos(th), math.sin(th)
+        rm = r if abs(c) < 1e-9 else min(r, (sq / 2) / abs(c))
+        for ex, ey in ears:
+            # skaering af straale t*(c,s) med cirkel om (ex,ey) radius er: t^2 - 2t(c ex + s ey) + ex^2+ey^2-er^2 = 0
+            bq = c * ex + s * ey
+            disc = bq * bq - (ex * ex + ey * ey - er * er)
+            if disc >= 0:
+                rm = max(rm, bq + math.sqrt(disc))
+        pts.append((a + rm * c, b + rm * s))
+    return pts
 
 
 def slot_tool(s, T):
@@ -87,6 +123,8 @@ def build(p, csk_spec=None):
     solid = Part.makeBox(A, B, T)
     tools = [rabbet_tool(rb, A, B, T) for rb in p.rabbets]
     tools += [notch_tool(n, A, B, T) for n in p.notches]
+    if p.lock:
+        tools.append(lock_tool(p.lock, T))
     tools += [cyl(pk["a"], pk["b"], pk["d"], T, pk["depth"], pk["face"]) for pk in p.pockets]
     tools += [slot_tool(s, T) for s in p.slots]
     if p.csk:
