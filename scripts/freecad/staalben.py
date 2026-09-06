@@ -14,7 +14,7 @@ Output:
     Staalben_<orientering>.FCStd   parametrisk model (regneark + TechDraw-ark) - aabn og ret i FreeCAD
     Staalben_<orientering>.step    til smed / Fusion / alt andet CAD
     Staalben_<orientering>.stl     til render
-    Staalben_<orientering>.svg     A3-tegning med maal, stykliste, noter
+    Staalben_<orientering>.svg/.pdf A3-tegning med maal, stykliste, noter (pdf ~8 KB, standardfonte)
     Staalben_<orientering>.json    alle maal + kilde pr. maal
 
 Koordinater (model):  X = dybde, 0 = panelforkant, + = ud i rummet
@@ -212,8 +212,15 @@ def projekter(shape, retning, akser):
 # ---------------------------------------------------------------------------
 
 class Svg:
+    """
+    Tegneflade i mm paa et A3-ark (420 x 297, y nedad som i SVG).
+    Alle primitiver gemmes, saa arket kan skrives baade som SVG og som en
+    lille PDF med standardfonte (Helvetica, ikke indlejret) - ca. 8 KB.
+    """
+
     def __init__(self):
-        self.d = []
+        self.d = []          # svg-strenge
+        self.prim = []       # primitiver til pdf
 
     def add(self, s):
         self.d.append(s)
@@ -221,20 +228,24 @@ class Svg:
     def line(self, x1, y1, x2, y2, w=0.35, dash=None, color="#000"):
         da = f' stroke-dasharray="{dash}"' if dash else ""
         self.add(f'<line x1="{x1:.3f}" y1="{y1:.3f}" x2="{x2:.3f}" y2="{y2:.3f}" stroke="{color}" stroke-width="{w}"{da} stroke-linecap="round"/>')
+        self.prim.append(("poly", [(x1, y1), (x2, y2)], w, dash, color))
 
     def poly(self, pts, w=0.5, dash=None, color="#000"):
         da = f' stroke-dasharray="{dash}"' if dash else ""
         p = " ".join(f"{x:.3f},{y:.3f}" for x, y in pts)
         self.add(f'<polyline points="{p}" fill="none" stroke="{color}" stroke-width="{w}"{da} stroke-linejoin="round"/>')
+        self.prim.append(("poly", list(pts), w, dash, color))
 
     def rect(self, x, y, w, h, sw=0.5, fill="none"):
         self.add(f'<rect x="{x:.3f}" y="{y:.3f}" width="{w:.3f}" height="{h:.3f}" fill="{fill}" stroke="#000" stroke-width="{sw}"/>')
+        self.prim.append(("poly", [(x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y)], sw, None, "#000"))
 
     def text(self, x, y, s, size=3.5, anchor="start", bold=False, rot=0, color="#000"):
         fw = ' font-weight="bold"' if bold else ""
         tr = f' transform="rotate({rot} {x:.3f} {y:.3f})"' if rot else ""
-        s = s.replace("&", "&amp;").replace("<", "&lt;")
-        self.add(f'<text x="{x:.3f}" y="{y:.3f}" font-family="Helvetica, Arial, sans-serif" font-size="{size}" text-anchor="{anchor}" fill="{color}"{fw}{tr}>{s}</text>')
+        se = s.replace("&", "&amp;").replace("<", "&lt;")
+        self.add(f'<text x="{x:.3f}" y="{y:.3f}" font-family="Helvetica, Arial, sans-serif" font-size="{size}" text-anchor="{anchor}" fill="{color}"{fw}{tr}>{se}</text>')
+        self.prim.append(("text", x, y, s, size, anchor, bold, rot, color))
 
     def arrow(self, x, y, ang):
         # lukket pilespids 3 mm lang, ISO-agtig
@@ -245,6 +256,85 @@ class Svg:
         p2 = (x - L * c + halv * s, y - L * s - halv * c)
         p3 = (x - L * c - halv * s, y - L * s + halv * c)
         self.add(f'<polygon points="{p1[0]:.3f},{p1[1]:.3f} {p2[0]:.3f},{p2[1]:.3f} {p3[0]:.3f},{p3[1]:.3f}" fill="#000"/>')
+        self.prim.append(("fill", [p1, p2, p3], "#000"))
+
+    # ---- PDF ---------------------------------------------------------------
+
+    # Helvetica-bredder (WinAnsi) i 1/1000 em, til tekstjustering
+    _W = {c: 556 for c in "0123456789"}
+    _W.update({" ": 278, ".": 278, ",": 278, ":": 278, ";": 278, "-": 333, "/": 278, "(": 333, ")": 333,
+               "a": 556, "b": 556, "c": 500, "d": 556, "e": 556, "f": 278, "g": 556, "h": 556, "i": 222, "j": 222,
+               "k": 500, "l": 222, "m": 833, "n": 556, "o": 556, "p": 556, "q": 556, "r": 333, "s": 500, "t": 278,
+               "u": 556, "v": 500, "w": 722, "x": 500, "y": 500, "z": 500,
+               "A": 667, "B": 667, "C": 722, "D": 722, "E": 667, "F": 611, "G": 778, "H": 722, "I": 278, "J": 500,
+               "K": 667, "L": 556, "M": 833, "N": 722, "O": 778, "P": 667, "Q": 778, "R": 722, "S": 667, "T": 611,
+               "U": 722, "V": 667, "W": 944, "X": 667, "Y": 667, "Z": 611,
+               "Ø": 778, "°": 400, "·": 278, "=": 584, "+": 584, "x": 500, "'": 191, "%": 889, "_": 556, "#": 556})
+
+    def _tw(self, s, size, bold):
+        f = 1.08 if bold else 1.0
+        return sum(self._W.get(ch, 556) for ch in s) / 1000.0 * size * f
+
+    @staticmethod
+    def _rgb(color):
+        c = color.lstrip("#")
+        if len(c) == 3:
+            c = "".join(ch * 2 for ch in c)
+        return tuple(int(c[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+
+    def render_pdf(self):
+        import zlib
+        K = 72.0 / 25.4                     # mm -> pt
+        H = 297.0
+        def P(x, y):                        # mm (y nedad) -> pt (y opad)
+            return f"{x * K:.2f} {(H - y) * K:.2f}"
+
+        ops = ["1 J 1 j"]
+        for p in self.prim:
+            if p[0] == "poly":
+                _, pts, w, dash, color = p
+                r, g, b = self._rgb(color)
+                ops.append(f"{r:.3f} {g:.3f} {b:.3f} RG {w * K:.2f} w")
+                ops.append("[" + " ".join(f"{float(v) * K:.2f}" for v in dash.split()) + "] 0 d" if dash else "[] 0 d")
+                ops.append(" ".join(f"{P(x, y)} {'m' if i == 0 else 'l'}" for i, (x, y) in enumerate(pts)) + " S")
+            elif p[0] == "fill":
+                _, pts, color = p
+                r, g, b = self._rgb(color)
+                ops.append(f"{r:.3f} {g:.3f} {b:.3f} rg " + " ".join(f"{P(x, y)} {'m' if i == 0 else 'l'}" for i, (x, y) in enumerate(pts)) + " h f")
+            elif p[0] == "text":
+                _, x, y, s, size, anchor, bold, rot, color = p
+                r, g, b = self._rgb(color)
+                w = self._tw(s, size, bold)
+                dx = -w / 2 if anchor == "middle" else (-w if anchor == "end" else 0.0)
+                import math
+                a = math.radians(-rot)          # svg roterer med uret, pdf mod uret
+                ca, sa = math.cos(a), math.sin(a)
+                ox = x + dx * math.cos(math.radians(rot))
+                oy = y + dx * math.sin(math.radians(rot))
+                esc = s.encode("cp1252", "replace").replace(b"\\", b"\\\\").replace(b"(", b"\\(").replace(b")", b"\\)").decode("latin-1")
+                font = "/FB" if bold else "/F"
+                ops.append(f"BT {r:.3f} {g:.3f} {b:.3f} rg {font} {size * K:.2f} Tf {ca:.4f} {sa:.4f} {-sa:.4f} {ca:.4f} {P(ox, oy)} Tm ({esc}) Tj ET")
+        stream = zlib.compress("\n".join(ops).encode("latin-1"))
+
+        objs = []
+        objs.append(b"<< /Type /Catalog /Pages 2 0 R >>")
+        objs.append(b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        objs.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {420 * K:.2f} {297 * K:.2f}] /Contents 4 0 R /Resources << /Font << /F 5 0 R /FB 6 0 R >> >> >>".encode())
+        objs.append(b"<< /Length " + str(len(stream)).encode() + b" /Filter /FlateDecode >>\nstream\n" + stream + b"\nendstream")
+        objs.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+        objs.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>")
+
+        out = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+        offsets = []
+        for i, o in enumerate(objs, start=1):
+            offsets.append(len(out))
+            out += f"{i} 0 obj\n".encode() + o + b"\nendobj\n"
+        xref = len(out)
+        out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode()
+        for off in offsets:
+            out += f"{off:010d} 00000 n \n".encode()
+        out += f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+        return bytes(out)
 
     def dim_h(self, x1, x2, y_geo, y_dim, tekst):
         """Vandret maal mellem x1 og x2, maalt ved y_geo, maallinje ved y_dim."""
@@ -447,6 +537,8 @@ def tegn(ben, kasser, out_svg, out_json, dato, dwg_no, rev):
 
     with open(out_svg, "w", encoding="utf-8") as f:
         f.write(svg.render())
+    with open(out_svg[:-4] + ".pdf", "wb") as f:           # lille PDF, standardfonte
+        f.write(svg.render_pdf())
 
     # ---- JSON: alle maal med kilde ----------------------------------------------
     data = {
@@ -541,7 +633,7 @@ def main():
     Import.export([ben], stem + ".step")
     Mesh.export([ben], stem + ".stl")
     doc.saveAs(stem + ".FCStd")
-    print(f"[staalben] skrevet: {stem}.{{FCStd,step,stl,svg,json}}  masse {data['masse_pr_ben_kg']} kg/ben")
+    print(f"[staalben] skrevet: {stem}.{{FCStd,step,stl,svg,pdf,json}}  masse {data['masse_pr_ben_kg']} kg/ben")
 
 
 main()
