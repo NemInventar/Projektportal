@@ -43,6 +43,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
   DropdownMenuSeparator,
+  DropdownMenuCheckboxItem,
+  DropdownMenuLabel,
 } from '@/components/ui/dropdown-menu';
 import {
   Plus,
@@ -2970,10 +2972,25 @@ const ProjectQuoteDetail = () => {
       materialId: string;
       name: string;
       category: string;
+      type: 'Hyldevare' | 'Beslag' | 'Råvare';
       unit: string;
+      unitPrice: number;
+      priceStatus: string;
+      supplierName: string;
+      supplierCode: string;
+      url: string;
+      products: Set<string>;
       totalQty: number;
       totalCost: number;
     }> = {};
+
+    // Hyldevare = færdig indkøbt vare der leveres som den er. Beslag = dele til egenproduktion.
+    const typeOf = (cat: string): 'Hyldevare' | 'Beslag' | 'Råvare' => {
+      const c = (cat || '').toLowerCase();
+      if (c.includes('indkøb') || c.includes('vask') || c.includes('armatur') || c.includes('hvidevare')) return 'Hyldevare';
+      if (c.includes('beslag') || c.includes('skru')) return 'Beslag';
+      return 'Råvare';
+    };
 
     productItems.forEach(quoteItem => {
       // Find material lines for this product
@@ -2997,16 +3014,25 @@ const ProjectQuoteDetail = () => {
         // Group by material ID
         const key = material.id;
         if (!materialTotals[key]) {
+          const supplier = material.supplier_id ? companies.find(c => c.id === material.supplier_id) : undefined;
           materialTotals[key] = {
             materialId: material.id,
             name: material.name || 'Unavngivet materiale',
             category: material.category || 'Ingen kategori',
+            type: typeOf(material.category),
             unit: material.unit || 'stk',
+            unitPrice: Number(materialUnitCost) || 0,
+            priceStatus: material.price_status || '',
+            supplierName: supplier?.name || '',
+            supplierCode: material.supplier_product_code || '',
+            url: material.supplier_product_url || '',
+            products: new Set<string>(),
             totalQty: 0,
             totalCost: 0
           };
         }
 
+        if (quoteItem.title) materialTotals[key].products.add(quoteItem.title);
         materialTotals[key].totalQty += materialTotalQtyForItem;
         materialTotals[key].totalCost += materialTotalCostForItem;
       });
@@ -3017,6 +3043,41 @@ const ProjectQuoteDetail = () => {
   };
 
   const materialSummary = buildMaterialSummary(lines, productMaterialLines, projectMaterials);
+
+  // Kolonnevalg i materialeopsummeringen — persisteres pr. browser.
+  const MAT_COLS = [
+    { key: 'type', label: 'Type' },
+    { key: 'category', label: 'Kategori' },
+    { key: 'supplier', label: 'Leverandør' },
+    { key: 'code', label: 'Varenr.' },
+    { key: 'link', label: 'Link' },
+    { key: 'qty', label: 'Samlet mængde' },
+    { key: 'unit', label: 'Enhed' },
+    { key: 'unitPrice', label: 'Enhedspris' },
+    { key: 'status', label: 'Prisstatus' },
+    { key: 'products', label: 'Bruges i' },
+    { key: 'total', label: 'Samlet cost' },
+  ] as const;
+  type MatColKey = typeof MAT_COLS[number]['key'];
+  const MAT_COLS_KEY = 'quote.materialSummary.cols.v1';
+  const [matCols, setMatCols] = useState<Record<MatColKey, boolean>>(() => {
+    const def: Record<MatColKey, boolean> = {
+      type: true, category: false, supplier: true, code: false, link: true,
+      qty: true, unit: true, unitPrice: true, status: true, products: false, total: true,
+    };
+    try {
+      const raw = localStorage.getItem(MAT_COLS_KEY);
+      return raw ? { ...def, ...JSON.parse(raw) } : def;
+    } catch { return def; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(MAT_COLS_KEY, JSON.stringify(matCols)); } catch {}
+  }, [matCols]);
+  const matColCount = Object.values(matCols).filter(Boolean).length + 1;
+  const PRICE_STATUS_LABEL: Record<string, string> = {
+    confirmed: 'Bekræftet', quoted: 'Tilbud', erfaringstal: 'Erfaringstal', listepris: 'Listepris',
+    derived: 'Afledt', estimated: 'Skøn', pending: 'Afventer',
+  };
 
   return (
     <Layout>
@@ -5413,10 +5474,36 @@ const ProjectQuoteDetail = () => {
         {materialSummary.length > 0 && (
           <Card>
             <CardHeader>
-              <CardTitle>Materialeopsummering (intern)</CardTitle>
-              <p className="text-sm text-muted-foreground">
-                Samlet oversigt over alle materialer fra produkter på tværs af tilbudslinjer
-              </p>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <CardTitle>Materialeopsummering (intern)</CardTitle>
+                  <p className="text-sm text-muted-foreground">
+                    Samlet oversigt over alle materialer fra produkter på tværs af tilbudslinjer.
+                    Hyldevare = færdig indkøbt vare · Beslag = dele til egenproduktion · Råvare = plader, træ, overflade.
+                  </p>
+                </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm">
+                      Kolonner <ChevronDown className="h-4 w-4 ml-1" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-52">
+                    <DropdownMenuLabel>Vis kolonner</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    {MAT_COLS.map(c => (
+                      <DropdownMenuCheckboxItem
+                        key={c.key}
+                        checked={matCols[c.key]}
+                        onCheckedChange={(v) => setMatCols(prev => ({ ...prev, [c.key]: !!v }))}
+                        onSelect={(e) => e.preventDefault()}
+                      >
+                        {c.label}
+                      </DropdownMenuCheckboxItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
             </CardHeader>
             <CardContent>
               <div className="overflow-x-auto">
@@ -5424,41 +5511,86 @@ const ProjectQuoteDetail = () => {
                   <thead>
                     <tr className="bg-gray-50">
                       <th className="border border-gray-300 px-4 py-2 text-left font-medium">Materiale</th>
-                      <th className="border border-gray-300 px-4 py-2 text-left font-medium">Kategori</th>
-                      <th className="border border-gray-300 px-4 py-2 text-right font-medium">Samlet mængde</th>
-                      <th className="border border-gray-300 px-4 py-2 text-center font-medium">Enhed</th>
-                      <th className="border border-gray-300 px-4 py-2 text-right font-medium">Samlet cost</th>
+                      {matCols.type && <th className="border border-gray-300 px-4 py-2 text-left font-medium">Type</th>}
+                      {matCols.category && <th className="border border-gray-300 px-4 py-2 text-left font-medium">Kategori</th>}
+                      {matCols.supplier && <th className="border border-gray-300 px-4 py-2 text-left font-medium">Leverandør</th>}
+                      {matCols.code && <th className="border border-gray-300 px-4 py-2 text-left font-medium">Varenr.</th>}
+                      {matCols.link && <th className="border border-gray-300 px-4 py-2 text-center font-medium">Link</th>}
+                      {matCols.qty && <th className="border border-gray-300 px-4 py-2 text-right font-medium">Samlet mængde</th>}
+                      {matCols.unit && <th className="border border-gray-300 px-4 py-2 text-center font-medium">Enhed</th>}
+                      {matCols.unitPrice && <th className="border border-gray-300 px-4 py-2 text-right font-medium">Enhedspris</th>}
+                      {matCols.status && <th className="border border-gray-300 px-4 py-2 text-left font-medium">Prisstatus</th>}
+                      {matCols.products && <th className="border border-gray-300 px-4 py-2 text-left font-medium">Bruges i</th>}
+                      {matCols.total && <th className="border border-gray-300 px-4 py-2 text-right font-medium">Samlet cost</th>}
                     </tr>
                   </thead>
                   <tbody>
                     {materialSummary.map((material, index) => (
                       <tr key={material.materialId || index} className="hover:bg-gray-50">
                         <td className="border border-gray-300 px-4 py-2">{material.name}</td>
-                        <td className="border border-gray-300 px-4 py-2 text-muted-foreground">{material.category}</td>
-                        <td className="border border-gray-300 px-4 py-2 text-right font-medium">
-                          {material.totalQty.toLocaleString('da-DK', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
-                        </td>
-                        <td className="border border-gray-300 px-4 py-2 text-center">{material.unit}</td>
-                        <td className="border border-gray-300 px-4 py-2 text-right font-semibold">
-                          {material.totalCost.toLocaleString('da-DK')} kr
-                        </td>
+                        {matCols.type && (
+                          <td className="border border-gray-300 px-4 py-2">
+                            <Badge variant={material.type === 'Hyldevare' ? 'default' : material.type === 'Beslag' ? 'secondary' : 'outline'}>
+                              {material.type}
+                            </Badge>
+                          </td>
+                        )}
+                        {matCols.category && <td className="border border-gray-300 px-4 py-2 text-muted-foreground">{material.category}</td>}
+                        {matCols.supplier && <td className="border border-gray-300 px-4 py-2">{material.supplierName || <span className="text-muted-foreground">–</span>}</td>}
+                        {matCols.code && <td className="border border-gray-300 px-4 py-2 text-xs">{material.supplierCode || <span className="text-muted-foreground">–</span>}</td>}
+                        {matCols.link && (
+                          <td className="border border-gray-300 px-4 py-2 text-center">
+                            {material.url ? (
+                              <a href={material.url} target="_blank" rel="noopener noreferrer" title={material.url}
+                                 className="inline-flex items-center text-blue-600 hover:underline">
+                                <ExternalLink className="h-4 w-4" />
+                              </a>
+                            ) : (
+                              <span className="text-muted-foreground" title="Intet link registreret på materialet">–</span>
+                            )}
+                          </td>
+                        )}
+                        {matCols.qty && (
+                          <td className="border border-gray-300 px-4 py-2 text-right font-medium">
+                            {material.totalQty.toLocaleString('da-DK', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                          </td>
+                        )}
+                        {matCols.unit && <td className="border border-gray-300 px-4 py-2 text-center">{material.unit}</td>}
+                        {matCols.unitPrice && (
+                          <td className="border border-gray-300 px-4 py-2 text-right">
+                            {material.unitPrice.toLocaleString('da-DK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kr
+                          </td>
+                        )}
+                        {matCols.status && (
+                          <td className="border border-gray-300 px-4 py-2">
+                            <span className={
+                              ['confirmed', 'quoted'].includes(material.priceStatus) ? 'text-green-700' :
+                              ['estimated', 'pending', 'derived'].includes(material.priceStatus) ? 'text-amber-700' : 'text-muted-foreground'
+                            }>
+                              {PRICE_STATUS_LABEL[material.priceStatus] || material.priceStatus || '–'}
+                            </span>
+                          </td>
+                        )}
+                        {matCols.products && (
+                          <td className="border border-gray-300 px-4 py-2 text-xs text-muted-foreground" title={Array.from(material.products).join('\n')}>
+                            {material.products.size} produkt{material.products.size === 1 ? '' : 'er'}
+                          </td>
+                        )}
+                        {matCols.total && (
+                          <td className="border border-gray-300 px-4 py-2 text-right font-semibold">
+                            {material.totalCost.toLocaleString('da-DK')} kr
+                          </td>
+                        )}
                       </tr>
                     ))}
                     {/* Total row */}
                     <tr className="bg-gray-100 font-bold border-t-2">
-                      <td className="border border-gray-300 px-4 py-2">Total</td>
-                      <td className="border border-gray-300 px-4 py-2 text-muted-foreground">
-                        {/* Empty - category */}
-                      </td>
-                      <td className="border border-gray-300 px-4 py-2 text-right">
-                        {/* Empty - different units */}
-                      </td>
-                      <td className="border border-gray-300 px-4 py-2 text-center">
-                        {/* Empty - different units */}
-                      </td>
-                      <td className="border border-gray-300 px-4 py-2 text-right font-bold">
-                        {materialSummary.reduce((sum, m) => sum + m.totalCost, 0).toLocaleString('da-DK')} kr
-                      </td>
+                      <td className="border border-gray-300 px-4 py-2" colSpan={Math.max(1, matColCount - (matCols.total ? 1 : 0))}>Total</td>
+                      {matCols.total && (
+                        <td className="border border-gray-300 px-4 py-2 text-right font-bold">
+                          {materialSummary.reduce((sum, m) => sum + m.totalCost, 0).toLocaleString('da-DK')} kr
+                        </td>
+                      )}
                     </tr>
                   </tbody>
                 </table>
