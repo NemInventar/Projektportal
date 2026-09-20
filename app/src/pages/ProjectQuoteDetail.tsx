@@ -340,6 +340,37 @@ const ProjectQuoteDetail = () => {
   useEffect(() => {
     try { localStorage.setItem(LINE_VIS_KEY, JSON.stringify(lineSectionVis)); } catch {}
   }, [lineSectionVis]);
+
+  // Kolonnevalg i materialeopsummeringen — persisteres pr. browser.
+  // SKAL stå her, før loading-/!quote-returns længere nede (hook-rækkefølge).
+  const MAT_COLS = [
+    { key: 'type', label: 'Type' },
+    { key: 'category', label: 'Kategori' },
+    { key: 'supplier', label: 'Leverandør' },
+    { key: 'code', label: 'Varenr.' },
+    { key: 'link', label: 'Link' },
+    { key: 'qty', label: 'Samlet mængde' },
+    { key: 'unit', label: 'Enhed' },
+    { key: 'unitPrice', label: 'Enhedspris' },
+    { key: 'status', label: 'Prisstatus' },
+    { key: 'products', label: 'Bruges i' },
+    { key: 'total', label: 'Samlet cost' },
+  ] as const;
+  type MatColKey = typeof MAT_COLS[number]['key'];
+  const MAT_COLS_KEY = 'quote.materialSummary.cols.v1';
+  const [matCols, setMatCols] = useState<Record<MatColKey, boolean>>(() => {
+    const def: Record<MatColKey, boolean> = {
+      type: true, category: false, supplier: true, code: false, link: true,
+      qty: true, unit: true, unitPrice: true, status: true, products: false, total: true,
+    };
+    try {
+      const raw = localStorage.getItem(MAT_COLS_KEY);
+      return raw ? { ...def, ...JSON.parse(raw) } : def;
+    } catch { return def; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(MAT_COLS_KEY, JSON.stringify(matCols)); } catch {}
+  }, [matCols]);
   const toggleLineSection = (key: keyof LineSectionVisibility) =>
     setLineSectionVis(prev => ({ ...prev, [key]: !prev[key] }));
   const hiddenSectionCount = Object.values(lineSectionVis).filter(v => !v).length;
@@ -3043,36 +3074,6 @@ const ProjectQuoteDetail = () => {
   };
 
   const materialSummary = buildMaterialSummary(lines, productMaterialLines, projectMaterials);
-
-  // Kolonnevalg i materialeopsummeringen — persisteres pr. browser.
-  const MAT_COLS = [
-    { key: 'type', label: 'Type' },
-    { key: 'category', label: 'Kategori' },
-    { key: 'supplier', label: 'Leverandør' },
-    { key: 'code', label: 'Varenr.' },
-    { key: 'link', label: 'Link' },
-    { key: 'qty', label: 'Samlet mængde' },
-    { key: 'unit', label: 'Enhed' },
-    { key: 'unitPrice', label: 'Enhedspris' },
-    { key: 'status', label: 'Prisstatus' },
-    { key: 'products', label: 'Bruges i' },
-    { key: 'total', label: 'Samlet cost' },
-  ] as const;
-  type MatColKey = typeof MAT_COLS[number]['key'];
-  const MAT_COLS_KEY = 'quote.materialSummary.cols.v1';
-  const [matCols, setMatCols] = useState<Record<MatColKey, boolean>>(() => {
-    const def: Record<MatColKey, boolean> = {
-      type: true, category: false, supplier: true, code: false, link: true,
-      qty: true, unit: true, unitPrice: true, status: true, products: false, total: true,
-    };
-    try {
-      const raw = localStorage.getItem(MAT_COLS_KEY);
-      return raw ? { ...def, ...JSON.parse(raw) } : def;
-    } catch { return def; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem(MAT_COLS_KEY, JSON.stringify(matCols)); } catch {}
-  }, [matCols]);
   const matColCount = Object.values(matCols).filter(Boolean).length + 1;
   const PRICE_STATUS_LABEL: Record<string, string> = {
     confirmed: 'Bekræftet', quoted: 'Tilbud', erfaringstal: 'Erfaringstal', listepris: 'Listepris',
