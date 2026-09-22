@@ -291,6 +291,12 @@ const ProjectQuoteDetail = () => {
   const [sendGate, setSendGate] = useState<{ aarsag: string; detalje: string | null }[] | null>(null);
   const [sendGateChecking, setSendGateChecking] = useState(false);
   const [bypassNote, setBypassNote] = useState('');
+  // Filtrering + sortering af produkt-opsummeringen (bruges langt nede i render, men SKAL deklareres
+  // her før early-returns — 22-09-2026 lå de efter `if (loading) return` → "Rendered more hooks" → hvid side)
+  const [summarySearch, setSummarySearch] = useState('');
+  const [summarySort, setSummarySort] = useState<{ felt: 'navn' | 'antal' | 'cost'; faldende: boolean }>(
+    { felt: 'cost', faldende: true }
+  );
   // Sandheden for redigerbarhed: lås-state. Når true er hele tilbuddet read-only.
   const isReadOnly = !!quote?.is_locked;
   // Employees + crm_contacts til FK-dropdowns
@@ -3144,11 +3150,8 @@ const ProjectQuoteDetail = () => {
 
   const productSummary = buildProductSummary(lines);
 
-  // Filtrering + sortering af opsummeringen
-  const [summarySearch, setSummarySearch] = useState('');
-  const [summarySort, setSummarySort] = useState<{ felt: 'navn' | 'antal' | 'cost'; faldende: boolean }>(
-    { felt: 'cost', faldende: true }
-  );
+  // Filtrering + sortering af opsummeringen: state'en (summarySearch/summarySort) er deklareret
+  // oppe hos de øvrige hooks — her er vi EFTER early-returns, og hooks må ikke kaldes betinget.
 
   const toggleSummarySort = (felt: 'navn' | 'antal' | 'cost') => {
     setSummarySort(prev => prev.felt === felt
