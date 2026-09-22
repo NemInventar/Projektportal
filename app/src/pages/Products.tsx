@@ -149,12 +149,14 @@ interface UsageItem {
   quoteStatus: string;
 }
 
-/** De to billedslots pr. produkt (produkt_billeder): vores egen reference og kundens. */
-type ImageSlot = 'vores' | 'kunde';
+/** Tre billedlag pr. produkt (produkt_billeder): arbejdstegning (vores mål, SVG), vores reference (foto/render), kundens reference. */
+type ImageSlot = 'tegning' | 'vores' | 'kunde';
 interface ProductImages {
+  tegning?: { url: string; caption: string | null };
   vores?: { url: string; caption: string | null };
   kunde?: { url: string; caption: string | null };
 }
+const svgToDataUrl = (svg: string) => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
 
 interface DerivedProduct {
   product: ProjectProduct;
@@ -163,7 +165,7 @@ interface DerivedProduct {
   lineImageUrl: string | null;
   /** Alle billeder fra de tilbudslinjer produktet sidder på (dedupleret på URL, "kun dette produkt" først) */
   lineImages: LineImage[];
-  imageSource: 'vores' | 'kunde' | 'tilbudslinje' | null;
+  imageSource: 'tegning' | 'vores' | 'kunde' | 'tilbudslinje' | null;
   // Kost pr. enhed fra kostlinjerne (ekskl. Korpus — samme regel som DB-snapshottet)
   materials: number;
   ue: number;
@@ -291,12 +293,13 @@ const Products = () => {
     if (productIds.length === 0) { setImagesByProduct({}); return; }
     const { data, error } = await supabase
       .from('produkt_billeder')
-      .select('product_id, image_url, caption, kunde_ref_url, kunde_ref_caption')
+      .select('product_id, image_url, caption, kunde_ref_url, kunde_ref_caption, tegning_svg, tegning_caption')
       .in('product_id', productIds);
     if (error) { console.error('Products: kunne ikke hente produktbilleder', error); return; }
     const imgs: Record<string, ProductImages> = {};
     for (const r of (data as any[]) ?? []) {
       imgs[r.product_id] = {
+        tegning: r.tegning_svg ? { url: svgToDataUrl(r.tegning_svg), caption: r.tegning_caption ?? null } : undefined,
         vores: r.image_url ? { url: r.image_url, caption: r.caption ?? null } : undefined,
         kunde: r.kunde_ref_url ? { url: r.kunde_ref_url, caption: r.kunde_ref_caption ?? null } : undefined,
       };
@@ -307,6 +310,7 @@ const Products = () => {
   /** Gem et billede i en slot (upsert på product_id — den anden slot røres ikke). */
   const saveProductImage = async (productId: string, slot: ImageSlot, url: string, sourceRef: string, caption?: string | null) => {
     const payload: any = { product_id: productId, created_by: user?.email ?? 'ukendt', updated_at: new Date().toISOString() };
+    if (slot === 'tegning') { toast({ title: 'Arbejdstegningen kommer fra produktkortet', description: 'Den kan ikke uploades her endnu.' }); return; }
     if (slot === 'vores') { payload.image_url = url; payload.source_ref = sourceRef; if (caption !== undefined) payload.caption = caption; }
     else { payload.kunde_ref_url = url; payload.kunde_ref_source_ref = sourceRef; if (caption !== undefined) payload.kunde_ref_caption = caption; }
     const { error } = await supabase.from('produkt_billeder').upsert(payload, { onConflict: 'product_id' });
@@ -363,18 +367,20 @@ const Products = () => {
   const removeProductImage = async (productId: string, slot: ImageSlot) => {
     const cur = imagesByProduct[productId];
     if (!cur) return;
-    const other = slot === 'vores' ? cur.kunde : cur.vores;
+    const othersLeft = (['tegning', 'vores', 'kunde'] as ImageSlot[]).filter(s => s !== slot && cur[s]).length;
     const key = `${productId}:${slot}`;
     try {
       setImageBusy(key);
-      if (!other) {
+      if (othersLeft === 0) {
         // Sidste billede på rækken — rækken fjernes (CHECK kræver mindst ét billede). Filen i storage bevares.
         const { error } = await supabase.from('produkt_billeder').delete().eq('product_id', productId);
         if (error) throw error;
       } else {
         const patch = slot === 'vores'
           ? { image_url: null, caption: null, source_ref: null }
-          : { kunde_ref_url: null, kunde_ref_caption: null, kunde_ref_source_ref: null };
+          : slot === 'tegning'
+            ? { tegning_svg: null, tegning_caption: null, tegning_source_ref: null }
+            : { kunde_ref_url: null, kunde_ref_caption: null, kunde_ref_source_ref: null };
         const { error } = await supabase.from('produkt_billeder').update({ ...patch, updated_at: new Date().toISOString() }).eq('product_id', productId);
         if (error) throw error;
       }
@@ -625,8 +631,9 @@ const Products = () => {
       }
       const lineImg = sortedUsage.find(u => !u.lineArchived && u.lineImage)?.lineImage ?? lineImages[0]?.url ?? null;
       const images = imagesByProduct[product.id] ?? {};
-      const imageUrl = images.vores?.url ?? images.kunde?.url ?? lineImg;
-      const imageSource = images.vores ? 'vores' : images.kunde ? 'kunde' : lineImg ? 'tilbudslinje' : null;
+      // Rækkens billede: arbejdstegning (vores mål) > vores reference > kundens > linjens
+      const imageUrl = images.tegning?.url ?? images.vores?.url ?? images.kunde?.url ?? lineImg;
+      const imageSource = images.tegning ? 'tegning' : images.vores ? 'vores' : images.kunde ? 'kunde' : lineImg ? 'tilbudslinje' : null;
 
       return {
         product, meta, images, lineImageUrl: lineImg, lineImages, imageSource,
@@ -957,8 +964,8 @@ const Products = () => {
                                       <img src={d.imageUrl} alt="" className="h-10 w-10 object-cover rounded border bg-white" loading="lazy" />
                                       <span
                                         className="absolute -bottom-1 -right-1 rounded bg-background border px-0.5 text-[9px] leading-tight text-muted-foreground"
-                                        title={d.imageSource === 'vores' ? 'Vores referencebillede' : d.imageSource === 'kunde' ? 'Kundens referencebillede' : 'Billede fra tilbudslinjen'}
-                                      >{d.imageSource === 'vores' ? 'V' : d.imageSource === 'kunde' ? 'K' : 'T'}</span>
+                                        title={d.imageSource === 'tegning' ? 'Arbejdstegning (vores mål)' : d.imageSource === 'vores' ? 'Vores referencebillede' : d.imageSource === 'kunde' ? 'Kundens referencebillede' : 'Billede fra tilbudslinjen'}
+                                      >{d.imageSource === 'tegning' ? 'T' : d.imageSource === 'vores' ? 'V' : d.imageSource === 'kunde' ? 'K' : 'L'}</span>
                                     </div>
                                   ) : (
                                     <div className="h-10 w-10 rounded border bg-muted/40 flex items-center justify-center text-muted-foreground"><ImageIcon className="h-4 w-4" /></div>
@@ -1156,18 +1163,20 @@ const ImageSlotBox: React.FC<{
   hint: string;
   img?: { url: string; caption: string | null };
   busy: boolean;
+  readOnly?: boolean;
   onUpload: (file: File) => void;
   onLink: () => void;
   onRemove: () => void;
-}> = ({ label, hint, img, busy, onUpload, onLink, onRemove }) => {
+}> = ({ label, hint, img, busy, readOnly, onUpload, onLink, onRemove }) => {
   const inputRef = React.useRef<HTMLInputElement>(null);
+  if (readOnly && !img) return null;
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{label}</span>
         <div className="flex gap-0.5">
-          <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="Upload billede" disabled={busy} onClick={() => inputRef.current?.click()}><Upload className="h-3.5 w-3.5" /></Button>
-          <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="Indsæt link til billede" disabled={busy} onClick={onLink}><Link2 className="h-3.5 w-3.5" /></Button>
+          {!readOnly && <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="Upload billede" disabled={busy} onClick={() => inputRef.current?.click()}><Upload className="h-3.5 w-3.5" /></Button>}
+          {!readOnly && <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="Indsæt link til billede" disabled={busy} onClick={onLink}><Link2 className="h-3.5 w-3.5" /></Button>}
           {img && <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive" title="Fjern billedet fra produktet" disabled={busy} onClick={onRemove}><X className="h-3.5 w-3.5" /></Button>}
         </div>
         <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) onUpload(f); e.currentTarget.value = ''; }} />
@@ -1222,6 +1231,16 @@ const ProductDetails: React.FC<DetailsProps> = ({ d, projectMaterials, materialL
     <div className="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
       {/* Billeder (to slots) + stamdata */}
       <div className="space-y-3">
+        <ImageSlotBox
+          label="Arbejdstegning"
+          hint=""
+          readOnly
+          img={d.images.tegning}
+          busy={imageBusy === `${p.id}:tegning`}
+          onUpload={() => {}}
+          onLink={() => {}}
+          onRemove={() => onRemoveImage('tegning')}
+        />
         <ImageSlotBox
           label="Vores reference"
           hint="Foto eller render af det vi laver"
