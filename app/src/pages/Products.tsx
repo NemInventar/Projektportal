@@ -1,18 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '@/components/Layout';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
 import {
   Dialog,
   DialogContent,
@@ -28,46 +20,192 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/hooks/use-toast';
 import { useProject } from '@/contexts/ProjectContext';
 import { useProjectProducts } from '@/contexts/ProjectProductsContext';
+import { useProjectMaterials } from '@/contexts/ProjectMaterialsContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { ProjectProduct, PRODUCT_TYPES } from '@/types/products';
 import { supabase } from '@/integrations/supabase/client';
-import { buildImportPayload } from '@/lib/import/buildImportPayload';
-import { importProductsFromProject } from '@/lib/import/importProductsFromProject';
 import { ProductImportModal } from '@/components/ProductImportModal';
-import { 
-  Plus, 
-  Edit, 
-  Copy, 
-  Archive, 
+import {
+  Plus,
+  Edit,
+  Copy,
+  Archive,
   Search,
   Package,
-  DollarSign,
-  Download,
-  Import
+  Import,
+  ChevronDown,
+  ChevronRight,
+  ExternalLink,
+  SlidersHorizontal,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  Image as ImageIcon,
+  Upload,
+  Link2,
+  X,
 } from 'lucide-react';
+
+/* ------------------------------------------------------------------------------------------------
+ * Produktsiden (22-09-2026): tabel med udfoldelige rækker i stedet for klik-til-ny-side.
+ * Klik på en række folder detaljerne ud (billede, stykliste, timer, kost, hvor produktet sidder i
+ * tilbuddene). Den gamle produktside findes stadig via ↗-ikonet — legacy beholdes.
+ * Kolonnevalg persisteres i localStorage (samme mønster som materialeopsummeringen på tilbudssiden).
+ * ---------------------------------------------------------------------------------------------- */
+
+type Oprindelse = 'Egenproduktion' | 'UE-produktion' | 'Indkøb' | 'Montage' | 'Transport' | 'Andet';
+type MarginBand = 'Høj (≥55 %)' | 'Mellem (35–55 %)' | 'Lav (<35 %)' | 'Ukendt';
+
+interface ProductMeta {
+  standardProductId: string | null;
+  componentType: string | null;
+  templateDeviation: string | null;
+  templateName: string | null;
+  templateCategory: string | null;
+  templateProfile: string | null;
+}
+
+interface UsageItem {
+  itemId: string;
+  qty: number;
+  factorProfile: string | null;
+  itemFactors: Record<string, number> | null;
+  breakdown: Record<string, number> | null;
+  ctpu: number;
+  lineId: string;
+  lineTitle: string;
+  lineQty: number;
+  lineArchived: boolean;
+  lineIsOption: boolean;
+  pricingMode: string | null;
+  markupPct: number | null;
+  targetUnitPrice: number | null;
+  lineFactors: Record<string, number> | null;
+  lineImage: string | null;
+  quoteId: string;
+  quoteNumber: string;
+  quoteStatus: string;
+}
+
+/** De to billedslots pr. produkt (produkt_billeder): vores egen reference og kundens. */
+type ImageSlot = 'vores' | 'kunde';
+interface ProductImages {
+  vores?: { url: string; caption: string | null };
+  kunde?: { url: string; caption: string | null };
+}
+
+interface DerivedProduct {
+  product: ProjectProduct;
+  meta: ProductMeta;
+  images: ProductImages;
+  lineImageUrl: string | null;
+  imageSource: 'vores' | 'kunde' | 'tilbudslinje' | null;
+  // Kost pr. enhed fra kostlinjerne (ekskl. Korpus — samme regel som DB-snapshottet)
+  materials: number;
+  ue: number;
+  korpus: number;
+  montage: number;
+  transport: number;
+  other: number;
+  costExKorpus: number;
+  oprindelse: Oprindelse;
+  usage: UsageItem[];
+  quoteNumbers: string[];
+  totalQtyInQuotes: number;
+  used: boolean;
+  profile: string | null;
+  estSellPerUnit: number | null;
+  dgPct: number | null;
+  marginBand: MarginBand;
+  imageUrl: string | null;
+  category: string;
+}
+
+const COLS = [
+  { key: 'image', label: 'Billede' },
+  { key: 'category', label: 'Kategori' },
+  { key: 'template', label: 'Skabelon' },
+  { key: 'origin', label: 'Oprindelse' },
+  { key: 'type', label: 'Type' },
+  { key: 'qty', label: 'Antal' },
+  { key: 'cost', label: 'Kost/stk' },
+  { key: 'korpus', label: 'Korpus-timer kr' },
+  { key: 'dg', label: 'DG (est.)' },
+  { key: 'profile', label: 'Profil' },
+  { key: 'quotes', label: 'I tilbud' },
+  { key: 'status', label: 'Status' },
+  { key: 'updated', label: 'Opdateret' },
+] as const;
+type ColKey = typeof COLS[number]['key'];
+const COLS_KEY = 'products.cols.v1';
+const DEFAULT_COLS: Record<ColKey, boolean> = {
+  image: true, category: true, template: false, origin: true, type: false, qty: true,
+  cost: true, korpus: false, dg: true, profile: true, quotes: true, status: false, updated: false,
+};
+
+type SortKey = 'name' | 'category' | 'origin' | 'qty' | 'cost' | 'dg' | 'profile' | 'quotes' | 'updated' | 'status';
+type GroupKey = 'none' | 'category' | 'origin' | 'used' | 'margin' | 'profile' | 'type' | 'quote';
+
+const PROFILE_LABELS: Record<string, string> = {
+  hyldevare: 'Hyldevare',
+  special: 'Special',
+  indkoebsvare: 'Indkøbsvare',
+};
+
+const fmt = (n: number) =>
+  new Intl.NumberFormat('da-DK', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n) + ' kr';
+const fmtPct = (n: number | null) => (n == null ? '–' : `${n.toFixed(0)} %`);
 
 const Products = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { activeProject } = useProject();
-  const { 
-    products, 
-    loading, 
-    addProduct, 
-    updateProduct, 
-    deleteProduct, 
+  const {
+    products,
+    loading,
+    addProduct,
+    updateProduct,
     copyProduct,
-    calculateProductCost 
+    getProductMaterialLines,
+    getProductLaborLines,
+    getProductTransportLines,
+    getProductOtherCostLines,
   } = useProjectProducts();
+  const { projectMaterials } = useProjectMaterials();
+  const { user } = useAuth();
 
+  // ── Filtre, sortering, gruppering ─────────────────────────────────────────────
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('active');
+  const [usedFilter, setUsedFilter] = useState<'all' | 'used' | 'unused'>('all');
+  const [quoteFilter, setQuoteFilter] = useState<string>('all');
+  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [originFilter, setOriginFilter] = useState<string>('all');
+  const [groupBy, setGroupBy] = useState<GroupKey>('none');
+  const [sortKey, setSortKey] = useState<SortKey>('name');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const [cols, setCols] = useState<Record<ColKey, boolean>>(() => {
+    try {
+      const raw = localStorage.getItem(COLS_KEY);
+      if (raw) return { ...DEFAULT_COLS, ...JSON.parse(raw) };
+    } catch {}
+    return DEFAULT_COLS;
+  });
+  useEffect(() => {
+    try { localStorage.setItem(COLS_KEY, JSON.stringify(cols)); } catch {}
+  }, [cols]);
+
+  // ── Dialoger ──────────────────────────────────────────────────────────────────
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<ProjectProduct | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-
   const [formData, setFormData] = useState({
     name: '',
     productType: 'other' as 'other' | 'curtain' | 'installation' | 'furniture',
@@ -77,258 +215,395 @@ const Products = () => {
     notes: '',
     status: 'active' as 'active' | 'archived',
   });
-
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  // Filter products
-  const filteredProducts = products.filter(product => {
-    const matchesSearch = product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         product.description?.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || product.status === statusFilter;
-    return matchesSearch && matchesStatus;
+  // ── Ekstra data der ikke ligger i konteksten ──────────────────────────────────
+  const [metaById, setMetaById] = useState<Record<string, ProductMeta>>({});
+  const [usageByProduct, setUsageByProduct] = useState<Record<string, UsageItem[]>>({});
+  const [imagesByProduct, setImagesByProduct] = useState<Record<string, ProductImages>>({});
+  const [extraLoading, setExtraLoading] = useState(false);
+  const [imageBusy, setImageBusy] = useState<string | null>(null); // `${productId}:${slot}`
+
+  const loadImages = async (productIds: string[]) => {
+    if (productIds.length === 0) { setImagesByProduct({}); return; }
+    const { data, error } = await supabase
+      .from('produkt_billeder')
+      .select('product_id, image_url, caption, kunde_ref_url, kunde_ref_caption')
+      .in('product_id', productIds);
+    if (error) { console.error('Products: kunne ikke hente produktbilleder', error); return; }
+    const imgs: Record<string, ProductImages> = {};
+    for (const r of (data as any[]) ?? []) {
+      imgs[r.product_id] = {
+        vores: r.image_url ? { url: r.image_url, caption: r.caption ?? null } : undefined,
+        kunde: r.kunde_ref_url ? { url: r.kunde_ref_url, caption: r.kunde_ref_caption ?? null } : undefined,
+      };
+    }
+    setImagesByProduct(imgs);
+  };
+
+  /** Gem et billede i en slot (upsert på product_id — den anden slot røres ikke). */
+  const saveProductImage = async (productId: string, slot: ImageSlot, url: string, sourceRef: string, caption?: string | null) => {
+    const payload: any = { product_id: productId, created_by: user?.email ?? 'ukendt', updated_at: new Date().toISOString() };
+    if (slot === 'vores') { payload.image_url = url; payload.source_ref = sourceRef; if (caption !== undefined) payload.caption = caption; }
+    else { payload.kunde_ref_url = url; payload.kunde_ref_source_ref = sourceRef; if (caption !== undefined) payload.kunde_ref_caption = caption; }
+    const { error } = await supabase.from('produkt_billeder').upsert(payload, { onConflict: 'product_id' });
+    if (error) throw error;
+  };
+
+  const uploadProductImage = async (productId: string, slot: ImageSlot, file: File) => {
+    if (!file.type.startsWith('image/')) { toast({ title: 'Fejl', description: 'Kun billed-filer er tilladt', variant: 'destructive' }); return; }
+    const key = `${productId}:${slot}`;
+    try {
+      setImageBusy(key);
+      const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
+      const path = `${productId}/${slot === 'vores' ? 'vores-ref' : 'kunde-ref'}-${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage.from('product-photos').upload(path, file, { upsert: false });
+      if (upErr) throw upErr;
+      const { data: { publicUrl } } = supabase.storage.from('product-photos').getPublicUrl(path);
+      await saveProductImage(productId, slot, publicUrl, `upload:${file.name}`);
+      await loadImages(products.map(p => p.id));
+      toast({ title: slot === 'vores' ? 'Vores referencebillede gemt' : 'Kundens referencebillede gemt' });
+    } catch (e: any) {
+      console.error(e);
+      toast({ title: 'Fejl', description: e?.message ?? 'Kunne ikke uploade billedet', variant: 'destructive' });
+    } finally { setImageBusy(null); }
+  };
+
+  const linkProductImage = async (productId: string, slot: ImageSlot) => {
+    const url = window.prompt(slot === 'vores' ? 'Link til vores referencebillede (URL):' : 'Link til kundens referencebillede (URL):');
+    if (!url || !/^https?:\/\//i.test(url.trim())) return;
+    const caption = window.prompt('Billedtekst (valgfri):') ?? null;
+    const key = `${productId}:${slot}`;
+    try {
+      setImageBusy(key);
+      await saveProductImage(productId, slot, url.trim(), 'link', caption || null);
+      await loadImages(products.map(p => p.id));
+      toast({ title: 'Billedlink gemt' });
+    } catch (e: any) {
+      toast({ title: 'Fejl', description: e?.message ?? 'Kunne ikke gemme linket', variant: 'destructive' });
+    } finally { setImageBusy(null); }
+  };
+
+  const removeProductImage = async (productId: string, slot: ImageSlot) => {
+    const cur = imagesByProduct[productId];
+    if (!cur) return;
+    const other = slot === 'vores' ? cur.kunde : cur.vores;
+    const key = `${productId}:${slot}`;
+    try {
+      setImageBusy(key);
+      if (!other) {
+        // Sidste billede på rækken — rækken fjernes (CHECK kræver mindst ét billede). Filen i storage bevares.
+        const { error } = await supabase.from('produkt_billeder').delete().eq('product_id', productId);
+        if (error) throw error;
+      } else {
+        const patch = slot === 'vores'
+          ? { image_url: null, caption: null, source_ref: null }
+          : { kunde_ref_url: null, kunde_ref_caption: null, kunde_ref_source_ref: null };
+        const { error } = await supabase.from('produkt_billeder').update({ ...patch, updated_at: new Date().toISOString() }).eq('product_id', productId);
+        if (error) throw error;
+      }
+      await loadImages(products.map(p => p.id));
+      toast({ title: 'Billede fjernet fra produktet' });
+    } catch (e: any) {
+      toast({ title: 'Fejl', description: e?.message ?? 'Kunne ikke fjerne billedet', variant: 'destructive' });
+    } finally { setImageBusy(null); }
+  };
+
+  useEffect(() => {
+    if (!activeProject) return;
+    let cancelled = false;
+    const load = async () => {
+      setExtraLoading(true);
+      try {
+        const [metaRes, usageRes] = await Promise.all([
+          supabase
+            .from('project_products_2026_01_15_12_49')
+            .select('id, standard_product_id, component_type, template_deviation, standard_products_2026_07_11(name, category, factor_profile)')
+            .eq('project_id', activeProject.id),
+          supabase
+            .from('project_quote_line_items_2026_01_16_23_00')
+            .select(`id, qty, project_product_id, factor_profile, effective_category_factors, cost_breakdown_json, cost_total_per_unit,
+              project_quote_lines_2026_01_16_23_00!inner(id, title, archived, quantity, is_option, pricing_mode, markup_pct, target_unit_price, effective_category_factors, custom_image_url, render_image_url, active_image_source,
+                project_quotes_2026_01_16_23_00!inner(id, quote_number, status, project_id))`)
+            .eq('project_quote_lines_2026_01_16_23_00.project_quotes_2026_01_16_23_00.project_id', activeProject.id)
+            .not('project_product_id', 'is', null),
+        ]);
+        if (cancelled) return;
+        await loadImages(products.map(p => p.id));
+        if (cancelled) return;
+
+        const meta: Record<string, ProductMeta> = {};
+        for (const r of (metaRes.data as any[]) ?? []) {
+          const sp = Array.isArray(r.standard_products_2026_07_11) ? r.standard_products_2026_07_11[0] : r.standard_products_2026_07_11;
+          meta[r.id] = {
+            standardProductId: r.standard_product_id ?? null,
+            componentType: r.component_type ?? null,
+            templateDeviation: r.template_deviation ?? null,
+            templateName: sp?.name ?? null,
+            templateCategory: sp?.category ?? null,
+            templateProfile: sp?.factor_profile ?? null,
+          };
+        }
+        setMetaById(meta);
+
+        const usage: Record<string, UsageItem[]> = {};
+        for (const r of (usageRes.data as any[]) ?? []) {
+          const l = Array.isArray(r.project_quote_lines_2026_01_16_23_00) ? r.project_quote_lines_2026_01_16_23_00[0] : r.project_quote_lines_2026_01_16_23_00;
+          const q = Array.isArray(l?.project_quotes_2026_01_16_23_00) ? l.project_quotes_2026_01_16_23_00[0] : l?.project_quotes_2026_01_16_23_00;
+          if (!l || !q) continue;
+          const img = l.active_image_source === 'custom' ? l.custom_image_url
+            : l.active_image_source === 'render' ? l.render_image_url
+            : l.active_image_source === 'none' ? null
+            : (l.custom_image_url || l.render_image_url || null);
+          const item: UsageItem = {
+            itemId: r.id,
+            qty: Number(r.qty ?? 0),
+            factorProfile: r.factor_profile ?? null,
+            itemFactors: r.effective_category_factors ?? null,
+            breakdown: r.cost_breakdown_json ?? null,
+            ctpu: Number(r.cost_total_per_unit ?? 0),
+            lineId: l.id,
+            lineTitle: l.title,
+            lineQty: Number(l.quantity ?? 0),
+            lineArchived: l.archived === true,
+            lineIsOption: l.is_option === true,
+            pricingMode: l.pricing_mode ?? null,
+            markupPct: l.markup_pct != null ? Number(l.markup_pct) : null,
+            targetUnitPrice: l.target_unit_price != null ? Number(l.target_unit_price) : null,
+            lineFactors: l.effective_category_factors ?? null,
+            lineImage: img,
+            quoteId: q.id,
+            quoteNumber: q.quote_number,
+            quoteStatus: q.status,
+          };
+          (usage[r.project_product_id] ??= []).push(item);
+        }
+        setUsageByProduct(usage);
+      } catch (e) {
+        console.error('Products: kunne ikke hente skabelon/tilbudsbrug/billeder', e);
+      } finally {
+        if (!cancelled) setExtraLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [activeProject?.id, products.length]);
+
+  // ── Afledte værdier pr. produkt ───────────────────────────────────────────────
+  const derived: DerivedProduct[] = useMemo(() => {
+    // Antal items pr. linje — så vi kan foretrække et linjebillede der KUN viser dette produkt
+    const itemsPerLine: Record<string, number> = {};
+    for (const list of Object.values(usageByProduct)) for (const u of list) itemsPerLine[u.lineId] = (itemsPerLine[u.lineId] ?? 0) + 1;
+
+    return products.map((product) => {
+      const meta: ProductMeta = metaById[product.id] ?? {
+        standardProductId: null, componentType: null, templateDeviation: null,
+        templateName: null, templateCategory: null, templateProfile: null,
+      };
+
+      let materials = 0;
+      for (const ml of getProductMaterialLines(product.id)) {
+        const mat = projectMaterials.find(m => m.id === ml.projectMaterialId);
+        const unitCost = ml.unitCostOverride ?? mat?.unitPrice ?? 0;
+        materials += (ml.qty ?? 0) * unitCost;
+      }
+      let ue = 0, korpus = 0, montage = 0, other = 0;
+      for (const ll of getProductLaborLines(product.id)) {
+        const c = (ll.qty ?? 0) * (ll.unitCost ?? 0);
+        const t = ll.laborType as string;
+        if (t === 'korpus_production') korpus += c;
+        else if (t === 'production') ue += c;
+        else if (t === 'dk_installation') montage += c;
+        else other += c;
+      }
+      const transport = getProductTransportLines(product.id).reduce((s, l) => s + (l.qty ?? 0) * (l.unitCost ?? 0), 0);
+      other += getProductOtherCostLines(product.id).reduce((s, l) => s + (l.qty ?? 0) * (l.unitCost ?? 0), 0);
+      const costExKorpus = materials + ue + montage + transport + other;
+
+      let oprindelse: Oprindelse = 'Andet';
+      if (korpus > 0) oprindelse = 'Egenproduktion';
+      else if (ue > 0) oprindelse = 'UE-produktion';
+      else if (materials > 0 && montage === 0) oprindelse = 'Indkøb';
+      else if (montage > 0 && materials === 0) oprindelse = 'Montage';
+      else if (transport > 0 && materials === 0 && montage === 0) oprindelse = 'Transport';
+      else if (materials > 0) oprindelse = 'Indkøb';
+
+      const usageAll = usageByProduct[product.id] ?? [];
+      const usage = usageAll.filter(u => !u.lineArchived && u.quoteStatus !== 'archived');
+      const quoteNumbers = Array.from(new Set(usage.map(u => u.quoteNumber))).sort();
+      const totalQtyInQuotes = usage.reduce((s, u) => s + u.qty * (u.lineQty || 1), 0);
+
+      // Estimeret salgspris pr. enhed: første faktor-linje hvor produktet indgår (item-faktorer > linjens)
+      let estSellPerUnit: number | null = null;
+      let profile: string | null = usage.find(u => u.factorProfile)?.factorProfile ?? meta.templateProfile ?? null;
+      const factorItem = usage.find(u => u.pricingMode === 'category_factors' && u.breakdown);
+      if (factorItem) {
+        const f = factorItem.itemFactors ?? factorItem.lineFactors ?? {};
+        const b = factorItem.breakdown ?? {};
+        let sell = 0;
+        for (const [k, v] of Object.entries(b)) {
+          const key = k === 'transport' ? 'product_transport' : k;
+          sell += Number(v ?? 0) * Number((f as any)[key] ?? 1);
+        }
+        estSellPerUnit = sell;
+      } else {
+        const markupItem = usage.find(u => u.pricingMode === 'markup_pct' && u.ctpu > 0);
+        if (markupItem) estSellPerUnit = markupItem.ctpu * (1 + (markupItem.markupPct ?? 0) / 100);
+      }
+      // DG mod snapshottets kost (ekskl. Korpus) — falder tilbage til kostlinjerne hvis snapshot mangler
+      const snapCost = factorItem?.ctpu ?? usage[0]?.ctpu ?? null;
+      const dgBase = snapCost != null && snapCost > 0 ? snapCost : costExKorpus;
+      const dgPct = estSellPerUnit != null && estSellPerUnit > 0 ? ((estSellPerUnit - dgBase) / estSellPerUnit) * 100 : null;
+      const marginBand: MarginBand = dgPct == null ? 'Ukendt' : dgPct >= 55 ? 'Høj (≥55 %)' : dgPct >= 35 ? 'Mellem (35–55 %)' : 'Lav (<35 %)';
+
+      // Billede i rækken: vores reference > kundens reference > et linjebillede (helst en linje der kun har dette produkt)
+      const lineImg = [...usage]
+        .filter(u => u.lineImage)
+        .sort((a, b) => (itemsPerLine[a.lineId] ?? 99) - (itemsPerLine[b.lineId] ?? 99))[0]?.lineImage ?? null;
+      const images = imagesByProduct[product.id] ?? {};
+      const imageUrl = images.vores?.url ?? images.kunde?.url ?? lineImg;
+      const imageSource = images.vores ? 'vores' : images.kunde ? 'kunde' : lineImg ? 'tilbudslinje' : null;
+
+      return {
+        product, meta, images, lineImageUrl: lineImg, imageSource,
+        materials, ue, korpus, montage, transport, other, costExKorpus, oprindelse,
+        usage, quoteNumbers, totalQtyInQuotes, used: usage.length > 0, profile, estSellPerUnit, dgPct, marginBand,
+        imageUrl, category: meta.templateCategory ?? 'Uden skabelon',
+      };
+    });
+  }, [products, metaById, usageByProduct, imagesByProduct, projectMaterials, getProductMaterialLines, getProductLaborLines, getProductTransportLines, getProductOtherCostLines]);
+
+  const allQuoteNumbers = useMemo(() => Array.from(new Set(derived.flatMap(d => d.quoteNumbers))).sort(), [derived]);
+  const allCategories = useMemo(() => Array.from(new Set(derived.map(d => d.category))).sort(), [derived]);
+  const allOrigins = useMemo(() => Array.from(new Set(derived.map(d => d.oprindelse))).sort(), [derived]);
+
+  // ── Filtrering + sortering ────────────────────────────────────────────────────
+  const filtered = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    const rows = derived.filter(d => {
+      const p = d.product;
+      if (statusFilter !== 'all' && p.status !== statusFilter) return false;
+      if (usedFilter === 'used' && !d.used) return false;
+      if (usedFilter === 'unused' && d.used) return false;
+      if (quoteFilter !== 'all' && !d.quoteNumbers.includes(quoteFilter)) return false;
+      if (categoryFilter !== 'all' && d.category !== categoryFilter) return false;
+      if (originFilter !== 'all' && d.oprindelse !== originFilter) return false;
+      if (q) {
+        const hay = [p.name, p.description, p.notes, d.meta.templateName, d.category, d.quoteNumbers.join(' '), ...d.usage.map(u => u.lineTitle)]
+          .filter(Boolean).join(' ').toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    const dir = sortDir === 'asc' ? 1 : -1;
+    const cmpStr = (a: string, b: string) => a.localeCompare(b, 'da') * dir;
+    const cmpNum = (a: number | null, b: number | null) => ((a ?? -Infinity) - (b ?? -Infinity)) * dir;
+    rows.sort((a, b) => {
+      switch (sortKey) {
+        case 'name': return cmpStr(a.product.name, b.product.name);
+        case 'category': return cmpStr(a.category, b.category) || cmpStr(a.product.name, b.product.name);
+        case 'origin': return cmpStr(a.oprindelse, b.oprindelse) || cmpStr(a.product.name, b.product.name);
+        case 'qty': return cmpNum(a.totalQtyInQuotes, b.totalQtyInQuotes);
+        case 'cost': return cmpNum(a.costExKorpus, b.costExKorpus);
+        case 'dg': return cmpNum(a.dgPct, b.dgPct);
+        case 'profile': return cmpStr(a.profile ?? '', b.profile ?? '');
+        case 'quotes': return cmpStr(a.quoteNumbers.join(','), b.quoteNumbers.join(',')) || cmpStr(a.product.name, b.product.name);
+        case 'status': return cmpStr(a.product.status, b.product.status);
+        case 'updated': return cmpNum(a.product.updatedAt.getTime(), b.product.updatedAt.getTime());
+      }
+    });
+    return rows;
+  }, [derived, searchTerm, statusFilter, usedFilter, quoteFilter, categoryFilter, originFilter, sortKey, sortDir]);
+
+  const groups = useMemo(() => {
+    if (groupBy === 'none') return [{ key: '', label: '', rows: filtered }];
+    const keyOf = (d: DerivedProduct): string => {
+      switch (groupBy) {
+        case 'category': return d.category;
+        case 'origin': return d.oprindelse;
+        case 'used': return d.used ? 'I tilbud' : 'Ikke i tilbud';
+        case 'margin': return d.marginBand;
+        case 'profile': return d.profile ? (PROFILE_LABELS[d.profile] ?? d.profile) : 'Ingen profil';
+        case 'type': return PRODUCT_TYPES[d.product.productType] ?? d.product.productType;
+        case 'quote': return d.quoteNumbers.length ? d.quoteNumbers.join(' + ') : 'Ikke i tilbud';
+      }
+      return '';
+    };
+    const map = new Map<string, DerivedProduct[]>();
+    for (const d of filtered) { const k = keyOf(d); (map.get(k) ?? map.set(k, []).get(k)!).push(d); }
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0], 'da')).map(([key, rows]) => ({ key, label: key, rows }));
+  }, [filtered, groupBy]);
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir(key === 'cost' || key === 'dg' || key === 'qty' || key === 'updated' ? 'desc' : 'asc'); }
+  };
+  const SortIcon = ({ k }: { k: SortKey }) =>
+    sortKey !== k ? <ArrowUpDown className="h-3 w-3 inline ml-1 opacity-40" />
+      : sortDir === 'asc' ? <ArrowUp className="h-3 w-3 inline ml-1" /> : <ArrowDown className="h-3 w-3 inline ml-1" />;
+
+  const toggleExpand = (id: string) => setExpanded(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
   });
 
+  // ── Opret/ret/kopiér/arkivér (uændret adfærd) ─────────────────────────────────
   const resetForm = () => {
-    setFormData({
-      name: '',
-      productType: 'other',
-      unit: 'stk',
-      quantity: 1,
-      description: '',
-      notes: '',
-      status: 'active',
-    });
+    setFormData({ name: '', productType: 'other', unit: 'stk', quantity: 1, description: '', notes: '', status: 'active' });
     setErrors({});
   };
-
   const validateForm = () => {
-    const newErrors: Record<string, string> = {};
-    
-    if (!formData.name.trim()) {
-      newErrors.name = 'Produktnavn er påkrævet';
-    }
-    
-    if (formData.quantity <= 0) {
-      newErrors.quantity = 'Antal skal være større end 0';
-    }
-
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    const e: Record<string, string> = {};
+    if (!formData.name.trim()) e.name = 'Produktnavn er påkrævet';
+    if (formData.quantity <= 0) e.quantity = 'Antal skal være større end 0';
+    setErrors(e);
+    return Object.keys(e).length === 0;
   };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
     if (!validateForm()) return;
-    
-    if (!activeProject) {
-      toast({
-        title: "Fejl",
-        description: "Intet aktivt projekt valgt",
-        variant: "destructive",
-      });
-      return;
-    }
-
+    if (!activeProject) { toast({ title: 'Fejl', description: 'Intet aktivt projekt valgt', variant: 'destructive' }); return; }
     try {
       if (editingProduct) {
         await updateProduct(editingProduct.id, formData);
-        toast({
-          title: "Produkt opdateret",
-          description: `${formData.name} er blevet opdateret`,
-        });
+        toast({ title: 'Produkt opdateret', description: `${formData.name} er blevet opdateret` });
         setEditingProduct(null);
       } else {
-        console.log('Creating product with data:', { ...formData, projectId: activeProject.id });
-        await addProduct({
-          ...formData,
-          projectId: activeProject.id,
-        });
-        toast({
-          title: "Produkt oprettet",
-          description: `${formData.name} er blevet oprettet`,
-        });
+        await addProduct({ ...formData, projectId: activeProject.id });
+        toast({ title: 'Produkt oprettet', description: `${formData.name} er blevet oprettet` });
         setIsCreateDialogOpen(false);
       }
       resetForm();
-    } catch (error) {
-      toast({
-        title: "Fejl",
-        description: "Der opstod en fejl ved gemning af produktet",
-        variant: "destructive",
-      });
+    } catch {
+      toast({ title: 'Fejl', description: 'Der opstod en fejl ved gemning af produktet', variant: 'destructive' });
     }
   };
-
   const handleEdit = (product: ProjectProduct) => {
     setFormData({
       name: product.name,
-      productType: product.productType as 'other' | 'curtain' | 'installation' | 'furniture',
+      productType: product.productType,
       unit: product.unit,
       quantity: product.quantity,
       description: product.description || '',
       notes: product.notes || '',
-      status: product.status as 'active' | 'archived',
+      status: product.status,
     });
     setEditingProduct(product);
   };
-
   const handleCopy = async (product: ProjectProduct) => {
-    try {
-      await copyProduct(product.id);
-      toast({
-        title: "Produkt kopieret",
-        description: `${product.name} er blevet kopieret`,
-      });
-    } catch (error) {
-      toast({
-        title: "Fejl",
-        description: "Der opstod en fejl ved kopiering af produktet",
-        variant: "destructive",
-      });
-    }
+    try { await copyProduct(product.id); toast({ title: 'Produkt kopieret', description: `${product.name} er blevet kopieret` }); }
+    catch { toast({ title: 'Fejl', description: 'Der opstod en fejl ved kopiering af produktet', variant: 'destructive' }); }
   };
-
   const handleArchive = async (product: ProjectProduct) => {
     try {
-      await updateProduct(product.id, { 
-        status: product.status === 'active' ? 'archived' : 'active' 
-      });
-      toast({
-        title: product.status === 'active' ? "Produkt arkiveret" : "Produkt genaktiveret",
-        description: `${product.name} er blevet ${product.status === 'active' ? 'arkiveret' : 'genaktiveret'}`,
-      });
-    } catch (error) {
-      toast({
-        title: "Fejl",
-        description: "Der opstod en fejl ved ændring af produktstatus",
-        variant: "destructive",
-      });
-    }
+      await updateProduct(product.id, { status: product.status === 'active' ? 'archived' : 'active' });
+      toast({ title: product.status === 'active' ? 'Produkt arkiveret' : 'Produkt genaktiveret', description: product.name });
+    } catch { toast({ title: 'Fejl', description: 'Der opstod en fejl ved ændring af produktstatus', variant: 'destructive' }); }
   };
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'active':
-        return <Badge variant="default">Aktiv</Badge>;
-      case 'archived':
-        return <Badge variant="secondary">Arkiveret</Badge>;
-      default:
-        return <Badge variant="outline">{status}</Badge>;
-    }
-  };
-
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('da-DK', {
-      style: 'currency',
-      currency: 'DKK',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(amount);
-  };
-
-  // TEST FUNCTION for Step I-01
-  const testImportPayload = async () => {
-    if (!activeProject || products.length === 0) {
-      toast({
-        title: "Test ikke mulig",
-        description: "Intet aktivt projekt eller ingen produkter at teste med",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    try {
-      // Test med det første produkt
-      const firstProduct = products[0];
-      console.log('🧪 Testing buildImportPayload with product:', firstProduct.name);
-      
-      const payload = await buildImportPayload(
-        supabase,
-        activeProject.id,
-        [firstProduct.id]
-      );
-      
-      console.log('📦 IMPORT PAYLOAD RESULT:');
-      console.log('=====================================');
-      console.log('Stats:', payload.stats);
-      console.log('Products:', payload.productsById);
-      console.log('Materials:', payload.projectMaterialsById);
-      console.log('Lines by Product:', payload.linesByProductId);
-      console.log('=====================================');
-      
-      toast({
-        title: "Test gennemført",
-        description: `Import payload bygget for "${firstProduct.name}". Se console for detaljer.`,
-      });
-    } catch (error) {
-      console.error('❌ Test failed:', error);
-      toast({
-        title: "Test fejlede",
-        description: "Se console for fejldetaljer",
-        variant: "destructive",
-      });
-    }
-  };
-
-  // TEST FUNCTION for Step I-02
-  const testImportProducts = async () => {
-    if (!activeProject || products.length === 0) {
-      toast({
-        title: "Test ikke mulig",
-        description: "Intet aktivt projekt eller ingen produkter at teste med",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    try {
-      // Test med det første produkt - import til samme projekt (for test)
-      const firstProduct = products[0];
-      console.log('🚀 Testing importProductsFromProject with product:', firstProduct.name);
-      
-      const result = await importProductsFromProject(
-        supabase,
-        activeProject.id, // Source project (same as target for test)
-        activeProject.id, // Target project (same as source for test)
-        [firstProduct.id],
-        { includeExtraLines: true }
-      );
-      
-      console.log('📦 IMPORT RESULT:');
-      console.log('=====================================');
-      console.log('Inserted Counts:', result.insertedCounts);
-      console.log('Material ID Map:', result.materialIdMap);
-      console.log('Product ID Map:', result.productIdMap);
-      console.log('=====================================');
-      
-      toast({
-        title: "Import test gennemført",
-        description: `Produkt "${firstProduct.name}" importeret. Se console for detaljer.`,
-      });
-    } catch (error) {
-      console.error('❌ Import test failed:', error);
-      toast({
-        title: "Import test fejlede",
-        description: "Se console for fejldetaljer",
-        variant: "destructive",
-      });
-    }
-  };
-
-  // Handle import completion
   const handleImportComplete = () => {
-    // Refresh page to show imported products
-    // Note: Context will automatically reload when component remounts
-    toast({
-      title: "Produkter opdateret",
-      description: "Produktlisten opdateres automatisk med importerede produkter",
-    });
-    
-    // Force a page refresh to ensure all data is up to date
-    setTimeout(() => {
-      window.location.reload();
-    }, 1000);
+    toast({ title: 'Produkter opdateret', description: 'Produktlisten opdateres automatisk med importerede produkter' });
+    setTimeout(() => window.location.reload(), 1000);
   };
 
   if (!activeProject) {
@@ -337,299 +612,319 @@ const Products = () => {
         <div className="p-6">
           <div className="text-center py-12">
             <Package className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-muted-foreground mb-2">
-              Intet aktivt projekt
-            </h3>
-            <p className="text-muted-foreground mb-4">
-              Vælg et projekt for at se produkter
-            </p>
-            <Button onClick={() => navigate('/')}>
-              Vælg Projekt
-            </Button>
+            <h3 className="text-lg font-medium text-muted-foreground mb-2">Intet aktivt projekt</h3>
+            <p className="text-muted-foreground mb-4">Vælg et projekt for at se produkter</p>
+            <Button onClick={() => navigate('/')}>Vælg Projekt</Button>
           </div>
         </div>
       </Layout>
     );
   }
 
+  const colCount = 2 + Object.values(cols).filter(Boolean).length; // chevron + navn + valgte + handlinger (−1 fordi navn tæller)
+  const usedCount = derived.filter(d => d.used && d.product.status === 'active').length;
+  const activeCount = derived.filter(d => d.product.status === 'active').length;
+
+  const th = (label: string, key?: SortKey, align: 'left' | 'right' | 'center' = 'left') => (
+    <th
+      className={`px-3 py-2 text-xs font-medium text-muted-foreground uppercase tracking-wide whitespace-nowrap ${key ? 'cursor-pointer select-none hover:text-foreground' : ''} text-${align}`}
+      onClick={key ? () => toggleSort(key) : undefined}
+    >
+      {label}{key && <SortIcon k={key} />}
+    </th>
+  );
+
   return (
     <Layout>
-      <div className="p-6 space-y-6">
+      <div className="p-6 space-y-4">
         {/* Header */}
-        <div className="flex justify-between items-center">
+        <div className="flex justify-between items-start gap-4 flex-wrap">
           <div>
             <h1 className="text-3xl font-bold text-foreground">Produkter</h1>
             <p className="text-muted-foreground mt-1">
-              Administrer produkter for {activeProject.name}
+              {activeProject.name} · {activeCount} aktive · {usedCount} i tilbud · {activeCount - usedCount} ikke i tilbud
             </p>
           </div>
-          
           <div className="flex gap-2">
-            {/* TEST BUTTON for Step I-01 */}
-            <Button 
-              onClick={testImportPayload}
-              variant="outline"
-              className="gap-2"
-            >
-              <Download className="h-4 w-4" />
-              Test Payload
+            <Button onClick={() => setIsImportModalOpen(true)} variant="outline" className="gap-2">
+              <Import className="h-4 w-4" /> Importér fra projekt
             </Button>
-            
-            {/* TEST BUTTON for Step I-02 */}
-            <Button 
-              onClick={testImportProducts}
-              variant="outline"
-              className="gap-2"
-            >
-              <Copy className="h-4 w-4" />
-              Test Import
-            </Button>
-            
-            {/* IMPORT BUTTON for Step I-03 */}
-            <Button 
-              onClick={() => setIsImportModalOpen(true)}
-              variant="outline"
-              className="gap-2"
-            >
-              <Import className="h-4 w-4" />
-              Importér fra projekt
-            </Button>
-            
-            <Button 
-              onClick={() => setIsCreateDialogOpen(true)} 
-              className="gap-2"
-            >
-              <Plus className="h-4 w-4" />
-              Opret Produkt
+            <Button onClick={() => setIsCreateDialogOpen(true)} className="gap-2">
+              <Plus className="h-4 w-4" /> Opret Produkt
             </Button>
           </div>
         </div>
 
-        {/* Filters */}
+        {/* Filtre */}
         <Card>
-          <CardContent className="p-4">
-            <div className="flex gap-4 items-center">
-              <div className="flex-1">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
-                  <Input
-                    placeholder="Søg produkter..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-10"
-                  />
-                </div>
+          <CardContent className="p-3">
+            <div className="flex flex-wrap gap-2 items-center">
+              <div className="relative flex-1 min-w-[220px]">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground h-4 w-4" />
+                <Input placeholder="Søg navn, skabelon, tilbudslinje…" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-9 h-9" />
               </div>
-              
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-48">
-                  <SelectValue placeholder="Filtrer efter status" />
-                </SelectTrigger>
+              <Select value={usedFilter} onValueChange={(v: any) => setUsedFilter(v)}>
+                <SelectTrigger className="w-40 h-9"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">Alle status</SelectItem>
-                  <SelectItem value="active">Aktive</SelectItem>
-                  <SelectItem value="archived">Arkiverede</SelectItem>
+                  <SelectItem value="all">Brugt + ikke brugt</SelectItem>
+                  <SelectItem value="used">Kun i tilbud</SelectItem>
+                  <SelectItem value="unused">Kun ikke i tilbud</SelectItem>
                 </SelectContent>
               </Select>
+              <Select value={quoteFilter} onValueChange={setQuoteFilter}>
+                <SelectTrigger className="w-36 h-9"><SelectValue placeholder="Tilbud" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Alle tilbud</SelectItem>
+                  {allQuoteNumbers.map(q => <SelectItem key={q} value={q}>{q}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                <SelectTrigger className="w-44 h-9"><SelectValue placeholder="Kategori" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Alle kategorier</SelectItem>
+                  {allCategories.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select value={originFilter} onValueChange={setOriginFilter}>
+                <SelectTrigger className="w-44 h-9"><SelectValue placeholder="Oprindelse" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Alle oprindelser</SelectItem>
+                  {allOrigins.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="active">Aktive</SelectItem>
+                  <SelectItem value="archived">Arkiverede</SelectItem>
+                  <SelectItem value="all">Alle status</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={groupBy} onValueChange={(v: any) => setGroupBy(v)}>
+                <SelectTrigger className="w-48 h-9"><SelectValue placeholder="Gruppér" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Ingen gruppering</SelectItem>
+                  <SelectItem value="category">Gruppér: kategori</SelectItem>
+                  <SelectItem value="origin">Gruppér: oprindelse</SelectItem>
+                  <SelectItem value="used">Gruppér: brugt / ikke brugt</SelectItem>
+                  <SelectItem value="quote">Gruppér: tilbud</SelectItem>
+                  <SelectItem value="margin">Gruppér: margin</SelectItem>
+                  <SelectItem value="profile">Gruppér: profil</SelectItem>
+                  <SelectItem value="type">Gruppér: produkttype</SelectItem>
+                </SelectContent>
+              </Select>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" className="h-9 gap-2"><SlidersHorizontal className="h-4 w-4" /> Kolonner</Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-56" align="end">
+                  <p className="text-xs text-muted-foreground mb-2">Vælg kolonner (gemmes i browseren)</p>
+                  <div className="space-y-2">
+                    {COLS.map(c => (
+                      <label key={c.key} className="flex items-center gap-2 text-sm cursor-pointer">
+                        <Checkbox checked={cols[c.key]} onCheckedChange={(v) => setCols(prev => ({ ...prev, [c.key]: v === true }))} />
+                        {c.label}
+                      </label>
+                    ))}
+                  </div>
+                </PopoverContent>
+              </Popover>
             </div>
           </CardContent>
         </Card>
 
-        {/* Products Table */}
+        {/* Tabel */}
         <Card>
-          <CardContent className="p-0">
+          <CardContent className="p-0 overflow-x-auto">
             {loading ? (
-              <div className="text-center py-12">
-                <p className="text-muted-foreground">Indlæser produkter...</p>
-              </div>
-            ) : filteredProducts.length > 0 ? (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Produktnavn</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Antal</TableHead>
-                    <TableHead>Total kostpris</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="w-32">Handlinger</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredProducts.map((product) => {
-                    const cost = calculateProductCost(product.id);
-                    return (
-                      <TableRow 
-                        key={product.id}
-                        className="cursor-pointer hover:bg-muted/50"
-                        onClick={() => navigate(`/project/products/${product.id}`)}
-                      >
-                        <TableCell>
-                          <div>
-                            <div className="font-medium">{product.name}</div>
-                            {product.description && (
-                              <div className="text-sm text-muted-foreground">
-                                {product.description}
-                              </div>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline">
-                            {PRODUCT_TYPES[product.productType]}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          {product.quantity} {product.unit}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1">
-                            <DollarSign className="h-4 w-4 text-muted-foreground" />
-                            <span className="font-medium">
-                              {formatCurrency(cost.grandTotal)}
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          {getStatusBadge(product.status)}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex gap-1">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleEdit(product);
-                              }}
-                            >
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleCopy(product);
-                              }}
-                            >
-                              <Copy className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleArchive(product);
-                              }}
-                            >
-                              <Archive className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+              <div className="text-center py-12 text-muted-foreground">Indlæser produkter…</div>
+            ) : filtered.length === 0 ? (
+              <div className="text-center py-12 text-muted-foreground">Ingen produkter matcher filtrene</div>
             ) : (
-              <div className="text-center py-12">
-                <p className="text-muted-foreground">
-                  {searchTerm || statusFilter !== 'active' 
-                    ? 'Ingen produkter matcher dine filtre' 
-                    : 'Ingen produkter endnu'
-                  }
-                </p>
-              </div>
+              <table className="w-full text-sm">
+                <thead className="bg-muted/40 border-b">
+                  <tr>
+                    <th className="w-8" />
+                    {cols.image && th('', undefined, 'center')}
+                    {th('Produkt', 'name')}
+                    {cols.category && th('Kategori', 'category')}
+                    {cols.template && th('Skabelon')}
+                    {cols.origin && th('Oprindelse', 'origin')}
+                    {cols.type && th('Type')}
+                    {cols.qty && th('Antal i tilbud', 'qty', 'right')}
+                    {cols.cost && th('Kost/stk', 'cost', 'right')}
+                    {cols.korpus && th('Korpus kr/stk', undefined, 'right')}
+                    {cols.dg && th('DG est.', 'dg', 'right')}
+                    {cols.profile && th('Profil', 'profile')}
+                    {cols.quotes && th('I tilbud', 'quotes')}
+                    {cols.status && th('Status', 'status')}
+                    {cols.updated && th('Opdateret', 'updated')}
+                    <th className="px-3 py-2 w-36" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {groups.map(g => (
+                    <React.Fragment key={g.key || '__all'}>
+                      {groupBy !== 'none' && (
+                        <tr className="bg-muted/60 border-y">
+                          <td colSpan={colCount + 1} className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            {g.label} <span className="font-normal">· {g.rows.length} produkt{g.rows.length === 1 ? '' : 'er'}</span>
+                            {' · '}kost {fmt(g.rows.reduce((s, d) => s + d.costExKorpus * Math.max(1, d.totalQtyInQuotes || 1), 0))}
+                          </td>
+                        </tr>
+                      )}
+                      {g.rows.map(d => {
+                        const p = d.product;
+                        const isOpen = expanded.has(p.id);
+                        return (
+                          <React.Fragment key={p.id}>
+                            <tr
+                              className={`border-b cursor-pointer hover:bg-muted/40 ${isOpen ? 'bg-muted/30' : ''} ${p.status === 'archived' ? 'opacity-60' : ''}`}
+                              onClick={() => toggleExpand(p.id)}
+                            >
+                              <td className="px-2 py-2 text-muted-foreground">
+                                {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                              </td>
+                              {cols.image && (
+                                <td className="px-2 py-1 w-14">
+                                  {d.imageUrl ? (
+                                    <div className="relative h-10 w-10">
+                                      <img src={d.imageUrl} alt="" className="h-10 w-10 object-cover rounded border bg-white" loading="lazy" />
+                                      <span
+                                        className="absolute -bottom-1 -right-1 rounded bg-background border px-0.5 text-[9px] leading-tight text-muted-foreground"
+                                        title={d.imageSource === 'vores' ? 'Vores referencebillede' : d.imageSource === 'kunde' ? 'Kundens referencebillede' : 'Billede fra tilbudslinjen'}
+                                      >{d.imageSource === 'vores' ? 'V' : d.imageSource === 'kunde' ? 'K' : 'T'}</span>
+                                    </div>
+                                  ) : (
+                                    <div className="h-10 w-10 rounded border bg-muted/40 flex items-center justify-center text-muted-foreground"><ImageIcon className="h-4 w-4" /></div>
+                                  )}
+                                </td>
+                              )}
+                              <td className="px-3 py-2">
+                                <div className="font-medium leading-tight">{p.name}</div>
+                                {cols.template === false && d.meta.templateName && (
+                                  <div className="text-xs text-muted-foreground truncate max-w-[360px]">{d.meta.templateName}</div>
+                                )}
+                                {!d.used && p.status === 'active' && (
+                                  <Badge variant="outline" className="text-[10px] mt-0.5 text-amber-700 border-amber-300">Ikke i tilbud</Badge>
+                                )}
+                              </td>
+                              {cols.category && <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">{d.category}</td>}
+                              {cols.template && <td className="px-3 py-2 text-muted-foreground">{d.meta.templateName ?? <span className="italic">uden skabelon</span>}</td>}
+                              {cols.origin && (
+                                <td className="px-3 py-2 whitespace-nowrap">
+                                  <Badge variant="outline" className={
+                                    d.oprindelse === 'Egenproduktion' ? 'border-emerald-300 text-emerald-700'
+                                    : d.oprindelse === 'Indkøb' ? 'border-sky-300 text-sky-700'
+                                    : d.oprindelse === 'UE-produktion' ? 'border-violet-300 text-violet-700'
+                                    : 'text-muted-foreground'
+                                  }>{d.oprindelse}</Badge>
+                                </td>
+                              )}
+                              {cols.type && <td className="px-3 py-2 text-muted-foreground">{PRODUCT_TYPES[p.productType]}</td>}
+                              {cols.qty && <td className="px-3 py-2 text-right tabular-nums">{d.used ? `${d.totalQtyInQuotes} ${p.unit}` : <span className="text-muted-foreground">–</span>}</td>}
+                              {cols.cost && <td className="px-3 py-2 text-right tabular-nums font-medium">{fmt(d.costExKorpus)}</td>}
+                              {cols.korpus && <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{d.korpus > 0 ? fmt(d.korpus) : '–'}</td>}
+                              {cols.dg && (
+                                <td className={`px-3 py-2 text-right tabular-nums ${d.dgPct == null ? 'text-muted-foreground' : d.dgPct < 35 ? 'text-red-600' : d.dgPct < 55 ? 'text-amber-600' : 'text-emerald-700'}`}>
+                                  {fmtPct(d.dgPct)}
+                                </td>
+                              )}
+                              {cols.profile && (
+                                <td className="px-3 py-2 whitespace-nowrap">
+                                  {d.profile ? <Badge variant="secondary" className="text-xs">{PROFILE_LABELS[d.profile] ?? d.profile}</Badge> : <span className="text-muted-foreground">–</span>}
+                                </td>
+                              )}
+                              {cols.quotes && (
+                                <td className="px-3 py-2 whitespace-nowrap">
+                                  {d.quoteNumbers.length ? d.quoteNumbers.map(q => <Badge key={q} variant="outline" className="mr-1 text-xs">{q}</Badge>) : <span className="text-muted-foreground">–</span>}
+                                </td>
+                              )}
+                              {cols.status && <td className="px-3 py-2">{p.status === 'active' ? <Badge>Aktiv</Badge> : <Badge variant="secondary">Arkiveret</Badge>}</td>}
+                              {cols.updated && <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">{p.updatedAt.toLocaleDateString('da-DK')}</td>}
+                              <td className="px-2 py-1">
+                                <div className="flex gap-0.5 justify-end" onClick={(e) => e.stopPropagation()}>
+                                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0" title="Åbn produktside (fuld redigering)" onClick={() => navigate(`/project/products/${p.id}`)}>
+                                    <ExternalLink className="h-4 w-4" />
+                                  </Button>
+                                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0" title="Rediger stamdata" onClick={() => handleEdit(p)}><Edit className="h-4 w-4" /></Button>
+                                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0" title="Kopiér" onClick={() => handleCopy(p)}><Copy className="h-4 w-4" /></Button>
+                                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0" title={p.status === 'active' ? 'Arkivér' : 'Genaktivér'} onClick={() => handleArchive(p)}><Archive className="h-4 w-4" /></Button>
+                                </div>
+                              </td>
+                            </tr>
+                            {isOpen && (
+                              <tr className="border-b bg-muted/20">
+                                <td colSpan={colCount + 1} className="px-6 py-4">
+                                  <ProductDetails d={d} projectMaterials={projectMaterials}
+                                    materialLines={getProductMaterialLines(p.id)}
+                                    laborLines={getProductLaborLines(p.id)}
+                                    transportLines={getProductTransportLines(p.id)}
+                                    otherLines={getProductOtherCostLines(p.id)}
+                                    onOpenLegacy={() => navigate(`/project/products/${p.id}`)}
+                                    onOpenQuote={(quoteId) => navigate(`/project/quotes/${quoteId}`)}
+                                    imageBusy={imageBusy}
+                                    onUploadImage={(slot, file) => uploadProductImage(p.id, slot, file)}
+                                    onLinkImage={(slot) => linkProductImage(p.id, slot)}
+                                    onRemoveImage={(slot) => removeProductImage(p.id, slot)}
+                                  />
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
             )}
           </CardContent>
         </Card>
+        {extraLoading && <p className="text-xs text-muted-foreground">Henter skabeloner, tilbudsbrug og billeder…</p>}
 
-        {/* Create/Edit Dialog */}
-        <Dialog 
-          open={isCreateDialogOpen || !!editingProduct} 
-          onOpenChange={(open) => {
-            if (!open) {
-              setIsCreateDialogOpen(false);
-              setEditingProduct(null);
-              resetForm();
-            }
-          }}
+        {/* Opret/rediger */}
+        <Dialog
+          open={isCreateDialogOpen || !!editingProduct}
+          onOpenChange={(open) => { if (!open) { setIsCreateDialogOpen(false); setEditingProduct(null); resetForm(); } }}
         >
           <DialogContent className="max-w-2xl">
             <DialogHeader>
-              <DialogTitle>
-                {editingProduct ? 'Rediger Produkt' : 'Opret Nyt Produkt'}
-              </DialogTitle>
+              <DialogTitle>{editingProduct ? 'Rediger Produkt' : 'Opret Nyt Produkt'}</DialogTitle>
             </DialogHeader>
-            
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label htmlFor="name">Produktnavn *</Label>
-                  <Input
-                    id="name"
-                    value={formData.name}
-                    onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
-                    className={errors.name ? 'border-destructive' : ''}
-                  />
-                  {errors.name && (
-                    <p className="text-sm text-destructive mt-1">{errors.name}</p>
-                  )}
+                  <Input id="name" value={formData.name} onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))} className={errors.name ? 'border-destructive' : ''} />
+                  {errors.name && <p className="text-sm text-destructive mt-1">{errors.name}</p>}
                 </div>
-                
                 <div>
                   <Label htmlFor="productType">Produkttype</Label>
-                  <Select 
-                    value={formData.productType} 
-                    onValueChange={(value: any) => setFormData(prev => ({ ...prev, productType: value }))}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
+                  <Select value={formData.productType} onValueChange={(value: any) => setFormData(prev => ({ ...prev, productType: value }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {Object.entries(PRODUCT_TYPES).map(([key, label]) => (
-                        <SelectItem key={key} value={key}>{label}</SelectItem>
-                      ))}
+                      {Object.entries(PRODUCT_TYPES).map(([key, label]) => <SelectItem key={key} value={key}>{label}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
               </div>
-
               <div className="grid grid-cols-3 gap-4">
                 <div>
                   <Label htmlFor="quantity">Antal *</Label>
-                  <Input
-                    id="quantity"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={formData.quantity}
+                  <Input id="quantity" type="number" step="0.01" min="0" value={formData.quantity}
                     onChange={(e) => setFormData(prev => ({ ...prev, quantity: parseFloat(e.target.value) || 0 }))}
-                    className={errors.quantity ? 'border-destructive' : ''}
-                  />
-                  {errors.quantity && (
-                    <p className="text-sm text-destructive mt-1">{errors.quantity}</p>
-                  )}
+                    className={errors.quantity ? 'border-destructive' : ''} />
+                  {errors.quantity && <p className="text-sm text-destructive mt-1">{errors.quantity}</p>}
                 </div>
-                
                 <div>
                   <Label htmlFor="unit">Enhed</Label>
-                  <Input
-                    id="unit"
-                    value={formData.unit}
-                    onChange={(e) => setFormData(prev => ({ ...prev, unit: e.target.value }))}
-                  />
+                  <Input id="unit" value={formData.unit} onChange={(e) => setFormData(prev => ({ ...prev, unit: e.target.value }))} />
                 </div>
-                
                 <div>
                   <Label htmlFor="status">Status</Label>
-                  <Select 
-                    value={formData.status} 
-                    onValueChange={(value: any) => setFormData(prev => ({ ...prev, status: value }))}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
+                  <Select value={formData.status} onValueChange={(value: any) => setFormData(prev => ({ ...prev, status: value }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="active">Aktiv</SelectItem>
                       <SelectItem value="archived">Arkiveret</SelectItem>
@@ -637,48 +932,22 @@ const Products = () => {
                   </Select>
                 </div>
               </div>
-
               <div>
                 <Label htmlFor="description">Beskrivelse (til tilbud)</Label>
-                <Textarea
-                  id="description"
-                  value={formData.description}
-                  onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
-                  placeholder="Beskrivelse der vises i tilbud..."
-                />
+                <Textarea id="description" value={formData.description} onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))} placeholder="Beskrivelse der vises i tilbud..." />
               </div>
-
               <div>
                 <Label htmlFor="notes">Noter</Label>
-                <Textarea
-                  id="notes"
-                  value={formData.notes}
-                  onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
-                  placeholder="Interne noter..."
-                />
+                <Textarea id="notes" value={formData.notes} onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))} placeholder="Interne noter..." />
               </div>
-
               <div className="flex justify-end gap-2 pt-4">
-                <Button 
-                  type="button" 
-                  variant="outline" 
-                  onClick={() => {
-                    setIsCreateDialogOpen(false);
-                    setEditingProduct(null);
-                    resetForm();
-                  }}
-                >
-                  Annuller
-                </Button>
-                <Button type="submit">
-                  {editingProduct ? 'Gem Ændringer' : 'Opret Produkt'}
-                </Button>
+                <Button type="button" variant="outline" onClick={() => { setIsCreateDialogOpen(false); setEditingProduct(null); resetForm(); }}>Annuller</Button>
+                <Button type="submit">{editingProduct ? 'Gem Ændringer' : 'Opret Produkt'}</Button>
               </div>
             </form>
           </DialogContent>
         </Dialog>
 
-        {/* Product Import Modal */}
         <ProductImportModal
           isOpen={isImportModalOpen}
           onClose={() => setIsImportModalOpen(false)}
@@ -687,6 +956,235 @@ const Products = () => {
         />
       </div>
     </Layout>
+  );
+};
+
+/* ── Udfoldet detalje-panel ──────────────────────────────────────────────────────── */
+interface DetailsProps {
+  d: DerivedProduct;
+  projectMaterials: any[];
+  materialLines: any[];
+  laborLines: any[];
+  transportLines: any[];
+  otherLines: any[];
+  onOpenLegacy: () => void;
+  onOpenQuote: (quoteId: string) => void;
+  imageBusy: string | null;
+  onUploadImage: (slot: ImageSlot, file: File) => void;
+  onLinkImage: (slot: ImageSlot) => void;
+  onRemoveImage: (slot: ImageSlot) => void;
+}
+
+/** Én billedslot: viser billedet (eller tom plads) med upload / link / fjern. */
+const ImageSlotBox: React.FC<{
+  label: string;
+  hint: string;
+  img?: { url: string; caption: string | null };
+  busy: boolean;
+  onUpload: (file: File) => void;
+  onLink: () => void;
+  onRemove: () => void;
+}> = ({ label, hint, img, busy, onUpload, onLink, onRemove }) => {
+  const inputRef = React.useRef<HTMLInputElement>(null);
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{label}</span>
+        <div className="flex gap-0.5">
+          <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="Upload billede" disabled={busy} onClick={() => inputRef.current?.click()}><Upload className="h-3.5 w-3.5" /></Button>
+          <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="Indsæt link til billede" disabled={busy} onClick={onLink}><Link2 className="h-3.5 w-3.5" /></Button>
+          {img && <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive" title="Fjern billedet fra produktet" disabled={busy} onClick={onRemove}><X className="h-3.5 w-3.5" /></Button>}
+        </div>
+        <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) onUpload(f); e.currentTarget.value = ''; }} />
+      </div>
+      {img ? (
+        <a href={img.url} target="_blank" rel="noreferrer" title="Åbn i fuld størrelse">
+          <img src={img.url} alt={label} className="w-full max-h-48 object-contain rounded border bg-white" />
+        </a>
+      ) : (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => inputRef.current?.click()}
+          className="w-full h-28 rounded border border-dashed bg-muted/30 hover:bg-muted/60 flex flex-col items-center justify-center text-muted-foreground text-xs gap-1"
+        >
+          <ImageIcon className="h-5 w-5" />
+          {busy ? 'Gemmer…' : hint}
+        </button>
+      )}
+      {img?.caption && <p className="text-[11px] text-muted-foreground">{img.caption}</p>}
+    </div>
+  );
+};
+
+const LABOR_LABELS: Record<string, string> = {
+  korpus_production: 'Egen produktion (Korpus)',
+  production: 'UE-produktion',
+  dk_installation: 'Montage DK',
+  other: 'Andet',
+};
+
+const ProductDetails: React.FC<DetailsProps> = ({ d, projectMaterials, materialLines, laborLines, transportLines, otherLines, onOpenLegacy, onOpenQuote, imageBusy, onUploadImage, onLinkImage, onRemoveImage }) => {
+  const p = d.product;
+  const matName = (id: string) => projectMaterials.find(m => m.id === id);
+  const kostRows: { label: string; value: number }[] = [
+    { label: 'Materialer', value: d.materials },
+    { label: 'UE-produktion', value: d.ue },
+    { label: 'Montage DK', value: d.montage },
+    { label: 'Transport', value: d.transport },
+    { label: 'Andet', value: d.other },
+  ].filter(r => r.value > 0);
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
+      {/* Billeder (to slots) + stamdata */}
+      <div className="space-y-3">
+        <ImageSlotBox
+          label="Vores reference"
+          hint="Foto eller render af det vi laver"
+          img={d.images.vores}
+          busy={imageBusy === `${p.id}:vores`}
+          onUpload={(f) => onUploadImage('vores', f)}
+          onLink={() => onLinkImage('vores')}
+          onRemove={() => onRemoveImage('vores')}
+        />
+        <ImageSlotBox
+          label="Kundens reference"
+          hint="Tegningsudsnit, udbudsfoto eller inspiration"
+          img={d.images.kunde}
+          busy={imageBusy === `${p.id}:kunde`}
+          onUpload={(f) => onUploadImage('kunde', f)}
+          onLink={() => onLinkImage('kunde')}
+          onRemove={() => onRemoveImage('kunde')}
+        />
+        {!d.images.vores && !d.images.kunde && d.lineImageUrl && (
+          <div>
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Fra tilbudslinjen</span>
+            <a href={d.lineImageUrl} target="_blank" rel="noreferrer"><img src={d.lineImageUrl} alt="" className="w-full max-h-40 object-contain rounded border bg-white mt-1" /></a>
+          </div>
+        )}
+        <dl className="text-xs space-y-1">
+          <div className="flex justify-between gap-2"><dt className="text-muted-foreground">Type</dt><dd>{PRODUCT_TYPES[p.productType]}</dd></div>
+          <div className="flex justify-between gap-2"><dt className="text-muted-foreground">Skabelon</dt><dd className="text-right">{d.meta.templateName ?? <span className="italic">ingen</span>}</dd></div>
+          {d.meta.templateDeviation && <div className="flex justify-between gap-2"><dt className="text-muted-foreground">Afvigelse</dt><dd className="text-right">{d.meta.templateDeviation}</dd></div>}
+          <div className="flex justify-between gap-2"><dt className="text-muted-foreground">Oprindelse</dt><dd>{d.oprindelse}</dd></div>
+          <div className="flex justify-between gap-2"><dt className="text-muted-foreground">Profil</dt><dd>{d.profile ? (PROFILE_LABELS[d.profile] ?? d.profile) : '–'}{d.meta.templateProfile && d.profile !== d.meta.templateProfile ? ` (skabelon: ${PROFILE_LABELS[d.meta.templateProfile] ?? d.meta.templateProfile})` : ''}</dd></div>
+          <div className="flex justify-between gap-2"><dt className="text-muted-foreground">Enhed</dt><dd>{p.unit}</dd></div>
+        </dl>
+        {p.description && <p className="text-sm">{p.description}</p>}
+        {p.notes && <p className="text-xs text-muted-foreground whitespace-pre-line">{p.notes}</p>}
+        <div className="flex gap-2 flex-wrap">
+          <Button size="sm" variant="outline" className="gap-1" onClick={onOpenLegacy}><ExternalLink className="h-3.5 w-3.5" /> Åbn produktside</Button>
+        </div>
+      </div>
+
+      {/* Kost, stykliste, timer, tilbudsbrug */}
+      <div className="space-y-4 min-w-0">
+        {/* Kost-opsummering */}
+        <div className="flex flex-wrap gap-4 text-sm">
+          {kostRows.map(r => (
+            <div key={r.label}><div className="text-xs text-muted-foreground">{r.label}</div><div className="tabular-nums">{fmt(r.value)}</div></div>
+          ))}
+          <div><div className="text-xs text-muted-foreground">Kost/stk (ekskl. Korpus)</div><div className="tabular-nums font-semibold">{fmt(d.costExKorpus)}</div></div>
+          {d.korpus > 0 && <div><div className="text-xs text-muted-foreground">Korpus-timer (allokeres i prisen)</div><div className="tabular-nums">{fmt(d.korpus)}</div></div>}
+          {d.estSellPerUnit != null && <div><div className="text-xs text-muted-foreground">Salg/stk (est.)</div><div className="tabular-nums font-semibold text-emerald-700">{fmt(d.estSellPerUnit)}</div></div>}
+          {d.dgPct != null && <div><div className="text-xs text-muted-foreground">DG (est.)</div><div className="tabular-nums">{fmtPct(d.dgPct)}</div></div>}
+        </div>
+
+        {/* Stykliste */}
+        {materialLines.length > 0 && (
+          <div>
+            <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">Stykliste ({materialLines.length})</div>
+            <table className="w-full text-xs">
+              <thead className="text-muted-foreground">
+                <tr className="border-b"><th className="text-left py-1 pr-2">Del</th><th className="text-left py-1 pr-2">Materiale</th><th className="text-right py-1 pr-2">Mængde</th><th className="text-right py-1 pr-2">Enhedspris</th><th className="text-right py-1">I alt</th></tr>
+              </thead>
+              <tbody>
+                {materialLines.map((ml: any) => {
+                  const m = matName(ml.projectMaterialId);
+                  const unitCost = ml.unitCostOverride ?? m?.unitPrice ?? 0;
+                  return (
+                    <tr key={ml.id} className="border-b last:border-0">
+                      <td className="py-1 pr-2">{ml.lineTitle}</td>
+                      <td className="py-1 pr-2 text-muted-foreground">{m?.name ?? '?'}{m?.sourcingDecision ? <span className="ml-1 opacity-70">({m.sourcingDecision === 'kosovo' ? 'KS' : m.sourcingDecision === 'dk_to_kosovo' ? 'DK→KS' : 'DK'})</span> : null}</td>
+                      <td className="py-1 pr-2 text-right tabular-nums">{Number(ml.qty).toLocaleString('da-DK', { maximumFractionDigits: 2 })} {ml.unit}{ml.wastePct ? <span className="text-muted-foreground"> (+{ml.wastePct} %)</span> : null}</td>
+                      <td className="py-1 pr-2 text-right tabular-nums">{fmt(unitCost)}</td>
+                      <td className="py-1 text-right tabular-nums">{fmt(ml.qty * unitCost)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Timer, transport, andet */}
+        {(laborLines.length > 0 || transportLines.length > 0 || otherLines.length > 0) && (
+          <div className="grid gap-3 md:grid-cols-2">
+            {laborLines.length > 0 && (
+              <div>
+                <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">Timer</div>
+                <ul className="text-xs space-y-0.5">
+                  {laborLines.map((ll: any) => (
+                    <li key={ll.id} className="flex justify-between gap-2 border-b last:border-0 py-1">
+                      <span>{ll.title} <span className="text-muted-foreground">· {LABOR_LABELS[ll.laborType] ?? ll.laborType}</span></span>
+                      <span className="tabular-nums whitespace-nowrap">{ll.qty} {ll.unit} × {fmt(ll.unitCost)} = {fmt(ll.qty * ll.unitCost)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {(transportLines.length > 0 || otherLines.length > 0) && (
+              <div>
+                <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">Transport og andet</div>
+                <ul className="text-xs space-y-0.5">
+                  {[...transportLines, ...otherLines].map((l: any) => (
+                    <li key={l.id} className="flex justify-between gap-2 border-b last:border-0 py-1">
+                      <span>{l.title}</span>
+                      <span className="tabular-nums whitespace-nowrap">{l.qty} {l.unit} × {fmt(l.unitCost)} = {fmt(l.qty * l.unitCost)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Hvor sidder produktet i tilbuddene */}
+        <div>
+          <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">I tilbud ({d.usage.length} linje{d.usage.length === 1 ? '' : 'r'})</div>
+          {d.usage.length === 0 ? (
+            <p className="text-xs text-amber-700">Produktet er ikke på nogen tilbudslinje. Tilføj det på tilbudssiden, eller arkivér det hvis det var en kalkulationsrest.</p>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className="text-muted-foreground">
+                <tr className="border-b"><th className="text-left py-1 pr-2">Tilbud</th><th className="text-left py-1 pr-2">Linje</th><th className="text-right py-1 pr-2">Antal</th><th className="text-left py-1 pr-2">Profil</th><th className="text-right py-1 pr-2">Kost/stk (snapshot)</th><th className="text-right py-1">Salg/stk (est.)</th></tr>
+              </thead>
+              <tbody>
+                {d.usage.map(u => {
+                  const f = u.itemFactors ?? u.lineFactors ?? {};
+                  let sell: number | null = null;
+                  if (u.pricingMode === 'category_factors' && u.breakdown) {
+                    sell = 0;
+                    for (const [k, v] of Object.entries(u.breakdown)) sell += Number(v ?? 0) * Number((f as any)[k === 'transport' ? 'product_transport' : k] ?? 1);
+                  } else if (u.pricingMode === 'markup_pct') sell = u.ctpu * (1 + (u.markupPct ?? 0) / 100);
+                  return (
+                    <tr key={u.itemId} className="border-b last:border-0 hover:bg-muted/40 cursor-pointer" onClick={() => onOpenQuote(u.quoteId)} title="Åbn tilbuddet">
+                      <td className="py-1 pr-2 whitespace-nowrap"><Badge variant="outline" className="text-[10px]">{u.quoteNumber}</Badge> <span className="text-muted-foreground">{u.quoteStatus}</span></td>
+                      <td className="py-1 pr-2">{u.lineTitle}{u.lineIsOption && <span className="ml-1 text-muted-foreground">(option)</span>}</td>
+                      <td className="py-1 pr-2 text-right tabular-nums">{u.qty}{u.lineQty !== 1 ? ` × ${u.lineQty}` : ''}</td>
+                      <td className="py-1 pr-2">{u.factorProfile ? (PROFILE_LABELS[u.factorProfile] ?? u.factorProfile) : <span className="text-muted-foreground">linjens</span>}</td>
+                      <td className="py-1 pr-2 text-right tabular-nums">{fmt(u.ctpu)}</td>
+                      <td className="py-1 text-right tabular-nums">{sell != null ? fmt(sell) : <span className="text-muted-foreground">fast pris</span>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
   );
 };
 
