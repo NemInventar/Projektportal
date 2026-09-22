@@ -66,6 +66,12 @@ import {
   Unlock,
   Eye,
   EyeOff,
+  ArrowUpDown,
+  Search,
+  Truck,
+  Wrench,
+  Clock,
+  Factory,
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useProject } from '@/contexts/ProjectContext';
@@ -213,6 +219,8 @@ interface QuoteLine {
   technicalSpec?: string | null;
   // Bilag-toggle
   includeInAppendix?: boolean;
+  // Option/tilvalg — tæller ikke med i tilbuddets hovedsum, opgøres særskilt
+  isOption?: boolean;
 }
 
 interface QuoteLineItem {
@@ -224,6 +232,10 @@ interface QuoteLineItem {
   unit: string;
   costBreakdown: CostBreakdown;
   costTotalPerUnit: number;
+  /** Produktets egen faktor-profil (pricing_factor_profiles). null = arv linjen. */
+  factorProfile?: string | null;
+  /** Materialiseret af DB fra factorProfile/overstyring. null = brug linjens faktorsæt. */
+  effectiveCategoryFactors?: CategoryFactors | null;
 }
 
 interface CostBreakdown {
@@ -247,6 +259,8 @@ interface QuoteLinePricing {
   categoryFactors?: CategoryFactors | null;
   /** Materialiseret af DB: linje → tilbud → defaults. Det GUI'en regner med i faktor-mode. */
   effectiveCategoryFactors?: CategoryFactors | null;
+  /** Linjejustering i % (rabat < 0 / tillæg > 0) — ganges på færdig linjepris i kost-baserede modes. */
+  adjustPct?: number;
 }
 
 const ProjectQuoteDetail = () => {
@@ -447,6 +461,8 @@ const ProjectQuoteDetail = () => {
     riskPerUnit: number;
     /** Sparse overstyring pr. kategori — tom = følg tilbud/defaults */
     categoryFactors: CategoryFactors;
+    /** Linjejustering i % — rabat (< 0) eller tillæg (> 0) på færdig linjepris */
+    adjustPct: number;
   }>({
     pricingMode: 'markup_pct',
     markupPct: 25,
@@ -454,7 +470,38 @@ const ProjectQuoteDetail = () => {
     targetUnitPrice: 0,
     riskPerUnit: 0,
     categoryFactors: {},
+    adjustPct: 0,
   });
+
+  // Faktor-profiler (pricing_factor_profiles) — til produkt-profil-valg pr. line item (22-09-2026)
+  const [factorProfiles, setFactorProfiles] = useState<{ profile_key: string; label_da: string }[]>([]);
+  useEffect(() => {
+    supabase
+      .from('pricing_factor_profiles')
+      .select('profile_key, label_da')
+      .eq('active', true)
+      .order('sort_order')
+      .then(({ data }) => setFactorProfiles((data as any[]) ?? []));
+  }, []);
+
+  const [savingItemProfile, setSavingItemProfile] = useState<string | null>(null);
+  /** Sæt/ryd produktets egen faktor-profil. DB-triggeren materialiserer faktorsættet og genberegner tilbuddet. */
+  const saveItemProfile = async (itemId: string, profile: string | null) => {
+    setSavingItemProfile(itemId);
+    try {
+      const { error } = await supabase
+        .from('project_quote_line_items_2026_01_16_23_00')
+        .update({ factor_profile: profile })
+        .eq('id', itemId);
+      if (error) throw error;
+      await loadQuoteData();
+    } catch (error) {
+      console.error('Error saving item factor profile:', error);
+      toast({ title: 'Fejl', description: 'Kunne ikke gemme produktets profil', variant: 'destructive' });
+    } finally {
+      setSavingItemProfile(null);
+    }
+  };
 
   // Form data for custom item
   const [customItemFormData, setCustomItemFormData] = useState({
@@ -672,6 +719,7 @@ const ProjectQuoteDetail = () => {
             riskPerUnit: line.risk_per_unit != null ? parseFloat(line.risk_per_unit) : 0,
             categoryFactors: line.category_factors ?? null,
             effectiveCategoryFactors: line.effective_category_factors ?? null,
+            adjustPct: line.adjust_pct != null ? parseFloat(line.adjust_pct) : 0,
           },
           items: line.project_quote_line_items_2026_01_16_23_00?.map((item: any) => ({
             id: item.id,
@@ -681,7 +729,9 @@ const ProjectQuoteDetail = () => {
             qty: parseFloat(item.qty),
             unit: item.unit,
             costBreakdown: item.cost_breakdown_json || { materials: 0, transport: 0, labor_production: 0, labor_dk: 0, other: 0 },
-            costTotalPerUnit: parseFloat(item.cost_total_per_unit || 0)
+            costTotalPerUnit: parseFloat(item.cost_total_per_unit || 0),
+            factorProfile: item.factor_profile ?? null,
+            effectiveCategoryFactors: item.effective_category_factors ?? null,
           })) || [],
           // Billed/render-felter
           renderContext: line.render_context ?? null,
@@ -703,6 +753,7 @@ const ProjectQuoteDetail = () => {
           technicalSpec: line.technical_spec ?? null,
           // Bilag-toggle (default true for eksisterende rækker)
           includeInAppendix: line.include_in_appendix !== false,
+          isOption: line.is_option === true,
           };
         });
         setLines(formattedLines);
@@ -1274,6 +1325,7 @@ const ProjectQuoteDetail = () => {
       qty: it.qty,
       cost_total_per_unit: it.costTotalPerUnit ?? null,
       cost_breakdown_json: it.costBreakdown,
+      effective_category_factors: it.effectiveCategoryFactors ?? null,
     }));
     const sharedPricing = line.pricing ? {
       pricing_mode: line.pricing.pricingMode,
@@ -1281,6 +1333,7 @@ const ProjectQuoteDetail = () => {
       target_unit_price: line.pricing.targetUnitPrice ?? null,
       risk_per_unit: line.pricing.riskPerUnit ?? 0,
       category_factors: line.pricing.effectiveCategoryFactors ?? null,
+      adjust_pct: line.pricing.adjustPct ?? 0,
     } : null;
     const t = calculateLine(sharedItems, line.quantity, sharedPricing);
 
@@ -1405,12 +1458,20 @@ const ProjectQuoteDetail = () => {
       return;
     }
 
+    const adjust = Number.isFinite(pricingFormData.adjustPct) ? pricingFormData.adjustPct : 0;
+    if (adjust <= -100 || adjust > 500) {
+      toast({ title: "Ugyldig justering", description: "Justering skal ligge mellem -99 % og +500 %", variant: "destructive" });
+      return;
+    }
+
     setSavingPricing(true);
     try {
       // Pricing er nu kolonner direkte på line — simple UPDATE
       const updateData: any = {
         pricing_mode: mode,
         risk_per_unit: pricingFormData.riskPerUnit,
+        // Linjejustering (rabat/tillæg) — ganges på færdig linjepris i DB (fn_quote_line_sell); ignoreres ved fast pris
+        adjust_pct: mode === 'target_unit_price' ? 0 : adjust,
       };
       if (mode === 'markup_pct') {
         updateData.markup_pct = pricingFormData.markupPct;
@@ -2192,6 +2253,7 @@ const ProjectQuoteDetail = () => {
         targetUnitPrice: line.pricing.targetUnitPrice || 0,
         riskPerUnit: line.pricing.riskPerUnit,
         categoryFactors: { ...(line.pricing.categoryFactors ?? {}) },
+        adjustPct: line.pricing.adjustPct ?? 0,
       });
     } else {
       setPricingFormData({
@@ -2201,6 +2263,7 @@ const ProjectQuoteDetail = () => {
         targetUnitPrice: 0,
         riskPerUnit: 0,
         categoryFactors: {},
+        adjustPct: 0,
       });
     }
     setEditingPricing(line.id);
@@ -2953,36 +3016,114 @@ const ProjectQuoteDetail = () => {
   const totalCostInclRisk = baseCostTotal + riskTotal;
 
   // Build product summary (Q-V1-09)
+  // Opsummeringen deles i kostarter, så møbler, montagetimer og paller ikke står i samme liste.
+  // Hvert item har præcis én kostkategori med værdi != 0, så opdelingen er entydig.
+  type KostArt = 'produkt' | 'produktion' | 'montage' | 'transport' | 'timer';
+
+  const KOST_ARTER: { key: KostArt; label: string; hint: string }[] = [
+    { key: 'produkt',    label: 'Produkter',            hint: 'Materialer og indkøbte varer' },
+    { key: 'produktion', label: 'Produktion (Ferizaj)', hint: 'Produktionsløn i Kosovo' },
+    { key: 'montage',    label: 'Montage DK',           hint: 'Montagetimer på pladsen' },
+    { key: 'transport',  label: 'Transport',            hint: 'Levering, paller og fragt' },
+    { key: 'timer',      label: 'Timer / regningsarbejde', hint: 'Svende- og lærlingetimer, optioner' },
+  ];
+
+  // Positionsnummeret står forrest i item-titlen, fx "4.4.2.1 Højskab ... — Montage DK, ...".
+  const POS_MOENSTER = /^(\d+(?:\.\d+)+)/;
+
+  const kostArtFor = (item: { costBreakdown: any }, produktNavn: string): KostArt => {
+    const cb = item.costBreakdown || {};
+    const tal = (k: string) => Number(cb[k]) || 0;
+    if (tal('product_transport') > 0 || tal('material_transport') > 0) return 'transport';
+    if (tal('labor_production') > 0 || tal('labor_korpus') > 0) return 'produktion';
+    if (tal('labor_dk') > 0) {
+      // Montagetillæg på et produkt vs. selvstændig timepost (optioner, regningsarbejde)
+      return /^montage/i.test(produktNavn) ? 'montage' : 'timer';
+    }
+    return 'produkt';
+  };
+
   const buildProductSummary = (allLines: typeof lines) => {
-    // Collect all items from all lines
-    const allItems = allLines.flatMap(line => line.items || []);
-    
-    // Filter only project_product items
+    // Option-flaget sidder på linjen — bær det med ned på posten, så en option
+    // og en fast post af samme produkt ikke lægges sammen.
+    const allItems = allLines.flatMap(line =>
+      (line.items || []).map(item => ({ ...item, erOption: line.isOption === true })));
     const productItems = allItems.filter(item => item.sourceType === 'project_product');
-    
-    // Group by project_product_id (fallback to title)
+
     const grouped = productItems.reduce((acc, item) => {
-      const key = item.projectProductId || item.title;
+      // Navnet tages fra project_products — item.title er positionsspecifik fritekst
+      // med interne noter og duer ikke som produktnavn.
+      const produkt = item.projectProductId
+        ? products.find(p => p.id === item.projectProductId)
+        : undefined;
+      const navn = produkt?.name || item.title;
+      const art = kostArtFor(item, navn);
+      const key = `${art}::${item.erOption ? 'opt' : 'fast'}::${item.projectProductId || item.title}`;
+
       if (!acc[key]) {
         acc[key] = {
-          title: item.title,
+          title: navn,
+          rawTitle: item.title,
           projectProductId: item.projectProductId,
+          kostArt: art,
+          erOption: item.erOption,
           unit: item.unit,
+          positioner: new Set<string>(),
           totalQty: 0,
-          totalCost: 0
+          totalCost: 0,
         };
       }
+      const pos = POS_MOENSTER.exec(item.title)?.[1];
+      if (pos) acc[key].positioner.add(pos);
       acc[key].totalQty += item.qty;
       acc[key].totalCost += item.costTotalPerUnit * item.qty;
       return acc;
-    }, {} as Record<string, { title: string; projectProductId: string | null; unit: string; totalQty: number; totalCost: number }>);
-    
-    // Convert to array and sort by total cost DESC
-    return Object.values(grouped).sort((a, b) => b.totalCost - a.totalCost);
+    }, {} as Record<string, {
+      title: string; rawTitle: string; projectProductId: string | null;
+      kostArt: KostArt; erOption: boolean; unit: string; positioner: Set<string>;
+      totalQty: number; totalCost: number;
+    }>);
+
+    return Object.values(grouped).map(g => ({
+      ...g,
+      positionsListe: Array.from(g.positioner).sort((a, b) =>
+        a.localeCompare(b, 'da-DK', { numeric: true })),
+    }));
   };
 
-
   const productSummary = buildProductSummary(lines);
+
+  // Filtrering + sortering af opsummeringen
+  const [summarySearch, setSummarySearch] = useState('');
+  const [summarySort, setSummarySort] = useState<{ felt: 'navn' | 'antal' | 'cost'; faldende: boolean }>(
+    { felt: 'cost', faldende: true }
+  );
+
+  const toggleSummarySort = (felt: 'navn' | 'antal' | 'cost') => {
+    setSummarySort(prev => prev.felt === felt
+      ? { felt, faldende: !prev.faldende }
+      : { felt, faldende: felt !== 'navn' });
+  };
+
+  const filtreretSummary = (() => {
+    const q = summarySearch.trim().toLowerCase();
+    const matcher = q
+      ? productSummary.filter(p =>
+          p.title.toLowerCase().includes(q) ||
+          p.rawTitle.toLowerCase().includes(q) ||
+          p.positionsListe.some(pos => pos.includes(q)))
+      : productSummary;
+    const retning = summarySort.faldende ? -1 : 1;
+    return [...matcher].sort((a, b) => {
+      if (summarySort.felt === 'navn') return retning * a.title.localeCompare(b.title, 'da-DK');
+      if (summarySort.felt === 'antal') return retning * (a.totalQty - b.totalQty);
+      return retning * (a.totalCost - b.totalCost);
+    });
+  })();
+
+  const summaryFast = filtreretSummary.filter(p => !p.erOption).reduce((s, p) => s + p.totalCost, 0);
+  const summaryOption = filtreretSummary.filter(p => p.erOption).reduce((s, p) => s + p.totalCost, 0);
+  const summaryTotal = summaryFast + summaryOption;
 
   // Build material summary (Q-V1-10)
   const buildMaterialSummary = (
@@ -4655,6 +4796,21 @@ const ProjectQuoteDetail = () => {
                                   onChange={(e) => setPricingFormData(prev => ({ ...prev, riskPerUnit: parseFloat(e.target.value) || 0 }))}
                                 />
                               </div>
+
+                              {pricingFormData.pricingMode !== 'target_unit_price' && (
+                                <div>
+                                  <Label>Justering % (rabat −, tillæg +)</Label>
+                                  <Input
+                                    type="number"
+                                    step="0.5"
+                                    value={pricingFormData.adjustPct}
+                                    onChange={(e) => setPricingFormData(prev => ({ ...prev, adjustPct: parseFloat(e.target.value) || 0 }))}
+                                  />
+                                  <p className="text-xs text-muted-foreground mt-1">
+                                    Ganges på hele linjens pris efter faktorer og risk. Brug den til mængderabat eller tillæg — aldrig en negativ kostpost.
+                                  </p>
+                                </div>
+                              )}
                             </div>
                             
                             {/* Faktor pr. kostkategori (02-09-2026): sell = Σ kost_kategori × faktor + risk.
@@ -5190,6 +5346,24 @@ const ProjectQuoteDetail = () => {
                                           {item.costTotalPerUnit === 0 && (
                                             <Badge variant="destructive" className="text-xs shrink-0">Mangler pris</Badge>
                                           )}
+                                          {/* Produktets egen faktor-profil (22-09-2026) — tom = arv linjen. Kun i faktor-mode. */}
+                                          {line.pricing?.pricingMode === 'category_factors' && (
+                                            <select
+                                              className={`h-6 shrink-0 rounded border bg-background px-1 text-xs ${item.factorProfile ? 'border-emerald-500 text-emerald-700' : 'text-muted-foreground'}`}
+                                              value={item.factorProfile ?? ''}
+                                              disabled={savingItemProfile === item.id}
+                                              onClick={(e) => e.stopPropagation()}
+                                              onChange={(e) => saveItemProfile(item.id, e.target.value || null)}
+                                              title={item.factorProfile
+                                                ? `Produktet prissættes med profilen "${item.factorProfile}" — uafhængigt af linjen`
+                                                : 'Produktet arver linjens faktorer. Vælg en profil for at prissætte det for sig selv.'}
+                                            >
+                                              <option value="">Profil: linjens</option>
+                                              {factorProfiles.map(p => (
+                                                <option key={p.profile_key} value={p.profile_key}>{p.label_da}</option>
+                                              ))}
+                                            </select>
+                                          )}
                                         </div>
                                         {/* 3. Antal + enhed */}
                                         <div className="flex items-center gap-2">
@@ -5419,57 +5593,196 @@ const ProjectQuoteDetail = () => {
         </Card>
 
         {/* Product Summary (Q-V1-09) - Internal use only */}
-        {productSummary.length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Produktopsummering (intern)</CardTitle>
-              <p className="text-sm text-muted-foreground">
-                Samlet oversigt over alle produkter på tværs af tilbudslinjer
-              </p>
-            </CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse border border-gray-300 text-sm">
-                  <thead>
-                    <tr className="bg-gray-50">
-                      <th className="border border-gray-300 px-4 py-2 text-left font-medium">Produkt</th>
-                      <th className="border border-gray-300 px-4 py-2 text-right font-medium">Antal</th>
-                      <th className="border border-gray-300 px-4 py-2 text-center font-medium">Enhed</th>
-                      <th className="border border-gray-300 px-4 py-2 text-right font-medium">Samlet cost</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {productSummary.map((product, index) => (
-                      <tr key={product.projectProductId || product.title || index} className="hover:bg-gray-50">
-                        <td className="border border-gray-300 px-4 py-2">{product.title}</td>
-                        <td className="border border-gray-300 px-4 py-2 text-right font-medium">
-                          {product.totalQty.toLocaleString('da-DK')}
-                        </td>
-                        <td className="border border-gray-300 px-4 py-2 text-center">{product.unit}</td>
-                        <td className="border border-gray-300 px-4 py-2 text-right font-semibold">
-                          {product.totalCost.toLocaleString('da-DK')} kr
-                        </td>
-                      </tr>
-                    ))}
-                    {/* Total row */}
-                    <tr className="bg-gray-100 font-bold border-t-2">
-                      <td className="border border-gray-300 px-4 py-2">Total</td>
-                      <td className="border border-gray-300 px-4 py-2 text-right">
-                        {/* Empty - different units */}
-                      </td>
-                      <td className="border border-gray-300 px-4 py-2 text-center">
-                        {/* Empty - different units */}
-                      </td>
-                      <td className="border border-gray-300 px-4 py-2 text-right font-bold">
-                        {productSummary.reduce((sum, p) => sum + p.totalCost, 0).toLocaleString('da-DK')} kr
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
-        )}
+        {productSummary.length > 0 && (() => {
+          const kr = (v: number) =>
+            v.toLocaleString('da-DK', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+          const antal = (v: number) =>
+            v.toLocaleString('da-DK', { maximumFractionDigits: 2 });
+          const ikonFor = (k: KostArt) =>
+            k === 'transport' ? Truck
+            : k === 'montage' ? Wrench
+            : k === 'timer' ? Clock
+            : k === 'produktion' ? Factory
+            : Package;
+
+          const SortKnap = ({ felt, children, højre }: {
+            felt: 'navn' | 'antal' | 'cost'; children: React.ReactNode; højre?: boolean;
+          }) => (
+            <button
+              type="button"
+              onClick={() => toggleSummarySort(felt)}
+              className={`inline-flex items-center gap-1 font-medium hover:text-foreground transition-colors ${
+                summarySort.felt === felt ? 'text-foreground' : 'text-muted-foreground'
+              } ${højre ? 'flex-row-reverse' : ''}`}
+            >
+              {children}
+              <ArrowUpDown className="h-3 w-3 shrink-0" />
+            </button>
+          );
+
+          return (
+            <Card>
+              <CardHeader>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <CardTitle>Produktopsummering (intern)</CardTitle>
+                    <p className="text-sm text-muted-foreground">
+                      Opdelt på kostart — produkter, montage og transport hver for sig
+                    </p>
+                  </div>
+                  <div className="relative w-full sm:w-72">
+                    <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      placeholder="Søg i navn eller position…"
+                      value={summarySearch}
+                      onChange={(e) => setSummarySearch(e.target.value)}
+                      className="pl-8"
+                    />
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {KOST_ARTER.map(art => {
+                  const rækker = filtreretSummary.filter(p => p.kostArt === art.key);
+                  if (rækker.length === 0) return null;
+                  const Ikon = ikonFor(art.key);
+                  const delsum = rækker.reduce((s, p) => s + p.totalCost, 0);
+                  const optRækker = rækker.filter(p => p.erOption);
+                  const optSum = optRækker.reduce((s, p) => s + p.totalCost, 0);
+                  const optQty = optRækker.reduce((s, p) => s + p.totalQty, 0);
+                  // Én enhed pr. kostart gør en samlet mængde meningsfuld
+                  const enheder = new Set(rækker.map(p => p.unit));
+                  const samletAntal = enheder.size === 1
+                    ? rækker.reduce((s, p) => s + p.totalQty, 0) : null;
+
+                  return (
+                    <div key={art.key}>
+                      <div className="flex items-baseline justify-between gap-3 border-b pb-1.5 mb-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Ikon className="h-4 w-4 text-muted-foreground shrink-0" />
+                          <span className="font-semibold">{art.label}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {art.hint} · {rækker.length} {rækker.length === 1 ? 'post' : 'poster'}
+                          </span>
+                          {optSum > 0 && (
+                            <span className="text-xs rounded bg-amber-100 text-amber-900 px-1.5 py-0.5 whitespace-nowrap">
+                              heraf option: {kr(optSum)} kr
+                              {enheder.size === 1 && ` · ${antal(optQty)} ${rækker[0].unit}`}
+                            </span>
+                          )}
+                        </div>
+                        <span className="font-semibold tabular-nums whitespace-nowrap">
+                          {kr(delsum)} kr
+                        </span>
+                      </div>
+
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b bg-muted/40">
+                              <th className="px-3 py-2 text-left">
+                                <SortKnap felt="navn">Produkt</SortKnap>
+                              </th>
+                              <th className="px-3 py-2 text-left font-medium text-muted-foreground w-44">
+                                Positioner
+                              </th>
+                              <th className="px-3 py-2 text-right w-24">
+                                <SortKnap felt="antal" højre>Antal</SortKnap>
+                              </th>
+                              <th className="px-3 py-2 text-center font-medium text-muted-foreground w-20">
+                                Enhed
+                              </th>
+                              <th className="px-3 py-2 text-right w-32">
+                                <SortKnap felt="cost" højre>Samlet cost</SortKnap>
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rækker.map((p, i) => (
+                              <tr
+                                key={`${p.kostArt}-${p.projectProductId || p.title || i}`}
+                                className={`border-b last:border-0 hover:bg-muted/50 ${
+                                  p.erOption ? 'bg-amber-50/60' : ''
+                                }`}
+                              >
+                                <td className="px-3 py-2">
+                                  {p.title}
+                                  {p.erOption && (
+                                    <span className="ml-2 text-[11px] rounded bg-amber-100 text-amber-900 px-1.5 py-0.5 align-middle whitespace-nowrap">
+                                      option
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-xs text-muted-foreground">
+                                  {p.positionsListe.length > 0 ? p.positionsListe.join(' · ') : '—'}
+                                </td>
+                                <td className="px-3 py-2 text-right tabular-nums font-medium">
+                                  {antal(p.totalQty)}
+                                </td>
+                                <td className="px-3 py-2 text-center text-muted-foreground">{p.unit}</td>
+                                <td className="px-3 py-2 text-right tabular-nums font-semibold">
+                                  {kr(p.totalCost)} kr
+                                </td>
+                              </tr>
+                            ))}
+                            <tr className="bg-muted/30 font-semibold">
+                              <td className="px-3 py-2" colSpan={2}>I alt {art.label.toLowerCase()}</td>
+                              <td className="px-3 py-2 text-right tabular-nums">
+                                {samletAntal !== null ? antal(samletAntal) : ''}
+                              </td>
+                              <td className="px-3 py-2 text-center text-muted-foreground">
+                                {samletAntal !== null ? rækker[0].unit : ''}
+                              </td>
+                              <td className="px-3 py-2 text-right tabular-nums">{kr(delsum)} kr</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {filtreretSummary.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-6 text-center">
+                    Ingen poster matcher „{summarySearch}".
+                  </p>
+                ) : (
+                  <div className="border-t-2 pt-3 space-y-1">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="font-bold">
+                        Samlet cost — faste poster
+                        {summarySearch.trim() && (
+                          <span className="ml-2 text-xs font-normal text-muted-foreground">
+                            (filtreret — {filtreretSummary.length} af {productSummary.length} poster)
+                          </span>
+                        )}
+                      </span>
+                      <span className="font-bold tabular-nums whitespace-nowrap">
+                        {kr(summaryFast)} kr
+                      </span>
+                    </div>
+                    {summaryOption > 0 && (
+                      <>
+                        <div className="flex items-baseline justify-between gap-3 text-amber-900">
+                          <span className="text-sm">
+                            + optioner (tæller ikke med i hovedsummen)
+                          </span>
+                          <span className="tabular-nums whitespace-nowrap">
+                            {kr(summaryOption)} kr
+                          </span>
+                        </div>
+                        <div className="flex items-baseline justify-between gap-3 text-muted-foreground text-sm border-t pt-1">
+                          <span>Alt medregnet</span>
+                          <span className="tabular-nums whitespace-nowrap">{kr(summaryTotal)} kr</span>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          );
+        })()}
 
         {/* Material Summary (Q-V1-10) - Internal use only */}
         {materialSummary.length > 0 && (

@@ -329,8 +329,8 @@ const ProjectQuotes = () => {
         .from('project_quote_lines_2026_01_16_23_00')
         .select(`
           id, quantity, archived,
-          pricing_mode, markup_pct, target_unit_price, risk_per_unit,
-          project_quote_line_items_2026_01_16_23_00(qty,cost_breakdown_json,cost_total_per_unit)
+          pricing_mode, markup_pct, target_unit_price, risk_per_unit, effective_category_factors, adjust_pct,
+          project_quote_line_items_2026_01_16_23_00(qty,cost_breakdown_json,cost_total_per_unit,effective_category_factors)
         `)
         .eq('project_quote_id', quoteId)
         .neq('archived', true);
@@ -347,6 +347,7 @@ const ProjectQuotes = () => {
           qty: parseFloat(it.qty) || 0,
           cost_total_per_unit: it.cost_total_per_unit != null ? parseFloat(it.cost_total_per_unit) : null,
           cost_breakdown_json: it.cost_breakdown_json,
+          effective_category_factors: it.effective_category_factors ?? null,
         }));
         const t = calculateLine(items, parseFloat(line.quantity) || 0, pricingFromLine(line));
         totalSellingPrice += t.totalSellingPrice;

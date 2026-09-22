@@ -28,6 +28,8 @@ interface LineItemRow {
   qty: number | string;
   cost_total_per_unit: number | string | null;
   cost_breakdown_json: Record<string, number> | null;
+  /** Produktets eget faktorsæt (22-09-2026) — NULL = arv linjens */
+  effective_category_factors?: Record<string, number> | null;
 }
 
 interface LineRow {
@@ -44,6 +46,7 @@ interface LineRow {
   markup_pct: number | string | null;
   target_unit_price: number | string | null;
   risk_per_unit: number | string | null;
+  adjust_pct?: number | string | null;
   living_description: string | null;
   technical_spec: string | null;
   custom_image_url: string | null;
@@ -214,6 +217,7 @@ async function renderQuotePdf(loaded: LoadedQuoteData): Promise<Uint8Array> {
       qty: Number(it.qty ?? 0),
       cost_total_per_unit: it.cost_total_per_unit != null ? Number(it.cost_total_per_unit) : 0,
       cost_breakdown_json: it.cost_breakdown_json,
+      effective_category_factors: it.effective_category_factors ?? null,
     }));
     const pricing = pricingFromLine(line);
     const t = calculateLine(items, Number(line.quantity ?? 0), pricing);

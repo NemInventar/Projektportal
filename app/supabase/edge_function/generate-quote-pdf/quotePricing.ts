@@ -11,6 +11,12 @@
  *                         Faktorerne løses i databasen (linje → tilbud → pricing_factor_defaults)
  *                         og ligger materialiseret på linjen som effective_category_factors.
  *                         GUI/PDF LÆSER dem kun — regner dem aldrig selv.
+ *                         22-09-2026: et line item kan have sit EGET faktorsæt (item.effective_category_factors,
+ *                         materialiseret af DB fra item.factor_profile / item.category_factors). Er det sat,
+ *                         vinder det over linjens for netop det item. NULL = arv linjen (= adfærd før 22-09).
+ *
+ * Linjejustering (22-09-2026): adjust_pct (rabat < 0 / tillæg > 0) ganges på den færdige linjepris i
+ * kost-baserede modes (category_factors, markup_pct). Ignoreres ved target_unit_price. Aldrig som negativ kost.
  *
  * Risk lægges altid oveni cost som "risk_per_unit" og trækkes IKKE som margin.
  * (Cost → Risk → Margin-rækkefølgen fra ARCHITECTURE.md §3.4). I faktor-mode går risk igennem ×1.
@@ -51,11 +57,15 @@ export interface LinePricing {
   risk_per_unit: number;
   /** Effektive faktorer (allerede løst mod tilbud + defaults). Kun brugt hvis pricing_mode = 'category_factors'. */
   category_factors?: CategoryFactors | null;
+  /** Linjejustering i % (rabat < 0, tillæg > 0). Ganges på færdig linjepris i kost-baserede modes. Default 0. */
+  adjust_pct?: number | null;
 }
 
 export interface CostItem {
   qty: number;
   cost_total_per_unit?: number | null;
+  /** Produktets eget faktorsæt (materialiseret af DB). NULL/undefined = arv linjens category_factors. */
+  effective_category_factors?: CategoryFactors | null;
   cost_breakdown_json?: {
     materials?: number;
     material_transport?: number;
@@ -139,8 +149,10 @@ export function costPerUnit(items: CostItem[], lineQuantity: number): number {
  * Beregn salgspris pr. unit for én linje.
  * - markup_pct mode: (cost + risk) × (1 + markup/100)
  * - target_unit_price mode: target_unit_price (risk ignoreres — bruger har sat en fast pris)
- * - category_factors mode: Σ_kategori kost_kategori × faktor_kategori + risk
+ * - category_factors mode: Σ_item qty × Σ_kategori kost_kategori × faktor_kategori, delt med linjens antal, + risk
+ *   Faktorsættet er itemets eget (effective_category_factors) hvis sat, ellers linjens.
  *   (mangler en faktor for en kategori, regnes den ×1 — så prisen aldrig falder under kost i stilhed)
+ * - adjust_pct ganges på resultatet i category_factors og markup_pct (ikke ved fast pris).
  */
 export function sellingPricePerUnit(
   items: CostItem[],
@@ -159,17 +171,25 @@ export function sellingPricePerUnit(
     return pricing.target_unit_price;
   }
 
+  const adj = 1 + (pricing.adjust_pct ?? 0) / 100;
+
   if (pricing.pricing_mode === 'category_factors') {
-    const byCat = lineCostByCategoryPerUnit(items, lineQuantity);
-    const f = pricing.category_factors ?? {};
-    let sell = 0;
-    for (const k of COST_CATEGORIES) sell += byCat[k] * (f[k] ?? 1);
-    return sell + risk;
+    const lineF = pricing.category_factors ?? {};
+    let total = 0;
+    for (const it of items) {
+      const c = itemCostByCategory(it);
+      const f = it.effective_category_factors ?? lineF; // produktets eget faktorsæt, ellers linjens
+      let itemSell = 0;
+      for (const k of COST_CATEGORIES) itemSell += c[k] * (f[k] ?? 1);
+      total += itemSell * (it.qty ?? 0);
+    }
+    const sellPerUnit = lineQuantity > 0 ? total / lineQuantity : 0;
+    return (sellPerUnit + risk) * adj;
   }
 
   // markup_pct default
   const markup = pricing.markup_pct ?? 0;
-  return totalCostPerUnit * (1 + markup / 100);
+  return totalCostPerUnit * (1 + markup / 100) * adj;
 }
 
 export interface LineTotals {
@@ -244,6 +264,7 @@ export function pricingFromLine(lineRow: any): LinePricing {
       target_unit_price: lineRow.target_unit_price != null ? Number(lineRow.target_unit_price) : null,
       risk_per_unit: Number(lineRow.risk_per_unit ?? 0),
       category_factors: toFactors(lineRow.effective_category_factors ?? lineRow.category_factors),
+      adjust_pct: Number(lineRow.adjust_pct ?? 0),
     };
   }
   // Legacy nested format (array eller object fra PostgREST)
@@ -255,5 +276,16 @@ export function pricingFromLine(lineRow: any): LinePricing {
     target_unit_price: p?.target_unit_price != null ? Number(p.target_unit_price) : null,
     risk_per_unit: Number(p?.risk_per_unit ?? 0),
     category_factors: toFactors(p?.effective_category_factors ?? p?.category_factors),
+    adjust_pct: Number(p?.adjust_pct ?? 0),
+  };
+}
+
+/** Normalisér et line item fra Supabase til CostItem — tager itemets eget faktorsæt med. */
+export function costItemFromRow(it: any): CostItem {
+  return {
+    qty: Number(it?.qty ?? 0) || 0,
+    cost_total_per_unit: it?.cost_total_per_unit != null ? Number(it.cost_total_per_unit) : null,
+    cost_breakdown_json: it?.cost_breakdown_json ?? null,
+    effective_category_factors: toFactors(it?.effective_category_factors),
   };
 }
