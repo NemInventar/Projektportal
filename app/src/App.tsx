@@ -6,6 +6,7 @@ import { HashRouter, Routes, Route, Navigate, useParams } from "react-router-dom
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import Login from "./pages/Login";
+import FeedbackWidget from "@/components/FeedbackWidget";
 import { ProjectProvider } from "@/contexts/ProjectContext";
 import { StandardSuppliersProvider } from "@/contexts/StandardSuppliersContext";
 import { StandardMaterialsProvider } from "@/contexts/StandardMaterialsContext";
@@ -83,6 +84,7 @@ function AppProviders({ children }: { children: React.ReactNode }) {
                         <Toaster />
                         <Sonner />
                         {children}
+                        <FeedbackWidget />
                       </TooltipProvider>
                       </LeadsProvider>
                     </PurchasingProvider>

@@ -286,6 +286,11 @@ const ProjectQuoteDetail = () => {
   // State
   const [quote, setQuote] = useState<any>(null);
   const [savingMetadata, setSavingMetadata] = useState(false);
+  // Dirigentens statusgate: DB-triggeren afviser status='sent' hvis fn_dirigent_klar_til_send
+  // returnerer årsager. Vi tjekker først og viser dem — med mulighed for bypass (logges i dirigent_trin).
+  const [sendGate, setSendGate] = useState<{ aarsag: string; detalje: string | null }[] | null>(null);
+  const [sendGateChecking, setSendGateChecking] = useState(false);
+  const [bypassNote, setBypassNote] = useState('');
   // Sandheden for redigerbarhed: lås-state. Når true er hele tilbuddet read-only.
   const isReadOnly = !!quote?.is_locked;
   // Employees + crm_contacts til FK-dropdowns
@@ -861,6 +866,11 @@ const ProjectQuoteDetail = () => {
 
       if (error) throw error;
 
+      if ('dirigent_bypass_note' in updates) {
+        setSendGate(null);
+        setBypassNote('');
+      }
+
       // Hvis et af felterne triggerer DB-side ændringer eller joins, reload fra view'et
       // så vi fanger trigger-output (sent_at, locked_at, snapshot) og opdaterede joins
       // (company_*, recipient_*, created_by_*_resolved).
@@ -881,16 +891,57 @@ const ProjectQuoteDetail = () => {
         title: "Metadata opdateret",
         description: "Tilbuddets metadata er blevet gemt",
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating quote metadata:', error);
+      // Vis databasens egen besked (fx dirigentens statusgate) i stedet for en generisk fejl
+      const dbMsg = [error?.message, error?.hint].filter(Boolean).join(' — ');
       toast({
-        title: "Fejl",
-        description: "Der opstod en fejl ved opdatering af metadata",
+        title: "Kunne ikke gemme",
+        description: dbMsg || "Der opstod en fejl ved opdatering af metadata",
         variant: "destructive",
       });
     } finally {
       setSavingMetadata(false);
     }
+  };
+
+  // Statusskift: 'sent' går gennem dirigentens gate først, alt andet gemmes direkte
+  const handleStatusChange = async (v: string) => {
+    if (v !== 'sent' || !quote?.id) {
+      await updateQuoteMetadata({ status: v });
+      return;
+    }
+    try {
+      setSendGateChecking(true);
+      const { data, error } = await supabase.rpc('fn_dirigent_klar_til_send', { p_quote_id: quote.id });
+      if (error) throw error;
+      const reasons = (data ?? []) as { aarsag: string; detalje: string | null }[];
+      if (reasons.length === 0) {
+        await updateQuoteMetadata({ status: 'sent' });
+      } else {
+        setBypassNote('');
+        setSendGate(reasons);
+      }
+    } catch (error: any) {
+      console.error('Gate-tjek fejlede:', error);
+      toast({ title: 'Gate-tjek fejlede', description: error?.message ?? String(error), variant: 'destructive' });
+    } finally {
+      setSendGateChecking(false);
+    }
+  };
+
+  // Gør dirigentens 'detalje' læsbar: JSON-lister → titler/fejl, ellers rå tekst
+  const formatGateDetail = (detalje: string | null): string => {
+    if (!detalje) return '';
+    try {
+      const parsed = JSON.parse(detalje);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((x: any) => x?.title ?? x?.fejl ?? (typeof x === 'string' ? x : JSON.stringify(x)))
+          .join(' · ');
+      }
+    } catch { /* ikke JSON — vis som det er */ }
+    return detalje;
   };
 
   // Åbn dialog i edit-mode for det valgte firma
@@ -4244,8 +4295,8 @@ const ProjectQuoteDetail = () => {
                 <Label htmlFor="status">Status</Label>
                 <Select
                   value={quote?.status ?? 'draft'}
-                  onValueChange={(v) => updateQuoteMetadata({ status: v })}
-                  disabled={savingMetadata || isReadOnly}
+                  onValueChange={handleStatusChange}
+                  disabled={savingMetadata || sendGateChecking || isReadOnly}
                 >
                   <SelectTrigger id="status">
                     <SelectValue />
@@ -4263,7 +4314,58 @@ const ProjectQuoteDetail = () => {
                     Bemærk: Status='sent' låser normalt automatisk. Tilbuddet er aktuelt ulåst — ændringer kan stadig foretages.
                   </p>
                 )}
+                {sendGateChecking && (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1">
+                    <Loader2 className="h-3 w-3 animate-spin" /> Tjekker dirigenten…
+                  </p>
+                )}
               </div>
+
+              {/* Dirigentens statusgate — vises når 'Sendt' blev afvist */}
+              <Dialog open={sendGate !== null} onOpenChange={(o) => { if (!o) { setSendGate(null); setBypassNote(''); } }}>
+                <DialogContent className="max-w-xl">
+                  <DialogHeader>
+                    <DialogTitle>Tilbuddet er ikke klar til at blive sendt</DialogTitle>
+                    <DialogDescription>
+                      Dirigenten har {sendGate?.length ?? 0} {sendGate?.length === 1 ? 'årsag' : 'årsager'} til at holde tilbuddet på kladde.
+                      Ret dem (kør dirigenten på tilbuddet), eller send alligevel med en begrundelse — det logges på sagen.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <ul className="space-y-2 text-sm max-h-64 overflow-y-auto">
+                    {(sendGate ?? []).map((r, i) => (
+                      <li key={i} className="rounded border border-amber-300 bg-amber-50 p-2 dark:bg-amber-950/30">
+                        <div className="font-medium">{r.aarsag}</div>
+                        {r.detalje && (
+                          <div className="text-xs text-muted-foreground mt-1 break-words">{formatGateDetail(r.detalje)}</div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="space-y-2">
+                    <Label htmlFor="bypass_note">Send alligevel — begrundelse (påkrævet)</Label>
+                    <Textarea
+                      id="bypass_note"
+                      rows={2}
+                      value={bypassNote}
+                      onChange={(e) => setBypassNote(e.target.value)}
+                      placeholder="Fx: Kunden har bedt om at få det i dag; billeder eftersendes."
+                    />
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button variant="outline" onClick={() => { setSendGate(null); setBypassNote(''); }}>
+                      Behold som kladde
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      disabled={savingMetadata || bypassNote.trim().length < 5}
+                      onClick={() => updateQuoteMetadata({ status: 'sent', dirigent_bypass_note: bypassNote.trim() })}
+                    >
+                      {savingMetadata && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      Send alligevel (logges)
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
               
               <div className="space-y-2">
                 <Label>Sendt dato</Label>
