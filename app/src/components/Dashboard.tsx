@@ -574,40 +574,6 @@ export default function Dashboard() {
   }>>([]);
   const [editingValidUntilId, setEditingValidUntilId] = useState<string | null>(null);
 
-  // Kladder — "Kladder"-sektion (22-09-2026, Milot: "jeg kan ikke se hvad der er i kladder").
-  // Alle draft-tilbud på tværs af projekter, også dem der ikke tælles med i totalen, så tallet
-  // øverst kan spores til konkrete tilbud.
-  const [draftQuotes, setDraftQuotes] = useState<Array<{
-    id: string;
-    project_id: string;
-    quote_number: string | null;
-    title: string | null;
-    updated_at: string | null;
-    include_in_project_total: boolean;
-    cached_sell_total: number | null;
-  }>>([]);
-  const [draftsOpen, setDraftsOpen] = useState<boolean>(
-    () => localStorage.getItem('dashboard_drafts_open') !== '0'
-  );
-  const toggleDraftsOpen = () => {
-    setDraftsOpen(prev => {
-      localStorage.setItem('dashboard_drafts_open', prev ? '0' : '1');
-      return !prev;
-    });
-  };
-
-  /** Flueben "tæl med i projekttotal" direkte fra kladde-sektionen — samme felt som på tilbuddet. */
-  const toggleDraftInclude = async (quoteId: string, include: boolean) => {
-    const { error } = await supabase
-      .from('project_quotes_2026_01_16_23_00')
-      .update({ include_in_project_total: include })
-      .eq('id', quoteId);
-    if (!error) {
-      setDraftQuotes(prev => prev.map(q => q.id === quoteId ? { ...q, include_in_project_total: include } : q));
-      fetchStats();
-    }
-  };
-
   // Ringeliste-krydset: telefon-opfølgninger pr. projektnummer (cold_calls) — så samme
   // opfølgning ikke bogføres dobbelt mellem ERP'et og ringelisten. Read-only visning.
   const [callFollowups, setCallFollowups] = useState<Record<string, { last: string | null; next: string | null }>>({});
@@ -660,24 +626,9 @@ export default function Dashboard() {
     try {
       const { data: quotesData } = await supabase
         .from('project_quotes_2026_01_16_23_00')
-        .select('id, project_id, status, include_in_project_total, quote_number, title, sent_at, valid_until, is_locked, cached_sell_total, updated_at')
+        .select('id, project_id, status, include_in_project_total, quote_number, title, sent_at, valid_until, is_locked, cached_sell_total')
         .in('project_id', ids)
         .neq('status', 'archived');
-
-      // Kladder — senest rørt først
-      const draftList = (quotesData || [])
-        .filter((q: any) => q.status === 'draft')
-        .sort((a: any, b: any) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''))
-        .map((q: any) => ({
-          id: q.id,
-          project_id: q.project_id,
-          quote_number: q.quote_number,
-          title: q.title,
-          updated_at: q.updated_at,
-          include_in_project_total: q.include_in_project_total !== false,
-          cached_sell_total: q.cached_sell_total != null ? Number(q.cached_sell_total) : null,
-        }));
-      setDraftQuotes(draftList);
 
       // Byg sentQuotes-liste sorteret på sent_at ASC (ældste først = mest akutte)
       const sentList = (quotesData || [])
@@ -1033,130 +984,6 @@ export default function Dashboard() {
               );
             })}
           </div>
-        </div>
-        );
-      })()}
-
-      {/* Kladder — alle draft-tilbud, grupperet pr. projekt. Viser også dem der ikke tælles med,
-          så "Kladder"-tallet øverst kan spores til konkrete tilbud. */}
-      {draftQuotes.length > 0 && (() => {
-        const byProject = new Map<string, typeof draftQuotes>();
-        for (const q of draftQuotes) {
-          const arr = byProject.get(q.project_id) ?? [];
-          arr.push(q);
-          byProject.set(q.project_id, arr);
-        }
-        // Projekter med kladder der tælles med først, derefter dem der kun har fravalgte kladder
-        const groups = [...byProject.entries()].sort(([, a], [, b]) => {
-          const aIn = a.some(q => q.include_in_project_total) ? 0 : 1;
-          const bIn = b.some(q => q.include_in_project_total) ? 0 : 1;
-          return aIn - bIn;
-        });
-        const countedQuotes = draftQuotes.filter(q => q.include_in_project_total);
-        const countedSum = countedQuotes.reduce((s, q) => s + (q.cached_sell_total ?? 0), 0);
-        return (
-        <div className="rounded-lg border bg-white p-4 space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <button
-              type="button"
-              onClick={toggleDraftsOpen}
-              className="text-sm font-semibold uppercase tracking-wide text-gray-700 flex items-center gap-2 hover:text-gray-900"
-            >
-              {draftsOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-              <FileText className="h-4 w-4" />
-              Kladder · {draftQuotes.length} tilbud i {groups.length} projekter
-            </button>
-            <span className="text-xs text-muted-foreground text-right">
-              {countedQuotes.length} tælles med · {formatCurrency(countedSum)}
-              {draftQuotes.length - countedQuotes.length > 0 && ` · ${draftQuotes.length - countedQuotes.length} fravalgt`}
-            </span>
-          </div>
-          {draftsOpen && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-            {groups.map(([projectId, qs]) => {
-              const project = projects.find(p => p.id === projectId);
-              const groupSum = qs.filter(q => q.include_in_project_total).reduce((s, q) => s + (q.cached_sell_total ?? 0), 0);
-              const anyCounted = qs.some(q => q.include_in_project_total);
-              const inactivePhase = project ? INACTIVE.includes(project.phase) : false;
-              const newest = qs[0];
-              return (
-                <div key={projectId} className={`rounded-md border overflow-hidden ${anyCounted ? 'border-gray-200' : 'border-dashed border-gray-200 opacity-70'}`}>
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => project && handleGoToQuotes(project)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && project) handleGoToQuotes(project); }}
-                    className="cursor-pointer flex items-center justify-between gap-3 px-3 py-2 bg-gray-50/70 hover:bg-gray-100"
-                  >
-                    <div className="min-w-0">
-                      <div className="font-semibold text-sm truncate flex items-center gap-2">
-                        <span className="truncate">{project?.name || 'Ukendt projekt'}</span>
-                        {project && (
-                          <Badge variant="outline" className={`text-[10px] px-1.5 py-0 shrink-0 ${BADGE[project.phase] || ''}`}>
-                            {project.phase}
-                          </Badge>
-                        )}
-                      </div>
-                      <div className="text-xs text-muted-foreground truncate">
-                        {[project?.customer, project?.projectNumber].filter(Boolean).join(' · ') || 'Ukendt kunde'}
-                        {newest?.updated_at ? ` · rørt ${relativeDanish(newest.updated_at)}` : ''}
-                      </div>
-                      {inactivePhase && anyCounted && (
-                        <div className="text-xs text-amber-700 truncate">
-                          Projektet er {project?.phase.toLowerCase()} — kladden tæller stadig med i pipeline
-                        </div>
-                      )}
-                    </div>
-                    <div className="text-right shrink-0">
-                      <div className="text-sm font-semibold">{anyCounted ? formatCurrency(groupSum) : '—'}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {qs.length} {qs.length === 1 ? 'kladde' : 'kladder'}{!anyCounted ? ' · tælles ikke med' : ''}
-                      </div>
-                    </div>
-                  </div>
-                  <div>
-                    {qs.map((q) => {
-                      const goToQuote = () => {
-                        if (project) setActiveProject(project);
-                        navigate(`/project/quotes/${q.id}`);
-                      };
-                      return (
-                        <div
-                          key={q.id}
-                          role="button"
-                          tabIndex={0}
-                          onClick={goToQuote}
-                          onKeyDown={(e) => { if (e.key === 'Enter') goToQuote(); }}
-                          className={`cursor-pointer flex flex-wrap items-center gap-x-3 gap-y-0.5 px-3 py-1.5 border-t border-gray-100 hover:bg-gray-50 transition-colors ${q.include_in_project_total ? '' : 'text-muted-foreground'}`}
-                          title={q.updated_at ? `Sidst rettet ${formatDateDanish(q.updated_at)}` : undefined}
-                        >
-                          <span className="text-xs font-semibold text-muted-foreground w-7 shrink-0">{q.quote_number || '—'}</span>
-                          <span className={`text-sm truncate flex-1 min-w-[8rem] ${q.include_in_project_total ? '' : 'line-through decoration-gray-300'}`}>
-                            {q.title || '(uden titel)'}
-                          </span>
-                          <label
-                            className="text-xs flex items-center gap-1 cursor-pointer select-none"
-                            onClick={(e) => e.stopPropagation()}
-                            title="Tæl med i projekttotal og i Kladder-tallet øverst"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={q.include_in_project_total}
-                              onChange={(e) => toggleDraftInclude(q.id, e.target.checked)}
-                              className="h-3.5 w-3.5 accent-gray-700"
-                            />
-                            tæl med
-                          </label>
-                          <span className="text-sm font-semibold w-24 text-right shrink-0">{formatCurrency(q.cached_sell_total)}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          )}
         </div>
         );
       })()}
