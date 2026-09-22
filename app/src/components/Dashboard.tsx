@@ -56,6 +56,11 @@ const PHASE_ORDER: Project['phase'][] = [
 const INACTIVE: Project['phase'][] = ['Afsluttet', 'Tabt', 'Fravalgt', 'Arkiv'];
 const ALL_PHASES: Project['phase'][] = [...PHASE_ORDER, ...INACTIVE];
 
+// Visningsnavn pr. fase. Den gemte værdi i databasen ('Tilbud') er uændret — kun det brugeren ser.
+// Milot 22-09-2026: fasen 'Tilbud' skal hedde 'Kladder' på forsiden (det er tilbud der er i kladde).
+const PHASE_LABEL: Partial<Record<Project['phase'], string>> = { Tilbud: 'Kladder' };
+const phaseLabel = (p: string) => PHASE_LABEL[p as Project['phase']] ?? p;
+
 // Projekttyper. SKAL matche CHECK-constraint'en projects_project_type_check i databasen.
 // 'intern' er load-bearing: den gør projektet til et internt omkostningssted som v_cashflow
 // tæller som drift (90001 Kontor DK, 90002 Fabrik Kosovo).
@@ -220,7 +225,7 @@ function ProjectForm({ project, onSubmit, onCancel }: {
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
               {ALL_PHASES.map(p => (
-                <SelectItem key={p} value={p}>{p}</SelectItem>
+                <SelectItem key={p} value={p}>{phaseLabel(p)}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -454,7 +459,7 @@ function SortableTableRow({ project, stats, isActive, onSelect, onGoToQuotes, on
       <TableCell className="w-6">{project.isStarred && <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />}</TableCell>
       <TableCell className="font-medium">{project.name}</TableCell>
       <TableCell className="text-muted-foreground">{project.customer || '—'}</TableCell>
-      <TableCell><Badge className={`text-xs ${BADGE[project.phase]}`}>{project.phase}</Badge></TableCell>
+      <TableCell><Badge className={`text-xs ${BADGE[project.phase]}`}>{phaseLabel(project.phase)}</Badge></TableCell>
       <TableCell className="text-right font-medium">
         {s?.accepted.sum > 0 ? fmt(s.accepted.sum) : <span className="text-muted-foreground">—</span>}
       </TableCell>
@@ -512,7 +517,7 @@ function ProjectCard({ project, stats, isActive, onSelect, onGoToQuotes, onEdit 
           <span className="font-semibold text-sm truncate">{project.name}</span>
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          <Badge className={`text-xs ${BADGE[project.phase]}`}>{project.phase}</Badge>
+          <Badge className={`text-xs ${BADGE[project.phase]}`}>{phaseLabel(project.phase)}</Badge>
           <button
             onClick={e => { e.stopPropagation(); onEdit(project); }}
             className="p-0.5 rounded hover:bg-gray-100 text-muted-foreground hover:text-foreground"
@@ -844,9 +849,9 @@ export default function Dashboard() {
                     ? `${BADGE[phase]} font-medium shadow-sm`
                     : 'bg-white text-muted-foreground border-gray-200 hover:bg-gray-50 opacity-60'
                 }`}
-                title={isOn ? `Skjul ${phase}` : `Vis ${phase}`}
+                title={isOn ? `Skjul ${phaseLabel(phase)}` : `Vis ${phaseLabel(phase)}`}
               >
-                {phase} <span className={isOn ? 'opacity-80' : ''}>· {count}</span>
+                {phaseLabel(phase)} <span className={isOn ? 'opacity-80' : ''}>· {count}</span>
               </button>
             );
           })}
@@ -994,7 +999,7 @@ export default function Dashboard() {
           {activeGroups.map(({ phase, items }) => (
             <div key={phase}>
               <h2 className={`text-sm font-semibold uppercase tracking-wide mb-3 ${HEADING[phase] || 'text-gray-700'}`}>
-                {phase} · {items.length}
+                {phaseLabel(phase)} · {items.length}
               </h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 {items.map(p => (
@@ -1073,7 +1078,7 @@ export default function Dashboard() {
                       <TableCell className="w-6" />
                       <TableCell className="font-medium">{p.name}</TableCell>
                       <TableCell className="text-muted-foreground">{p.customer || '—'}</TableCell>
-                      <TableCell><Badge className={`text-xs ${BADGE[p.phase]}`}>{p.phase}</Badge></TableCell>
+                      <TableCell><Badge className={`text-xs ${BADGE[p.phase]}`}>{phaseLabel(p.phase)}</Badge></TableCell>
                       <TableCell />
                       <TableCell />
                       <TableCell className="text-right">
