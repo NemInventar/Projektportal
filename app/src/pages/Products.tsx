@@ -61,6 +61,45 @@ import {
 type Oprindelse = 'Egenproduktion' | 'UE-produktion' | 'Indkøb' | 'Montage' | 'Transport' | 'Andet';
 type MarginBand = 'Høj (≥55 %)' | 'Mellem (35–55 %)' | 'Lav (<35 %)' | 'Ukendt';
 
+/** DB-værdi (project_products.oprindelse) → visningsnavn. NULL i DB = afledt af kostlinjer og type. */
+const OPRINDELSE_DB: Record<string, Oprindelse> = {
+  egenproduktion: 'Egenproduktion',
+  ue_produktion: 'UE-produktion',
+  indkoeb: 'Indkøb',
+  montage: 'Montage',
+  transport: 'Transport',
+  andet: 'Andet',
+};
+
+/** Faste kategorier (project_products.category er fri tekst — disse er forslagene og det heuristikken lander i). */
+const CATEGORY_SUGGESTIONS = [
+  'Skab', 'Bordplade', 'Bænk', 'Garderobe', 'Hylde', 'Tilsætning & sokkel', 'Spejl', 'Sanitet', 'Tilbehør',
+  'Polstring', 'Akustik', 'Afskærmning', 'Beklædning', 'Køkken', 'Ydelse & transport', 'Andet',
+];
+
+/** Gæt kategori ud fra navnet — bruges KUN når produktet hverken har egen kategori eller skabelon-kategori. Rækkefølgen er vigtig. */
+const guessCategory = (name: string, productType: string): string | null => {
+  const n = name.toLowerCase();
+  const t = (re: RegExp) => re.test(n);
+  if (t(/\b(montage|levering|transport|fragt|risiko|regningsarbejde|svendetime|lærlingetime|opmåling)/)) return 'Ydelse & transport';
+  if (t(/hynde|polstr/)) return 'Polstring';
+  if (t(/garderobe/)) return 'Garderobe';
+  if (t(/skab\b|skabe\b|skab,|taskekasse|madrasskab|højskab|underskab|overskab|vaskeskab|skuffeskab/)) return 'Skab';
+  if (t(/bordplade|stålbord/)) return 'Bordplade';
+  if (t(/bænk/)) return 'Bænk';
+  if (t(/tilsætning|sokkel|lysning|dækside|blindfront|fyldning/)) return 'Tilsætning & sokkel';
+  if (t(/spejl/)) return 'Spejl';
+  if (t(/holder|dispenser|affaldskurv|knage|krog|greb|lås\b|bøjle/)) return 'Tilbehør';
+  if (t(/håndvask|udslagsvask|\bvask\b|puslebord|toilet|armatur|bruse/)) return 'Sanitet';
+  if (t(/hylde|reol/)) return 'Hylde';
+  if (t(/akustik/)) return 'Akustik';
+  if (t(/afskærm|skærm/)) return 'Afskærmning';
+  if (t(/beklædning|panel/)) return 'Beklædning';
+  if (t(/køkken/)) return 'Køkken';
+  if (productType === 'installation') return 'Ydelse & transport';
+  return null;
+};
+
 interface ProductMeta {
   standardProductId: string | null;
   componentType: string | null;
@@ -68,6 +107,21 @@ interface ProductMeta {
   templateName: string | null;
   templateCategory: string | null;
   templateProfile: string | null;
+  /** Egen kategori sat på produktet (project_products.category) — vinder over skabelon og heuristik */
+  category: string | null;
+  /** Egen oprindelse sat på produktet (project_products.oprindelse, DB-værdi) — vinder over det afledte */
+  oprindelse: string | null;
+}
+
+/** Et billede der sidder på en tilbudslinje hvor produktet indgår. */
+interface LineImage {
+  url: string;
+  kind: 'custom' | 'render';
+  lineId: string;
+  lineTitle: string;
+  quoteNumber: string;
+  /** Antal items på linjen — 1 = billedet viser kun dette produkt */
+  itemsOnLine: number;
 }
 
 interface UsageItem {
@@ -86,7 +140,10 @@ interface UsageItem {
   markupPct: number | null;
   targetUnitPrice: number | null;
   lineFactors: Record<string, number> | null;
+  /** Det billede linjen selv viser (aktiv kilde, ellers custom, ellers render) */
   lineImage: string | null;
+  lineImageCustom: string | null;
+  lineImageRender: string | null;
   quoteId: string;
   quoteNumber: string;
   quoteStatus: string;
@@ -104,6 +161,8 @@ interface DerivedProduct {
   meta: ProductMeta;
   images: ProductImages;
   lineImageUrl: string | null;
+  /** Alle billeder fra de tilbudslinjer produktet sidder på (dedupleret på URL, "kun dette produkt" først) */
+  lineImages: LineImage[];
   imageSource: 'vores' | 'kunde' | 'tilbudslinje' | null;
   // Kost pr. enhed fra kostlinjerne (ekskl. Korpus — samme regel som DB-snapshottet)
   materials: number;
@@ -124,6 +183,10 @@ interface DerivedProduct {
   marginBand: MarginBand;
   imageUrl: string | null;
   category: string;
+  categorySource: 'egen' | 'skabelon' | 'afledt' | 'ingen';
+  oprindelseSource: 'egen' | 'afledt';
+  /** Hvad reglen ville give uden en egen værdi — vises i dropdownens "Afledt"-valg */
+  derivedOprindelse: Oprindelse;
 }
 
 const COLS = [
@@ -284,6 +347,19 @@ const Products = () => {
     } finally { setImageBusy(null); }
   };
 
+  /** Brug et billede fra en tilbudslinje som produktets reference (kopierer kun URL'en — filen bliver hvor den er). */
+  const adoptLineImage = async (productId: string, slot: ImageSlot, url: string, sourceRef: string) => {
+    const key = `${productId}:${slot}`;
+    try {
+      setImageBusy(key);
+      await saveProductImage(productId, slot, url, sourceRef, null);
+      await loadImages(products.map(p => p.id));
+      toast({ title: slot === 'vores' ? 'Sat som vores reference' : 'Sat som kundens reference' });
+    } catch (e: any) {
+      toast({ title: 'Fejl', description: e?.message ?? 'Kunne ikke gemme billedet', variant: 'destructive' });
+    } finally { setImageBusy(null); }
+  };
+
   const removeProductImage = async (productId: string, slot: ImageSlot) => {
     const cur = imagesByProduct[productId];
     if (!cur) return;
@@ -309,78 +385,135 @@ const Products = () => {
     } finally { setImageBusy(null); }
   };
 
+  /** Skabelon + egen kategori/oprindelse pr. produkt. Kaldes igen efter inline-redigering. */
+  const loadMeta = async (projectId: string) => {
+    const { data, error } = await supabase
+      .from('project_products_2026_01_15_12_49')
+      .select('id, standard_product_id, component_type, template_deviation, category, oprindelse, standard_products_2026_07_11(name, category, factor_profile)')
+      .eq('project_id', projectId);
+    if (error) throw error;
+    const meta: Record<string, ProductMeta> = {};
+    for (const r of (data as any[]) ?? []) {
+      const sp = Array.isArray(r.standard_products_2026_07_11) ? r.standard_products_2026_07_11[0] : r.standard_products_2026_07_11;
+      meta[r.id] = {
+        standardProductId: r.standard_product_id ?? null,
+        componentType: r.component_type ?? null,
+        templateDeviation: r.template_deviation ?? null,
+        templateName: sp?.name ?? null,
+        templateCategory: sp?.category ?? null,
+        templateProfile: sp?.factor_profile ?? null,
+        category: r.category ?? null,
+        oprindelse: r.oprindelse ?? null,
+      };
+    }
+    setMetaById(meta);
+  };
+
+  /** Gem egen kategori eller oprindelse på produktet (NULL = tilbage til afledt). */
+  const saveProductField = async (productId: string, patch: { category?: string | null; oprindelse?: string | null }) => {
+    if (!activeProject) return;
+    const { error } = await supabase
+      .from('project_products_2026_01_15_12_49')
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq('id', productId);
+    if (error) { toast({ title: 'Kunne ikke gemme', description: error.message, variant: 'destructive' }); return; }
+    await loadMeta(activeProject.id);
+  };
+
+  /** Hent alle items der peger på et produkt i projektets tilbud — i tre trin (tilbud → linjer → items),
+   *  så vi ikke afhænger af filtre på dobbelt-indlejrede relationer. Fejl vises i stedet for at give en tom side. */
+  const loadUsage = async (projectId: string) => {
+    const chunk = <T,>(arr: T[], n = 100): T[][] => { const out: T[][] = []; for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n)); return out; };
+
+    const { data: quotes, error: qErr } = await supabase
+      .from('project_quotes_2026_01_16_23_00')
+      .select('id, quote_number, status')
+      .eq('project_id', projectId);
+    if (qErr) throw qErr;
+    const quoteById: Record<string, { id: string; quote_number: string; status: string }> = {};
+    for (const q of (quotes as any[]) ?? []) quoteById[q.id] = q;
+    const quoteIds = Object.keys(quoteById);
+    if (quoteIds.length === 0) { setUsageByProduct({}); return; }
+
+    const lines: any[] = [];
+    for (const ids of chunk(quoteIds)) {
+      const { data, error } = await supabase
+        .from('project_quote_lines_2026_01_16_23_00')
+        .select('id, project_quote_id, title, archived, quantity, is_option, pricing_mode, markup_pct, target_unit_price, effective_category_factors, custom_image_url, render_image_url, active_image_source')
+        .in('project_quote_id', ids);
+      if (error) throw error;
+      lines.push(...((data as any[]) ?? []));
+    }
+    const lineById: Record<string, any> = {};
+    for (const l of lines) lineById[l.id] = l;
+    const lineIds = Object.keys(lineById);
+    if (lineIds.length === 0) { setUsageByProduct({}); return; }
+
+    const items: any[] = [];
+    for (const ids of chunk(lineIds)) {
+      const { data, error } = await supabase
+        .from('project_quote_line_items_2026_01_16_23_00')
+        .select('id, qty, project_product_id, project_quote_line_id, factor_profile, effective_category_factors, cost_breakdown_json, cost_total_per_unit')
+        .in('project_quote_line_id', ids)
+        .not('project_product_id', 'is', null);
+      if (error) throw error;
+      items.push(...((data as any[]) ?? []));
+    }
+
+    const usage: Record<string, UsageItem[]> = {};
+    for (const r of items) {
+      const l = lineById[r.project_quote_line_id];
+      const q = l ? quoteById[l.project_quote_id] : null;
+      if (!l || !q) continue;
+      // Linjens eget billede: den aktive kilde, ellers hvad der findes. 'none' gælder PDF'en — internt vil vi stadig se billedet.
+      const img = (l.active_image_source === 'custom' && l.custom_image_url) ? l.custom_image_url
+        : (l.active_image_source === 'render' && l.render_image_url) ? l.render_image_url
+        : (l.custom_image_url || l.render_image_url || null);
+      const item: UsageItem = {
+        itemId: r.id,
+        qty: Number(r.qty ?? 0),
+        factorProfile: r.factor_profile ?? null,
+        itemFactors: r.effective_category_factors ?? null,
+        breakdown: r.cost_breakdown_json ?? null,
+        ctpu: Number(r.cost_total_per_unit ?? 0),
+        lineId: l.id,
+        lineTitle: l.title,
+        lineQty: Number(l.quantity ?? 0),
+        lineArchived: l.archived === true,
+        lineIsOption: l.is_option === true,
+        pricingMode: l.pricing_mode ?? null,
+        markupPct: l.markup_pct != null ? Number(l.markup_pct) : null,
+        targetUnitPrice: l.target_unit_price != null ? Number(l.target_unit_price) : null,
+        lineFactors: l.effective_category_factors ?? null,
+        lineImage: img,
+        lineImageCustom: l.custom_image_url ?? null,
+        lineImageRender: l.render_image_url ?? null,
+        quoteId: q.id,
+        quoteNumber: q.quote_number,
+        quoteStatus: q.status,
+      };
+      (usage[r.project_product_id] ??= []).push(item);
+    }
+    setUsageByProduct(usage);
+  };
+
   useEffect(() => {
     if (!activeProject) return;
     let cancelled = false;
     const load = async () => {
       setExtraLoading(true);
       try {
-        const [metaRes, usageRes] = await Promise.all([
-          supabase
-            .from('project_products_2026_01_15_12_49')
-            .select('id, standard_product_id, component_type, template_deviation, standard_products_2026_07_11(name, category, factor_profile)')
-            .eq('project_id', activeProject.id),
-          supabase
-            .from('project_quote_line_items_2026_01_16_23_00')
-            .select(`id, qty, project_product_id, factor_profile, effective_category_factors, cost_breakdown_json, cost_total_per_unit,
-              project_quote_lines_2026_01_16_23_00!inner(id, title, archived, quantity, is_option, pricing_mode, markup_pct, target_unit_price, effective_category_factors, custom_image_url, render_image_url, active_image_source,
-                project_quotes_2026_01_16_23_00!inner(id, quote_number, status, project_id))`)
-            .eq('project_quote_lines_2026_01_16_23_00.project_quotes_2026_01_16_23_00.project_id', activeProject.id)
-            .not('project_product_id', 'is', null),
+        const results = await Promise.allSettled([
+          loadMeta(activeProject.id),
+          loadUsage(activeProject.id),
+          loadImages(products.map(p => p.id)),
         ]);
         if (cancelled) return;
-        await loadImages(products.map(p => p.id));
-        if (cancelled) return;
-
-        const meta: Record<string, ProductMeta> = {};
-        for (const r of (metaRes.data as any[]) ?? []) {
-          const sp = Array.isArray(r.standard_products_2026_07_11) ? r.standard_products_2026_07_11[0] : r.standard_products_2026_07_11;
-          meta[r.id] = {
-            standardProductId: r.standard_product_id ?? null,
-            componentType: r.component_type ?? null,
-            templateDeviation: r.template_deviation ?? null,
-            templateName: sp?.name ?? null,
-            templateCategory: sp?.category ?? null,
-            templateProfile: sp?.factor_profile ?? null,
-          };
+        const failed = results.map((r, i) => (r.status === 'rejected' ? ['skabeloner', 'tilbudsbrug', 'billeder'][i] + ': ' + ((r.reason as any)?.message ?? String(r.reason)) : null)).filter(Boolean);
+        if (failed.length) {
+          console.error('Products: delvis indlæsning fejlede', failed);
+          toast({ title: 'Noget kunne ikke hentes', description: failed.join(' · '), variant: 'destructive' });
         }
-        setMetaById(meta);
-
-        const usage: Record<string, UsageItem[]> = {};
-        for (const r of (usageRes.data as any[]) ?? []) {
-          const l = Array.isArray(r.project_quote_lines_2026_01_16_23_00) ? r.project_quote_lines_2026_01_16_23_00[0] : r.project_quote_lines_2026_01_16_23_00;
-          const q = Array.isArray(l?.project_quotes_2026_01_16_23_00) ? l.project_quotes_2026_01_16_23_00[0] : l?.project_quotes_2026_01_16_23_00;
-          if (!l || !q) continue;
-          const img = l.active_image_source === 'custom' ? l.custom_image_url
-            : l.active_image_source === 'render' ? l.render_image_url
-            : l.active_image_source === 'none' ? null
-            : (l.custom_image_url || l.render_image_url || null);
-          const item: UsageItem = {
-            itemId: r.id,
-            qty: Number(r.qty ?? 0),
-            factorProfile: r.factor_profile ?? null,
-            itemFactors: r.effective_category_factors ?? null,
-            breakdown: r.cost_breakdown_json ?? null,
-            ctpu: Number(r.cost_total_per_unit ?? 0),
-            lineId: l.id,
-            lineTitle: l.title,
-            lineQty: Number(l.quantity ?? 0),
-            lineArchived: l.archived === true,
-            lineIsOption: l.is_option === true,
-            pricingMode: l.pricing_mode ?? null,
-            markupPct: l.markup_pct != null ? Number(l.markup_pct) : null,
-            targetUnitPrice: l.target_unit_price != null ? Number(l.target_unit_price) : null,
-            lineFactors: l.effective_category_factors ?? null,
-            lineImage: img,
-            quoteId: q.id,
-            quoteNumber: q.quote_number,
-            quoteStatus: q.status,
-          };
-          (usage[r.project_product_id] ??= []).push(item);
-        }
-        setUsageByProduct(usage);
-      } catch (e) {
-        console.error('Products: kunne ikke hente skabelon/tilbudsbrug/billeder', e);
       } finally {
         if (!cancelled) setExtraLoading(false);
       }
@@ -399,6 +532,7 @@ const Products = () => {
       const meta: ProductMeta = metaById[product.id] ?? {
         standardProductId: null, componentType: null, templateDeviation: null,
         templateName: null, templateCategory: null, templateProfile: null,
+        category: null, oprindelse: null,
       };
 
       let materials = 0;
@@ -420,13 +554,33 @@ const Products = () => {
       other += getProductOtherCostLines(product.id).reduce((s, l) => s + (l.qty ?? 0) * (l.unitCost ?? 0), 0);
       const costExKorpus = materials + ue + montage + transport + other;
 
-      let oprindelse: Oprindelse = 'Andet';
-      if (korpus > 0) oprindelse = 'Egenproduktion';
-      else if (ue > 0) oprindelse = 'UE-produktion';
-      else if (materials > 0 && montage === 0) oprindelse = 'Indkøb';
-      else if (montage > 0 && materials === 0) oprindelse = 'Montage';
-      else if (transport > 0 && materials === 0 && montage === 0) oprindelse = 'Transport';
-      else if (materials > 0) oprindelse = 'Indkøb';
+      // Oprindelse: egen værdi på produktet vinder. Ellers afledt — timer først, så skabelonens profil, så produkttypen.
+      // "Møbel" uden Korpus-timer er STADIG egenproduktion (26027 har ingen timelinjer endnu — det må ikke gøre skabe til indkøb).
+      const nameLc = product.name.toLowerCase();
+      let derivedOprindelse: Oprindelse;
+      if (korpus > 0) derivedOprindelse = 'Egenproduktion';
+      else if (ue > 0) derivedOprindelse = 'UE-produktion';
+      else if (meta.templateProfile === 'indkoebsvare') derivedOprindelse = 'Indkøb';
+      else if (/\b(transport|levering|fragt)\b/.test(nameLc) && materials === 0) derivedOprindelse = 'Transport';
+      else if (/\b(montage|montering|svendetime|lærlingetime|regningsarbejde|risiko)\b/.test(nameLc) && materials === 0) derivedOprindelse = 'Montage';
+      else if (product.productType === 'furniture') derivedOprindelse = 'Egenproduktion';
+      else if (product.productType === 'installation') derivedOprindelse = montage > 0 || materials === 0 ? 'Montage' : 'Indkøb';
+      else if (materials > 0) derivedOprindelse = 'Indkøb';
+      else if (montage > 0) derivedOprindelse = 'Montage';
+      else if (transport > 0) derivedOprindelse = 'Transport';
+      else derivedOprindelse = product.productType === 'other' || product.productType === 'curtain' ? 'Indkøb' : 'Andet';
+      const egenOprindelse = meta.oprindelse ? OPRINDELSE_DB[meta.oprindelse] : undefined;
+      const oprindelse: Oprindelse = egenOprindelse ?? derivedOprindelse;
+      const oprindelseSource: 'egen' | 'afledt' = egenOprindelse ? 'egen' : 'afledt';
+
+      // Kategori: egen > skabelonens > gæt fra navnet > Andet
+      let category: string;
+      let categorySource: DerivedProduct['categorySource'];
+      const guessed = guessCategory(product.name, product.productType);
+      if (meta.category) { category = meta.category; categorySource = 'egen'; }
+      else if (meta.templateCategory) { category = meta.templateCategory; categorySource = 'skabelon'; }
+      else if (guessed) { category = guessed; categorySource = 'afledt'; }
+      else { category = 'Andet'; categorySource = 'ingen'; }
 
       const usageAll = usageByProduct[product.id] ?? [];
       const usage = usageAll.filter(u => !u.lineArchived && u.quoteStatus !== 'archived');
@@ -457,24 +611,35 @@ const Products = () => {
       const marginBand: MarginBand = dgPct == null ? 'Ukendt' : dgPct >= 55 ? 'Høj (≥55 %)' : dgPct >= 35 ? 'Mellem (35–55 %)' : 'Lav (<35 %)';
 
       // Billede i rækken: vores reference > kundens reference > et linjebillede (helst en linje der kun har dette produkt)
-      const lineImg = [...usage]
-        .filter(u => u.lineImage)
-        .sort((a, b) => (itemsPerLine[a.lineId] ?? 99) - (itemsPerLine[b.lineId] ?? 99))[0]?.lineImage ?? null;
+      // Alle linjebilleder (også fra arkiverede linjer — et billede er et billede), dedupleret på URL,
+      // linjer med kun dette produkt først, custom (kundens/vores upload) før render.
+      const seen = new Set<string>();
+      const lineImages: LineImage[] = [];
+      const sortedUsage = [...usageAll].sort((a, b) => (itemsPerLine[a.lineId] ?? 99) - (itemsPerLine[b.lineId] ?? 99));
+      for (const u of sortedUsage) {
+        for (const [url, kind] of [[u.lineImageCustom, 'custom'], [u.lineImageRender, 'render']] as [string | null, 'custom' | 'render'][]) {
+          if (!url || seen.has(url)) continue;
+          seen.add(url);
+          lineImages.push({ url, kind, lineId: u.lineId, lineTitle: u.lineTitle, quoteNumber: u.quoteNumber, itemsOnLine: itemsPerLine[u.lineId] ?? 1 });
+        }
+      }
+      const lineImg = sortedUsage.find(u => !u.lineArchived && u.lineImage)?.lineImage ?? lineImages[0]?.url ?? null;
       const images = imagesByProduct[product.id] ?? {};
       const imageUrl = images.vores?.url ?? images.kunde?.url ?? lineImg;
       const imageSource = images.vores ? 'vores' : images.kunde ? 'kunde' : lineImg ? 'tilbudslinje' : null;
 
       return {
-        product, meta, images, lineImageUrl: lineImg, imageSource,
-        materials, ue, korpus, montage, transport, other, costExKorpus, oprindelse,
+        product, meta, images, lineImageUrl: lineImg, lineImages, imageSource,
+        materials, ue, korpus, montage, transport, other, costExKorpus, oprindelse, oprindelseSource, derivedOprindelse,
         usage, quoteNumbers, totalQtyInQuotes, used: usage.length > 0, profile, estSellPerUnit, dgPct, marginBand,
-        imageUrl, category: meta.templateCategory ?? 'Uden skabelon',
+        imageUrl, category, categorySource,
       };
     });
   }, [products, metaById, usageByProduct, imagesByProduct, projectMaterials, getProductMaterialLines, getProductLaborLines, getProductTransportLines, getProductOtherCostLines]);
 
   const allQuoteNumbers = useMemo(() => Array.from(new Set(derived.flatMap(d => d.quoteNumbers))).sort(), [derived]);
-  const allCategories = useMemo(() => Array.from(new Set(derived.map(d => d.category))).sort(), [derived]);
+  const allCategories = useMemo(() => Array.from(new Set(derived.map(d => d.category))).sort((a, b) => a.localeCompare(b, 'da')), [derived]);
+  const categoryOptions = useMemo(() => Array.from(new Set([...CATEGORY_SUGGESTIONS, ...allCategories])).sort((a, b) => a.localeCompare(b, 'da')), [allCategories]);
   const allOrigins = useMemo(() => Array.from(new Set(derived.map(d => d.oprindelse))).sort(), [derived]);
 
   // ── Filtrering + sortering ────────────────────────────────────────────────────
@@ -489,7 +654,7 @@ const Products = () => {
       if (categoryFilter !== 'all' && d.category !== categoryFilter) return false;
       if (originFilter !== 'all' && d.oprindelse !== originFilter) return false;
       if (q) {
-        const hay = [p.name, p.description, p.notes, d.meta.templateName, d.category, d.quoteNumbers.join(' '), ...d.usage.map(u => u.lineTitle)]
+        const hay = [p.name, p.description, p.notes, d.meta.templateName, d.category, d.oprindelse, d.quoteNumbers.join(' '), ...d.usage.map(u => u.lineTitle)]
           .filter(Boolean).join(' ').toLowerCase();
         if (!hay.includes(q)) return false;
       }
@@ -809,7 +974,11 @@ const Products = () => {
                                   <Badge variant="outline" className="text-[10px] mt-0.5 text-amber-700 border-amber-300">Ikke i tilbud</Badge>
                                 )}
                               </td>
-                              {cols.category && <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">{d.category}</td>}
+                              {cols.category && (
+                                <td className="px-3 py-2 text-muted-foreground whitespace-nowrap" title={d.categorySource === 'egen' ? 'Sat på produktet' : d.categorySource === 'skabelon' ? 'Fra skabelonen' : d.categorySource === 'afledt' ? 'Gættet ud fra navnet — ret i detaljepanelet' : 'Ingen kategori — sæt den i detaljepanelet'}>
+                                  {d.category}{d.categorySource === 'afledt' || d.categorySource === 'ingen' ? <span className="opacity-50">?</span> : null}
+                                </td>
+                              )}
                               {cols.template && <td className="px-3 py-2 text-muted-foreground">{d.meta.templateName ?? <span className="italic">uden skabelon</span>}</td>}
                               {cols.origin && (
                                 <td className="px-3 py-2 whitespace-nowrap">
@@ -818,7 +987,7 @@ const Products = () => {
                                     : d.oprindelse === 'Indkøb' ? 'border-sky-300 text-sky-700'
                                     : d.oprindelse === 'UE-produktion' ? 'border-violet-300 text-violet-700'
                                     : 'text-muted-foreground'
-                                  }>{d.oprindelse}</Badge>
+                                  } title={d.oprindelseSource === 'egen' ? 'Sat på produktet' : 'Afledt af timer og produkttype — ret i detaljepanelet'}>{d.oprindelse}{d.oprindelseSource === 'afledt' ? <span className="opacity-50 ml-0.5">?</span> : null}</Badge>
                                 </td>
                               )}
                               {cols.type && <td className="px-3 py-2 text-muted-foreground">{PRODUCT_TYPES[p.productType]}</td>}
@@ -867,6 +1036,9 @@ const Products = () => {
                                     onUploadImage={(slot, file) => uploadProductImage(p.id, slot, file)}
                                     onLinkImage={(slot) => linkProductImage(p.id, slot)}
                                     onRemoveImage={(slot) => removeProductImage(p.id, slot)}
+                                    onAdoptImage={(slot, url, sourceRef) => adoptLineImage(p.id, slot, url, sourceRef)}
+                                    categoryOptions={categoryOptions}
+                                    onSaveField={(patch) => saveProductField(p.id, patch)}
                                   />
                                 </td>
                               </tr>
@@ -973,6 +1145,9 @@ interface DetailsProps {
   onUploadImage: (slot: ImageSlot, file: File) => void;
   onLinkImage: (slot: ImageSlot) => void;
   onRemoveImage: (slot: ImageSlot) => void;
+  onAdoptImage: (slot: ImageSlot, url: string, sourceRef: string) => void;
+  categoryOptions: string[];
+  onSaveField: (patch: { category?: string | null; oprindelse?: string | null }) => void;
 }
 
 /** Én billedslot: viser billedet (eller tom plads) med upload / link / fjern. */
@@ -1024,9 +1199,17 @@ const LABOR_LABELS: Record<string, string> = {
   other: 'Andet',
 };
 
-const ProductDetails: React.FC<DetailsProps> = ({ d, projectMaterials, materialLines, laborLines, transportLines, otherLines, onOpenLegacy, onOpenQuote, imageBusy, onUploadImage, onLinkImage, onRemoveImage }) => {
+const ProductDetails: React.FC<DetailsProps> = ({ d, projectMaterials, materialLines, laborLines, transportLines, otherLines, onOpenLegacy, onOpenQuote, imageBusy, onUploadImage, onLinkImage, onRemoveImage, onAdoptImage, categoryOptions, onSaveField }) => {
   const p = d.product;
   const matName = (id: string) => projectMaterials.find(m => m.id === id);
+  const [catDraft, setCatDraft] = useState<string>(d.meta.category ?? '');
+  useEffect(() => { setCatDraft(d.meta.category ?? ''); }, [d.meta.category]);
+  const commitCategory = () => {
+    const v = catDraft.trim();
+    if ((v || null) === (d.meta.category ?? null)) return;
+    onSaveField({ category: v || null });
+  };
+  const listId = `cat-options-${p.id}`;
   const kostRows: { label: string; value: number }[] = [
     { label: 'Materialer', value: d.materials },
     { label: 'UE-produktion', value: d.ue },
@@ -1057,17 +1240,70 @@ const ProductDetails: React.FC<DetailsProps> = ({ d, projectMaterials, materialL
           onLink={() => onLinkImage('kunde')}
           onRemove={() => onRemoveImage('kunde')}
         />
-        {!d.images.vores && !d.images.kunde && d.lineImageUrl && (
+        {d.lineImages.length > 0 && (
           <div>
-            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Fra tilbudslinjen</span>
-            <a href={d.lineImageUrl} target="_blank" rel="noreferrer"><img src={d.lineImageUrl} alt="" className="w-full max-h-40 object-contain rounded border bg-white mt-1" /></a>
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Fra tilbudslinjerne ({d.lineImages.length})</span>
+            <p className="text-[11px] text-muted-foreground mb-1">Klik V eller K for at bruge et billede som vores / kundens reference.</p>
+            <div className="grid grid-cols-3 gap-1.5">
+              {d.lineImages.map(li => {
+                const busy = imageBusy === `${p.id}:vores` || imageBusy === `${p.id}:kunde`;
+                const isVores = d.images.vores?.url === li.url;
+                const isKunde = d.images.kunde?.url === li.url;
+                return (
+                  <div key={li.url} className="relative group">
+                    <a href={li.url} target="_blank" rel="noreferrer" title={`${li.quoteNumber} · ${li.lineTitle}${li.itemsOnLine > 1 ? ` (linje med ${li.itemsOnLine} produkter)` : ''} · ${li.kind === 'render' ? 'render' : 'upload'}`}>
+                      <img src={li.url} alt="" loading="lazy" className={`h-16 w-full object-cover rounded border bg-white ${isVores || isKunde ? 'ring-2 ring-emerald-400' : ''}`} />
+                    </a>
+                    <div className="absolute bottom-0.5 right-0.5 flex gap-0.5">
+                      <button type="button" disabled={busy || isVores} title="Brug som vores reference" onClick={() => onAdoptImage('vores', li.url, `quote_line:${li.lineId}`)}
+                        className={`rounded px-1 text-[10px] leading-4 border bg-background/90 ${isVores ? 'text-emerald-700 border-emerald-400' : 'text-muted-foreground hover:text-foreground'}`}>V</button>
+                      <button type="button" disabled={busy || isKunde} title="Brug som kundens reference" onClick={() => onAdoptImage('kunde', li.url, `quote_line:${li.lineId}`)}
+                        className={`rounded px-1 text-[10px] leading-4 border bg-background/90 ${isKunde ? 'text-emerald-700 border-emerald-400' : 'text-muted-foreground hover:text-foreground'}`}>K</button>
+                    </div>
+                    {li.itemsOnLine > 1 && <span className="absolute top-0.5 left-0.5 rounded bg-background/90 border px-1 text-[9px] text-muted-foreground" title="Linjen har flere produkter — billedet viser måske ikke kun dette">{li.itemsOnLine}</span>}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
         <dl className="text-xs space-y-1">
           <div className="flex justify-between gap-2"><dt className="text-muted-foreground">Type</dt><dd>{PRODUCT_TYPES[p.productType]}</dd></div>
+          <div className="flex justify-between gap-2 items-center">
+            <dt className="text-muted-foreground">Kategori</dt>
+            <dd className="flex items-center gap-1">
+              <input
+                list={listId}
+                value={catDraft}
+                placeholder={d.categorySource === 'egen' ? '' : `${d.category} (${d.categorySource === 'skabelon' ? 'skabelon' : d.categorySource === 'afledt' ? 'gættet' : 'ingen'})`}
+                onChange={(e) => setCatDraft(e.target.value)}
+                onBlur={commitCategory}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }}
+                className="h-6 w-40 rounded border bg-background px-1.5 text-xs"
+                title="Skriv eller vælg en kategori. Tom = brug skabelonens / det gættede."
+              />
+              <datalist id={listId}>{categoryOptions.map(c => <option key={c} value={c} />)}</datalist>
+              {d.categorySource !== 'egen' && d.categorySource !== 'ingen' && (
+                <button type="button" className="text-[10px] text-muted-foreground underline" title="Gem det viste som produktets egen kategori" onClick={() => onSaveField({ category: d.category })}>bekræft</button>
+              )}
+            </dd>
+          </div>
           <div className="flex justify-between gap-2"><dt className="text-muted-foreground">Skabelon</dt><dd className="text-right">{d.meta.templateName ?? <span className="italic">ingen</span>}</dd></div>
           {d.meta.templateDeviation && <div className="flex justify-between gap-2"><dt className="text-muted-foreground">Afvigelse</dt><dd className="text-right">{d.meta.templateDeviation}</dd></div>}
-          <div className="flex justify-between gap-2"><dt className="text-muted-foreground">Oprindelse</dt><dd>{d.oprindelse}</dd></div>
+          <div className="flex justify-between gap-2 items-center">
+            <dt className="text-muted-foreground">Oprindelse</dt>
+            <dd>
+              <select
+                value={d.meta.oprindelse ?? ''}
+                onChange={(e) => onSaveField({ oprindelse: e.target.value || null })}
+                className="h-6 rounded border bg-background px-1 text-xs"
+                title="Hvem laver produktet. 'Afledt' regner ud fra timer og produkttype."
+              >
+                <option value="">Afledt: {d.derivedOprindelse}</option>
+                {Object.entries(OPRINDELSE_DB).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+              </select>
+            </dd>
+          </div>
           <div className="flex justify-between gap-2"><dt className="text-muted-foreground">Profil</dt><dd>{d.profile ? (PROFILE_LABELS[d.profile] ?? d.profile) : '–'}{d.meta.templateProfile && d.profile !== d.meta.templateProfile ? ` (skabelon: ${PROFILE_LABELS[d.meta.templateProfile] ?? d.meta.templateProfile})` : ''}</dd></div>
           <div className="flex justify-between gap-2"><dt className="text-muted-foreground">Enhed</dt><dd>{p.unit}</dd></div>
         </dl>
