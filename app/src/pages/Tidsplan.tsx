@@ -66,6 +66,7 @@ interface FaseRow {
   end_date: string;
   status: FaseStatus;
   note: string | null;
+  removed: boolean;
 }
 
 interface MaalRow {
@@ -213,7 +214,7 @@ const Tidsplan: React.FC = () => {
     if (visibleProjectIds.length === 0) { setRows([]); setQuotes([]); setLines([]); setLoading(false); return; }
     setLoading(true);
     const [faseRes, quoteRes, maalRes] = await Promise.all([
-      supabase.from(TABLE).select('id, project_id, quote_id, quote_line_id, fase, start_date, end_date, status, note').in('project_id', visibleProjectIds),
+      supabase.from(TABLE).select('id, project_id, quote_id, quote_line_id, fase, start_date, end_date, status, note, removed').in('project_id', visibleProjectIds),
       supabase.from(QUOTES_TABLE).select('id, project_id, quote_number, title, cached_sell_total').in('project_id', visibleProjectIds).eq('status', 'accepted').order('quote_number'),
       supabase.from(MAAL_TABLE).select('id, project_id, quote_id, quote_line_id, title, target_date, done, note').in('project_id', visibleProjectIds).order('target_date'),
     ]);
@@ -279,6 +280,7 @@ const Tidsplan: React.FC = () => {
   const seedLevel = useCallback(async (
     projectId: string, quoteId: string | null, lineId: string | null,
     schedule: Record<FaseKey, { start: string; end: string }>,
+    parentRows?: FaseRow[],
   ) => {
     const existing = new Set((rowsByLevel.get(levelKey(projectId, quoteId, lineId)) ?? []).map(r => r.fase));
     const missing = FASER.filter(f => !existing.has(f.key));
@@ -287,8 +289,9 @@ const Tidsplan: React.FC = () => {
       project_id: projectId, quote_id: nullUuid(quoteId), quote_line_id: nullUuid(lineId),
       fase: f.key, start_date: schedule[f.key].start, end_date: schedule[f.key].end,
       status: 'planlagt', updated_by: user?.email ?? null,
+      removed: parentRows?.find(r => r.fase === f.key)?.removed ?? false, // fravalgt på forælderen = fravalgt her
     }));
-    const { data, error } = await supabase.from(TABLE).insert(payload).select('id, project_id, quote_id, quote_line_id, fase, start_date, end_date, status, note');
+    const { data, error } = await supabase.from(TABLE).insert(payload).select('id, project_id, quote_id, quote_line_id, fase, start_date, end_date, status, note, removed');
     if (error) { toast({ title: 'Kunne ikke oprette faser', description: error.message, variant: 'destructive' }); return; }
     setRows(prev => [...prev, ...((data ?? []) as FaseRow[])]);
   }, [rowsByLevel, user, toast]);
@@ -321,7 +324,7 @@ const Tidsplan: React.FC = () => {
     const parent = rowsByLevel.get(levelKey(p.id, null, null)) ?? [];
     const fallback = buildDefaultSchedule({ deliveryDate: p.deliveryDate, startDate: p.startDate });
     for (const q of quotesByProject.get(p.id) ?? []) {
-      if (!rowsByLevel.has(levelKey(p.id, q.id, null))) await seedLevel(p.id, q.id, null, scheduleFromRows(parent, fallback));
+      if (!rowsByLevel.has(levelKey(p.id, q.id, null))) await seedLevel(p.id, q.id, null, scheduleFromRows(parent, fallback), parent);
     }
   };
 
@@ -332,7 +335,7 @@ const Tidsplan: React.FC = () => {
     const parent = rowsByLevel.get(levelKey(p.id, q.id, null)) ?? rowsByLevel.get(levelKey(p.id, null, null)) ?? [];
     const fallback = buildDefaultSchedule({ deliveryDate: p.deliveryDate, startDate: p.startDate });
     for (const l of linesByQuote.get(q.id) ?? []) {
-      if (!rowsByLevel.has(levelKey(p.id, q.id, l.id))) await seedLevel(p.id, q.id, l.id, scheduleFromRows(parent, fallback));
+      if (!rowsByLevel.has(levelKey(p.id, q.id, l.id))) await seedLevel(p.id, q.id, l.id, scheduleFromRows(parent, fallback), parent);
     }
   };
 
@@ -447,6 +450,30 @@ const Tidsplan: React.FC = () => {
     setEditForm({ start_date: r.start_date, end_date: r.end_date, status: r.status, note: r.note ?? '' });
   };
 
+  const [removeCascade, setRemoveCascade] = useState(true);
+  const setFaseRemoved = async (targets: FaseRow[], removed: boolean) => {
+    const ids = targets.map(t => t.id);
+    if (ids.length === 0) return false;
+    const { error } = await supabase.from(TABLE).update({ removed, updated_by: user?.email ?? null }).in('id', ids);
+    if (error) { toast({ title: removed ? 'Kunne ikke fjerne fasen' : 'Kunne ikke gendanne fasen', description: error.message, variant: 'destructive' }); return false; }
+    const idSet = new Set(ids);
+    setRows(prev => prev.map(r => idSet.has(r.id) ? { ...r, removed } : r));
+    return true;
+  };
+  const removeEditing = async () => {
+    if (!editing) return;
+    const label = FASE_BY_KEY[editing.fase].label;
+    const cascade = removeCascade && !editing.quote_line_id;
+    const targets = cascade
+      ? rows.filter(r => r.fase === editing.fase && r.project_id === editing.project_id && (editing.quote_id ? r.quote_id === editing.quote_id : true))
+      : [editing];
+    const msg = cascade
+      ? `Fjern ${label} her og på alle ${editing.quote_id ? 'produkter under tilbuddet' : 'tilbud og produkter under projektet'}?`
+      : `Fjern ${label} her?`;
+    if (!window.confirm(msg)) return;
+    if (await setFaseRemoved(targets, true)) setEditing(null);
+  };
+
   const saveEdit = async () => {
     if (!editing) return;
     if (!editForm.start_date || !editForm.end_date) return;
@@ -514,7 +541,7 @@ const Tidsplan: React.FC = () => {
     <div className="relative h-14" style={{ width: timelineWidth }}
       onDoubleClick={e => onRowDoubleClick(e, projectId, quoteId, lineId)}
       title="Dobbeltklik for at sætte en målsætning">
-      {levelRows.filter(r => !faserOff.has(r.fase)).map(r => {
+      {levelRows.filter(r => !r.removed && !faserOff.has(r.fase)).map(r => {
         const f = FASE_BY_KEY[r.fase];
         const rawLeft = xOf(r.start_date);
         const rawRight = rawLeft + wOf(r.start_date, r.end_date);
@@ -565,8 +592,8 @@ const Tidsplan: React.FC = () => {
     </div>
   );
 
-  const RowLabel: React.FC<{ depth: number; expandable?: boolean; expanded?: boolean; onToggle?: () => void; title: string; sub?: string; level: Level; count?: number }> =
-    ({ depth, expandable, expanded, onToggle, title, sub, level, count }) => (
+  const RowLabel: React.FC<{ depth: number; expandable?: boolean; expanded?: boolean; onToggle?: () => void; title: string; sub?: string; level: Level; count?: number; removed?: FaseRow[] }> =
+    ({ depth, expandable, expanded, onToggle, title, sub, level, count, removed }) => (
       <div
         className={cn('h-14 flex items-center gap-1 pr-2 border-r border-border bg-card', expandable && 'cursor-pointer hover:bg-muted/60')}
         style={{ paddingLeft: 12 + depth * 24 }}
@@ -577,6 +604,27 @@ const Tidsplan: React.FC = () => {
           <div className={cn('truncate text-base', level === 'project' ? 'font-semibold' : level === 'quote' ? 'font-medium' : 'text-muted-foreground')} title={title}>{title}</div>
           {sub ? <div className="truncate text-xs text-muted-foreground -mt-0.5">{sub}</div> : null}
         </div>
+        {removed && removed.length > 0 ? (
+          <Popover>
+            <PopoverTrigger asChild>
+              <button type="button" onClick={e => e.stopPropagation()}
+                className="shrink-0 rounded border border-dashed border-border px-1.5 h-5 text-xs text-muted-foreground hover:bg-muted"
+                title="Fjernede faser — klik for at gendanne">
+                {removed.length} fjernet
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-64 p-2" onClick={e => e.stopPropagation()}>
+              <div className="px-2 pb-1 text-xs font-medium text-muted-foreground">Fjernede faser</div>
+              {FASER.filter(f => removed.some(r => r.fase === f.key)).map(f => (
+                <div key={f.key} className="flex items-center gap-2 px-2 py-1.5 text-sm">
+                  <span className={cn('inline-block h-3 w-3 rounded-sm', f.color)} />
+                  <span className="flex-1">{f.label}</span>
+                  <Button size="sm" variant="outline" className="h-7" onClick={() => setFaseRemoved(removed.filter(r => r.fase === f.key), false)}>Gendan</Button>
+                </div>
+              ))}
+            </PopoverContent>
+          </Popover>
+        ) : null}
         {count !== undefined ? <Badge variant="outline" className="text-xs h-5 px-1.5">{count}</Badge> : null}
       </div>
     );
@@ -715,7 +763,8 @@ const Tidsplan: React.FC = () => {
                       <React.Fragment key={p.id}>
                         <div className="border-b border-border">
                           <RowLabel depth={0} level="project" expandable={pQuotes.length > 0} expanded={pOpen} onToggle={() => toggleProject(p)}
-                            title={`${p.projectNumber ?? ''} ${p.name}`.trim()} sub={p.customer} count={pQuotes.length} />
+                            title={`${p.projectNumber ?? ''} ${p.name}`.trim()} sub={p.customer} count={pQuotes.length}
+                            removed={(rowsByLevel.get(levelKey(p.id, null, null)) ?? []).filter(r => r.removed)} />
                         </div>
                         {pOpen && pQuotes.map(q => {
                           const qLines = linesByQuote.get(q.id) ?? [];
@@ -724,11 +773,13 @@ const Tidsplan: React.FC = () => {
                             <React.Fragment key={q.id}>
                               <div className="border-b border-border/60">
                                 <RowLabel depth={1} level="quote" expandable={qLines.length > 0} expanded={qOpen} onToggle={() => toggleQuote(p, q)}
-                                  title={`${q.quote_number ?? 'Tilbud'} ${q.title ?? ''}`.trim()} count={qLines.length} />
+                                  title={`${q.quote_number ?? 'Tilbud'} ${q.title ?? ''}`.trim()} count={qLines.length}
+                                  removed={(rowsByLevel.get(levelKey(p.id, q.id, null)) ?? []).filter(r => r.removed)} />
                               </div>
                               {qOpen && qLines.map(l => (
                                 <div key={l.id} className="border-b border-border/40">
-                                  <RowLabel depth={2} level="line" title={l.title} sub={l.quantity != null ? `${l.quantity} ${l.unit ?? 'stk'}` : undefined} />
+                                  <RowLabel depth={2} level="line" title={l.title} sub={l.quantity != null ? `${l.quantity} ${l.unit ?? 'stk'}` : undefined}
+                                    removed={(rowsByLevel.get(levelKey(p.id, q.id, l.id)) ?? []).filter(r => r.removed)} />
                                 </div>
                               ))}
                             </React.Fragment>
@@ -842,6 +893,19 @@ const Tidsplan: React.FC = () => {
                   <Label htmlFor="tp-note">Note</Label>
                   <Textarea id="tp-note" rows={2} value={editForm.note} onChange={e => setEditForm(f => ({ ...f, note: e.target.value }))} placeholder="Fx: afventer beslag fra Häfele" />
                 </div>
+              </div>
+              <div className="rounded-md border border-dashed border-border p-3 space-y-2">
+                <div className="text-sm font-medium">Fjern fasen</div>
+                {!editing.quote_line_id && (
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <Checkbox checked={removeCascade} onCheckedChange={v => setRemoveCascade(v === true)} />
+                    Også på alle {editing.quote_id ? 'produkter under tilbuddet' : 'tilbud og produkter under projektet'}
+                  </label>
+                )}
+                <Button variant="outline" size="sm" className="text-red-600 gap-1" onClick={removeEditing}>
+                  <Trash2 className="h-4 w-4" /> Fjern {FASE_BY_KEY[editing.fase].label}
+                </Button>
+                <p className="text-xs text-muted-foreground">Kan gendannes fra rækken via "fjernet"-mærket.</p>
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setEditing(null)}>Annullér</Button>
