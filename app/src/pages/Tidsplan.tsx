@@ -549,24 +549,43 @@ const Tidsplan: React.FC = () => {
         const left = Math.max(0, rawLeft);
         const width = Math.max(Math.min(rawRight, timelineWidth) - left, 2);
         const overdue = r.status !== 'faerdig' && parseISO(r.end_date) < today;
+        // I gang: fuld farve fra start til og med i dag, lys resten. Procent = forløbne dage / fasens dage.
+        const igang = r.status === 'igang';
+        const totalDays = differenceInCalendarDays(parseISO(r.end_date), parseISO(r.start_date)) + 1;
+        const elapsed = Math.min(Math.max(differenceInCalendarDays(today, parseISO(r.start_date)) + 1, 0), totalDays);
+        const pct = Math.round((elapsed / totalDays) * 100);
+        const doneEdge = Math.min(Math.max(todayX + pxPerDay - left, 0), width); // px fra bjælkens venstre kant
         return (
           <button
             key={r.id}
             type="button"
             onClick={() => openEdit(r)}
-            title={`${f.label} · ${format(parseISO(r.start_date), 'd. MMM', { locale: da })} – ${format(parseISO(r.end_date), 'd. MMM yyyy', { locale: da })} · ${STATUS_LABEL[r.status]}${r.note ? `\n${r.note}` : ''}`}
+            title={`${f.label} · ${format(parseISO(r.start_date), 'd. MMM', { locale: da })} – ${format(parseISO(r.end_date), 'd. MMM yyyy', { locale: da })} · ${STATUS_LABEL[r.status]}${igang ? ` (${pct}%)` : ''}${r.note ? `\n${r.note}` : ''}`}
             className={cn(
-              'absolute top-2 h-10 rounded text-sm font-medium leading-10 text-white px-2 truncate text-left shadow-sm hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-ring',
+              'absolute top-2 h-10 rounded text-sm font-medium leading-10 text-white px-2 truncate text-left shadow-sm hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-ring overflow-hidden',
               f.color,
               level === 'project' ? 'opacity-100' : level === 'quote' ? 'opacity-90' : 'opacity-80',
               r.status === 'faerdig' && 'opacity-50 line-through',
-              r.status === 'igang' && 'ring-2 ring-offset-1 ring-foreground/40',
+              igang && 'shadow-md',
               overdue && 'outline outline-2 outline-red-500',
             )}
             style={{ left, width }}
           >
-            {width > 40 ? f.label : ''}{width > 190 ? ` · ${format(parseISO(r.start_date), 'd/M')}–${format(parseISO(r.end_date), 'd/M')}` : ''}
-            {r.status === 'faerdig' && width > 70 ? <Check className="inline h-4 w-4 ml-1 -mt-0.5" /> : null}
+            {igang && doneEdge < width && (
+              // Resten af fasen (efter i dag) lysnes og stribes
+              <span className="absolute inset-y-0 right-0 pointer-events-none"
+                style={{ left: doneEdge, background: 'repeating-linear-gradient(135deg, rgba(255,255,255,0.62) 0 6px, rgba(255,255,255,0.48) 6px 12px)' }} />
+            )}
+            {igang && doneEdge > 0 && doneEdge < width && (
+              <span className="absolute inset-y-0 w-0.5 bg-white pointer-events-none" style={{ left: doneEdge - 1 }} />
+            )}
+            <span className="relative z-10 drop-shadow-[0_1px_1px_rgba(0,0,0,0.45)]">
+              {igang && width > 24 ? <span className="inline-block h-2 w-2 rounded-full bg-white mr-1.5 align-middle animate-pulse" /> : null}
+              {width > 40 ? f.label : ''}
+              {igang && width > 110 ? ` · I gang ${pct}%` : ''}
+              {!igang && width > 190 ? ` · ${format(parseISO(r.start_date), 'd/M')}–${format(parseISO(r.end_date), 'd/M')}` : ''}
+              {r.status === 'faerdig' && width > 70 ? <Check className="inline h-4 w-4 ml-1 -mt-0.5" /> : null}
+            </span>
           </button>
         );
       })}
