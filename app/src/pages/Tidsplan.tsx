@@ -15,11 +15,15 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
-import { ChevronRight, ChevronDown, CalendarRange, ZoomIn, ZoomOut, AlertTriangle, Check } from 'lucide-react';
+import { ChevronRight, ChevronDown, CalendarRange, AlertTriangle, Check, Filter, Search, X } from 'lucide-react';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 import {
-  addDays, differenceInCalendarDays, format, parseISO, startOfWeek, getISOWeek, isSameMonth, min as minDate, max as maxDate,
+  addDays, addWeeks, addMonths, addQuarters, addYears, differenceInCalendarDays, format, parseISO,
+  startOfDay, startOfWeek, startOfMonth, startOfQuarter, startOfYear, getISOWeek, getQuarter, isWeekend,
+  min as minDate, max as maxDate,
 } from 'date-fns';
 import { da } from 'date-fns/locale';
 
@@ -68,6 +72,50 @@ interface LineLite  { id: string; project_quote_id: string; title: string; quant
 
 type Level = 'project' | 'quote' | 'line';
 
+// -- Visninger ---------------------------------------------------------------
+type ViewKey = 'dag' | 'uge' | 'maaned' | 'kvartal' | 'aar';
+type Unit = 'day' | 'week' | 'month' | 'quarter' | 'year';
+
+const VIEWS: { key: ViewKey; label: string; pxPerDay: number; major: Unit; minor: Unit }[] = [
+  { key: 'dag',     label: 'Dag',     pxPerDay: 36,  major: 'month', minor: 'day' },
+  { key: 'uge',     label: 'Uge',     pxPerDay: 12,  major: 'month', minor: 'week' },
+  { key: 'maaned',  label: 'Måned',   pxPerDay: 4,   major: 'year',  minor: 'month' },
+  { key: 'kvartal', label: 'Kvartal', pxPerDay: 1.6, major: 'year',  minor: 'quarter' },
+  { key: 'aar',     label: 'År',      pxPerDay: 0.7, major: 'year',  minor: 'quarter' },
+];
+const VIEW_BY_KEY = Object.fromEntries(VIEWS.map(v => [v.key, v])) as Record<ViewKey, typeof VIEWS[number]>;
+
+const startOfUnit = (d: Date, u: Unit) =>
+  u === 'day' ? startOfDay(d) : u === 'week' ? startOfWeek(d, { weekStartsOn: 1 }) : u === 'month' ? startOfMonth(d)
+  : u === 'quarter' ? startOfQuarter(d) : startOfYear(d);
+const addUnit = (d: Date, u: Unit, n = 1) =>
+  u === 'day' ? addDays(d, n) : u === 'week' ? addWeeks(d, n) : u === 'month' ? addMonths(d, n)
+  : u === 'quarter' ? addQuarters(d, n) : addYears(d, n);
+
+function unitLabel(d: Date, u: Unit, isMajor: boolean): string {
+  switch (u) {
+    case 'day':     return format(d, 'EEEEE d', { locale: da });
+    case 'week':    return `Uge ${getISOWeek(d)}`;
+    case 'month':   return isMajor ? format(d, 'MMMM yyyy', { locale: da }) : format(d, 'MMM', { locale: da });
+    case 'quarter': return `K${getQuarter(d)}`;
+    case 'year':    return format(d, 'yyyy');
+  }
+}
+
+// Projekttyper der ikke har produktion. Slået fra som standard i filteret.
+const TYPE_DEFAULT_OFF = new Set(['konsulent', 'intern']);
+const TYPE_LABEL: Record<string, string> = {
+  inventar: 'Inventar', fast_inventar: 'Fast inventar', moebler: 'Møbler', montage: 'Montage',
+  konsulent: 'Konsulent', intern: 'Intern', andet: 'Andet', '': 'Uden type',
+};
+
+const LS_KEY = 'ni_tidsplan_prefs_v1';
+interface Prefs { view: ViewKey; typesOff: string[]; hiddenProjects: string[]; faserOff: FaseKey[]; search: string }
+const loadPrefs = (): Prefs => {
+  const def: Prefs = { view: 'uge', typesOff: [...TYPE_DEFAULT_OFF], hiddenProjects: [], faserOff: [], search: '' };
+  try { const raw = localStorage.getItem(LS_KEY); return raw ? { ...def, ...JSON.parse(raw) } : def; } catch { return def; }
+};
+
 const ymd = (d: Date) => format(d, 'yyyy-MM-dd');
 const nullUuid = (v: string | null) => v ?? null;
 
@@ -108,19 +156,43 @@ const Tidsplan: React.FC = () => {
   const [tableMissing, setTableMissing] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const [expandedQuotes, setExpandedQuotes] = useState<Set<string>>(new Set());
-  const [pxPerDay, setPxPerDay] = useState(10);
+  const [prefs, setPrefs] = useState<Prefs>(loadPrefs);
+  useEffect(() => { try { localStorage.setItem(LS_KEY, JSON.stringify(prefs)); } catch { /* ignore */ } }, [prefs]);
+  const view = VIEW_BY_KEY[prefs.view] ?? VIEW_BY_KEY.uge;
+  const pxPerDay = view.pxPerDay;
+  const typesOff = useMemo(() => new Set(prefs.typesOff), [prefs.typesOff]);
+  const hiddenProjects = useMemo(() => new Set(prefs.hiddenProjects), [prefs.hiddenProjects]);
+  const faserOff = useMemo(() => new Set(prefs.faserOff), [prefs.faserOff]);
+  const toggleIn = <K extends 'typesOff' | 'hiddenProjects' | 'faserOff'>(key: K, value: string) =>
+    setPrefs(p => {
+      const arr = p[key] as string[];
+      return { ...p, [key]: arr.includes(value) ? arr.filter(x => x !== value) : [...arr, value] };
+    });
+  const scrollRef = React.useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState<FaseRow | null>(null);
   const [editForm, setEditForm] = useState({ start_date: '', end_date: '', status: 'planlagt' as FaseStatus, note: '' });
   const [saving, setSaving] = useState(false);
 
   // Vundne projekter der stadig er i gang. Interne omkostningssteder er ikke sager.
-  const visibleProjects = useMemo(
+  // Kandidater = vundne og i gang. Filtrene virker ovenpå.
+  const candidateProjects = useMemo(
     () => projects
-      .filter(p => VISIBLE_PROJECT_PHASES.includes(p.phase) && p.projectType !== 'intern')
+      .filter(p => VISIBLE_PROJECT_PHASES.includes(p.phase))
       .sort((a, b) => (a.projectNumber ?? '').localeCompare(b.projectNumber ?? '')),
     [projects],
   );
-  const visibleProjectIds = useMemo(() => visibleProjects.map(p => p.id), [visibleProjects]);
+  const typeOptions = useMemo(
+    () => Array.from(new Set(candidateProjects.map(p => p.projectType ?? ''))).sort(),
+    [candidateProjects],
+  );
+  const visibleProjects = useMemo(() => {
+    const q = prefs.search.trim().toLowerCase();
+    return candidateProjects.filter(p =>
+      !typesOff.has(p.projectType ?? '') &&
+      !hiddenProjects.has(p.id) &&
+      (!q || `${p.projectNumber ?? ''} ${p.name} ${p.customer ?? ''}`.toLowerCase().includes(q)));
+  }, [candidateProjects, typesOff, hiddenProjects, prefs.search]);
+  const visibleProjectIds = useMemo(() => candidateProjects.map(p => p.id), [candidateProjects]);
 
   // -- Load -----------------------------------------------------------------
   const load = useCallback(async () => {
@@ -245,27 +317,40 @@ const Tidsplan: React.FC = () => {
     const ends = rows.map(r => parseISO(r.end_date));
     const lo = starts.length ? minDate([...starts, addDays(today, -14)]) : addDays(today, -14);
     const hi = ends.length ? maxDate([...ends, addDays(today, 60)]) : addDays(today, 120);
-    const from = startOfWeek(addDays(lo, -7), { weekStartsOn: 1 });
-    const to = addDays(hi, 21);
+    // Rundes ud til hele "store" enheder, så header-båndet starter og slutter pænt.
+    const from = startOfUnit(addDays(lo, -7), view.major);
+    const to = addDays(addUnit(startOfUnit(addDays(hi, 21), view.major), view.major), -1);
     return { from, to, days: differenceInCalendarDays(to, from) + 1 };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows]);
+  }, [rows, view.major]);
 
-  const weeks = useMemo(() => {
-    const out: { start: Date; week: number; showMonth: boolean }[] = [];
-    let d = range.from;
-    let prev: Date | null = null;
-    while (d <= range.to) {
-      out.push({ start: d, week: getISOWeek(d), showMonth: !prev || !isSameMonth(prev, d) });
-      prev = d; d = addDays(d, 7);
-    }
+  const ticks = (u: Unit) => {
+    const out: { start: Date; end: Date }[] = [];
+    let d = startOfUnit(range.from, u);
+    while (d <= range.to) { const n = addUnit(d, u); out.push({ start: d < range.from ? range.from : d, end: n }); d = n; }
     return out;
-  }, [range]);
+  };
+  const majorTicks = useMemo(() => ticks(view.major), [range, view.major]); // eslint-disable-line react-hooks/exhaustive-deps
+  const minorTicks = useMemo(() => ticks(view.minor), [range, view.minor]); // eslint-disable-line react-hooks/exhaustive-deps
+  const tickX = (d: Date) => differenceInCalendarDays(d, range.from) * pxPerDay;
+  const tickW = (t: { start: Date; end: Date }) => differenceInCalendarDays(t.end, t.start) * pxPerDay;
 
   const xOf = (dateStr: string) => differenceInCalendarDays(parseISO(dateStr), range.from) * pxPerDay;
   const wOf = (start: string, end: string) => (differenceInCalendarDays(parseISO(end), parseISO(start)) + 1) * pxPerDay;
   const timelineWidth = range.days * pxPerDay;
   const todayX = differenceInCalendarDays(today, range.from) * pxPerDay;
+
+  // Ved skift af visning: rul så "i dag" står lidt inde i billedet.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollLeft = Math.max(0, todayX - Math.min(300, el.clientWidth / 4));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefs.view, loading]);
+
+  const filtersActive = typesOff.size !== TYPE_DEFAULT_OFF.size || [...TYPE_DEFAULT_OFF].some(t => !typesOff.has(t))
+    || hiddenProjects.size > 0 || faserOff.size > 0 || prefs.search.trim() !== '';
+  const resetFilters = () => setPrefs(p => ({ ...p, typesOff: [...TYPE_DEFAULT_OFF], hiddenProjects: [], faserOff: [], search: '' }));
 
   // -- Redigering ------------------------------------------------------------
   const openEdit = (r: FaseRow) => {
@@ -294,7 +379,7 @@ const Tidsplan: React.FC = () => {
 
   const GanttBars: React.FC<{ levelRows: FaseRow[]; level: Level }> = ({ levelRows, level }) => (
     <div className="relative h-14" style={{ width: timelineWidth }}>
-      {levelRows.map(r => {
+      {levelRows.filter(r => !faserOff.has(r.fase)).map(r => {
         const f = FASE_BY_KEY[r.fase];
         const left = xOf(r.start_date);
         const width = Math.max(wOf(r.start_date, r.end_date), 2);
@@ -347,21 +432,83 @@ const Tidsplan: React.FC = () => {
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2"><CalendarRange className="h-6 w-6" /> Tidsplan</h1>
             <p className="text-sm text-muted-foreground">
-              Vundne projekter i gang ({visibleProjects.length}). Klik på et projekt for tilbud, på et tilbud for produkter. Klik på en bjælke for at rette datoer.
+              Viser {visibleProjects.length} af {candidateProjects.length} vundne projekter i gang. Klik på et projekt for tilbud, på et tilbud for produkter. Klik på en bjælke for at rette datoer.
               Projekter forsvinder herfra når de sættes i <em>Garanti</em>.
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="hidden md:flex items-center gap-3 mr-2">
-              {FASER.map(f => (
-                <span key={f.key} className="flex items-center gap-1 text-xs text-muted-foreground">
-                  <span className={cn('inline-block h-3 w-3 rounded-sm', f.color)} /> {f.label}
-                </span>
-              ))}
-            </div>
-            <Button variant="outline" size="icon" onClick={() => setPxPerDay(v => Math.max(3, v - 2))} title="Zoom ud"><ZoomOut className="h-4 w-4" /></Button>
-            <Button variant="outline" size="icon" onClick={() => setPxPerDay(v => Math.min(30, v + 2))} title="Zoom ind"><ZoomIn className="h-4 w-4" /></Button>
+          {/* Visning */}
+          <div className="inline-flex rounded-md border border-border bg-muted/40 p-0.5" role="group" aria-label="Visning">
+            {VIEWS.map(v => (
+              <Button key={v.key} size="sm" variant={prefs.view === v.key ? 'default' : 'ghost'} className="h-8 px-3"
+                onClick={() => setPrefs(p => ({ ...p, view: v.key }))}>
+                {v.label}
+              </Button>
+            ))}
           </div>
+        </div>
+
+        {/* Filtre */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative">
+            <Search className="h-4 w-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input value={prefs.search} onChange={e => setPrefs(p => ({ ...p, search: e.target.value }))}
+              placeholder="Søg projekt, nr. eller kunde" className="h-9 w-64 pl-8" />
+          </div>
+
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="sm" className="h-9 gap-1.5">
+                <Filter className="h-4 w-4" /> Projekttype
+                {typeOptions.some(t => typesOff.has(t)) && <Badge variant="secondary" className="h-5 px-1.5 text-xs">{typeOptions.filter(t => !typesOff.has(t)).length}/{typeOptions.length}</Badge>}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-60 p-2">
+              {typeOptions.map(t => (
+                <label key={t || 'none'} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-sm">
+                  <Checkbox checked={!typesOff.has(t)} onCheckedChange={() => toggleIn('typesOff', t)} />
+                  <span className="flex-1">{TYPE_LABEL[t] ?? t}</span>
+                  <span className="text-xs text-muted-foreground">{candidateProjects.filter(p => (p.projectType ?? '') === t).length}</span>
+                </label>
+              ))}
+            </PopoverContent>
+          </Popover>
+
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="sm" className="h-9 gap-1.5">
+                <Filter className="h-4 w-4" /> Projekter
+                {hiddenProjects.size > 0 && <Badge variant="secondary" className="h-5 px-1.5 text-xs">{hiddenProjects.size} skjult</Badge>}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-80 p-2 max-h-96 overflow-y-auto">
+              {candidateProjects.map(p => (
+                <label key={p.id} className={cn('flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-sm', typesOff.has(p.projectType ?? '') && 'opacity-50')}>
+                  <Checkbox checked={!hiddenProjects.has(p.id)} onCheckedChange={() => toggleIn('hiddenProjects', p.id)} />
+                  <span className="flex-1 truncate">{p.projectNumber} {p.name}</span>
+                  <span className="text-xs text-muted-foreground">{TYPE_LABEL[p.projectType ?? ''] ?? p.projectType}</span>
+                </label>
+              ))}
+            </PopoverContent>
+          </Popover>
+
+          <div className="flex items-center gap-1 ml-1">
+            <span className="text-xs text-muted-foreground mr-1">Faser:</span>
+            {FASER.map(f => {
+              const on = !faserOff.has(f.key);
+              return (
+                <button key={f.key} type="button" onClick={() => toggleIn('faserOff', f.key)}
+                  className={cn('flex items-center gap-1.5 h-8 px-2.5 rounded-full border text-xs transition-colors',
+                    on ? 'border-border bg-card text-foreground' : 'border-dashed border-border text-muted-foreground opacity-60')}
+                  title={on ? `Skjul ${f.label}` : `Vis ${f.label}`}>
+                  <span className={cn('inline-block h-3 w-3 rounded-sm', f.color, !on && 'opacity-40')} /> {f.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {filtersActive && (
+            <Button variant="ghost" size="sm" className="h-9 gap-1" onClick={resetFilters}><X className="h-4 w-4" /> Nulstil filtre</Button>
+          )}
         </div>
 
         {tableMissing && (
@@ -376,13 +523,15 @@ const Tidsplan: React.FC = () => {
 
         {!tableMissing && !loading && visibleProjects.length === 0 && (
           <div className="text-sm text-muted-foreground border rounded-md p-6 text-center">
-            Ingen projekter i faserne <em>Kontrakt og planlægning</em> eller <em>Produktion</em>.
+            {candidateProjects.length === 0
+              ? <>Ingen projekter i faserne <em>Kontrakt og planlægning</em> eller <em>Produktion</em>.</>
+              : <>Filtrene skjuler alle projekter. <button className="underline" onClick={resetFilters}>Nulstil filtre</button></>}
           </div>
         )}
 
         {!tableMissing && visibleProjects.length > 0 && (
           <div className="border rounded-md overflow-hidden bg-card">
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto" ref={scrollRef}>
               <div className="flex" style={{ minWidth: 460 + timelineWidth }}>
                 {/* Venstre: hierarki */}
                 <div className="w-[460px] shrink-0 sticky left-0 z-20 bg-card border-r border-border">
@@ -420,29 +569,34 @@ const Tidsplan: React.FC = () => {
 
                 {/* Højre: tidsakse + bjælker */}
                 <div className="relative" style={{ width: timelineWidth }}>
-                  {/* Header: måneder + uger */}
-                  <div className="h-14 border-b border-border relative bg-muted/30">
-                    {weeks.map(w => {
-                      const left = differenceInCalendarDays(w.start, range.from) * pxPerDay;
-                      return (
-                        <React.Fragment key={w.start.toISOString()}>
-                          {w.showMonth && (
-                            <div className="absolute top-0 text-sm font-semibold text-foreground pl-1 border-l border-border h-7 leading-7 whitespace-nowrap" style={{ left }}>
-                              {format(w.start, 'MMM yyyy', { locale: da })}
-                            </div>
-                          )}
-                          <div className="absolute top-7 h-7 text-xs text-muted-foreground border-l border-border/60 pl-1 leading-7" style={{ left, width: 7 * pxPerDay }}>
-                            {pxPerDay >= 3 ? `Uge ${w.week}` : ''}
-                          </div>
-                        </React.Fragment>
-                      );
-                    })}
+                  {/* Header: stor enhed øverst, lille enhed nederst (afhænger af visning) */}
+                  <div className="h-14 border-b border-border relative bg-muted/30 overflow-hidden">
+                    {majorTicks.map(t => (
+                      <div key={`M${t.start.toISOString()}`} className="absolute top-0 h-7 leading-7 pl-1.5 border-l border-border text-sm font-semibold text-foreground whitespace-nowrap overflow-hidden capitalize"
+                        style={{ left: tickX(t.start), width: tickW(t) }}>
+                        {unitLabel(t.start, view.major, true)}
+                      </div>
+                    ))}
+                    {minorTicks.map(t => (
+                      <div key={`m${t.start.toISOString()}`}
+                        className={cn('absolute top-7 h-7 leading-7 border-l border-border/60 text-xs text-muted-foreground whitespace-nowrap overflow-hidden capitalize',
+                          view.minor === 'day' ? 'text-center' : 'pl-1',
+                          view.minor === 'day' && isWeekend(t.start) && 'bg-muted/70')}
+                        style={{ left: tickX(t.start), width: tickW(t) }}>
+                        {tickW(t) >= 18 ? unitLabel(t.start, view.minor, false) : ''}
+                      </div>
+                    ))}
                   </div>
 
-                  {/* Baggrunds-gitter (uger) */}
+                  {/* Baggrunds-gitter */}
                   <div className="absolute inset-x-0 top-14 bottom-0 pointer-events-none">
-                    {weeks.map(w => (
-                      <div key={w.start.toISOString()} className="absolute top-0 bottom-0 border-l border-border/30" style={{ left: differenceInCalendarDays(w.start, range.from) * pxPerDay }} />
+                    {minorTicks.map(t => (
+                      <div key={t.start.toISOString()}
+                        className={cn('absolute top-0 bottom-0 border-l border-border/30', view.minor === 'day' && isWeekend(t.start) && 'bg-muted/40')}
+                        style={{ left: tickX(t.start), width: view.minor === 'day' ? tickW(t) : undefined }} />
+                    ))}
+                    {majorTicks.map(t => (
+                      <div key={`g${t.start.toISOString()}`} className="absolute top-0 bottom-0 border-l border-border/70" style={{ left: tickX(t.start) }} />
                     ))}
                     {todayX >= 0 && todayX <= timelineWidth && (
                       <div className="absolute top-0 bottom-0 border-l-2 border-red-500/70" style={{ left: todayX }} title="I dag" />
