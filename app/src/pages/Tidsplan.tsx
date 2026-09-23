@@ -15,7 +15,7 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
-import { ChevronLeft, ChevronRight, ChevronDown, CalendarRange, AlertTriangle, Check, Filter, Search, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronDown, CalendarRange, AlertTriangle, Check, Filter, Search, X, Flag, Trash2 } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/hooks/use-toast';
@@ -35,6 +35,7 @@ import { da } from 'date-fns/locale';
 // ---------------------------------------------------------------------------
 
 const TABLE = 'tidsplan_faser';
+const MAAL_TABLE = 'tidsplan_maal';
 const QUOTES_TABLE = 'project_quotes_2026_01_16_23_00';
 const LINES_TABLE = 'project_quote_lines_2026_01_16_23_00';
 
@@ -66,6 +67,18 @@ interface FaseRow {
   status: FaseStatus;
   note: string | null;
 }
+
+interface MaalRow {
+  id: string;
+  project_id: string;
+  quote_id: string | null;
+  quote_line_id: string | null;
+  title: string;
+  target_date: string; // yyyy-MM-dd
+  done: boolean;
+  note: string | null;
+}
+interface MaalForm { id?: string; project_id: string; quote_id: string | null; quote_line_id: string | null; title: string; target_date: string; done: boolean; note: string; fixedLevel: boolean }
 
 interface QuoteLite { id: string; project_id: string; quote_number: string | null; title: string | null; cached_sell_total: number | null }
 interface LineLite  { id: string; project_quote_id: string; title: string; quantity: number | null; unit: string | null; display_order: number | null; sort_order: number | null }
@@ -171,6 +184,8 @@ const Tidsplan: React.FC = () => {
   const [editing, setEditing] = useState<FaseRow | null>(null);
   const [editForm, setEditForm] = useState({ start_date: '', end_date: '', status: 'planlagt' as FaseStatus, note: '' });
   const [saving, setSaving] = useState(false);
+  const [maal, setMaal] = useState<MaalRow[]>([]);
+  const [maalForm, setMaalForm] = useState<MaalForm | null>(null);
 
   // Vundne projekter der stadig er i gang. Interne omkostningssteder er ikke sager.
   // Kandidater = vundne og i gang. Filtrene virker ovenpå.
@@ -197,9 +212,10 @@ const Tidsplan: React.FC = () => {
   const load = useCallback(async () => {
     if (visibleProjectIds.length === 0) { setRows([]); setQuotes([]); setLines([]); setLoading(false); return; }
     setLoading(true);
-    const [faseRes, quoteRes] = await Promise.all([
+    const [faseRes, quoteRes, maalRes] = await Promise.all([
       supabase.from(TABLE).select('id, project_id, quote_id, quote_line_id, fase, start_date, end_date, status, note').in('project_id', visibleProjectIds),
       supabase.from(QUOTES_TABLE).select('id, project_id, quote_number, title, cached_sell_total').in('project_id', visibleProjectIds).eq('status', 'accepted').order('quote_number'),
+      supabase.from(MAAL_TABLE).select('id, project_id, quote_id, quote_line_id, title, target_date, done, note').in('project_id', visibleProjectIds).order('target_date'),
     ]);
     if (faseRes.error) {
       // 42P01 = relation findes ikke → migrationen er ikke kørt endnu
@@ -219,6 +235,7 @@ const Tidsplan: React.FC = () => {
       setLines((lineRes.data ?? []) as LineLite[]);
     } else setLines([]);
     setRows((faseRes.data ?? []) as FaseRow[]);
+    setMaal((maalRes.data ?? []) as MaalRow[]);
     setLoading(false);
   }, [visibleProjectIds, toast]);
 
@@ -234,6 +251,16 @@ const Tidsplan: React.FC = () => {
     }
     return m;
   }, [rows]);
+
+  const maalByLevel = useMemo(() => {
+    const m = new Map<string, MaalRow[]>();
+    for (const r of maal) {
+      const k = levelKey(r.project_id, r.quote_id, r.quote_line_id);
+      if (!m.has(k)) m.set(k, []);
+      m.get(k)!.push(r);
+    }
+    return m;
+  }, [maal]);
 
   const quotesByProject = useMemo(() => {
     const m = new Map<string, QuoteLite[]>();
@@ -436,11 +463,57 @@ const Tidsplan: React.FC = () => {
     setEditing(null);
   };
 
+  // -- Målsætninger ----------------------------------------------------------
+  const openNewMaal = (projectId: string, quoteId: string | null, lineId: string | null, date: string, fixedLevel: boolean) =>
+    setMaalForm({ project_id: projectId, quote_id: quoteId, quote_line_id: lineId, title: '', target_date: date, done: false, note: '', fixedLevel });
+  const openMaal = (m: MaalRow) => {
+    if (suppressClickRef.current) return;
+    setMaalForm({ id: m.id, project_id: m.project_id, quote_id: m.quote_id, quote_line_id: m.quote_line_id, title: m.title, target_date: m.target_date, done: m.done, note: m.note ?? '', fixedLevel: true });
+  };
+  const saveMaal = async () => {
+    if (!maalForm) return;
+    if (!maalForm.title.trim() || !maalForm.target_date || !maalForm.project_id) {
+      toast({ title: 'Mangler titel eller dato', variant: 'destructive' }); return;
+    }
+    setSaving(true);
+    const payload = {
+      project_id: maalForm.project_id, quote_id: maalForm.quote_id, quote_line_id: maalForm.quote_id ? maalForm.quote_line_id : null,
+      title: maalForm.title.trim(), target_date: maalForm.target_date, done: maalForm.done, note: maalForm.note.trim() || null,
+      updated_by: user?.email ?? null,
+    };
+    const cols = 'id, project_id, quote_id, quote_line_id, title, target_date, done, note';
+    const res = maalForm.id
+      ? await supabase.from(MAAL_TABLE).update(payload).eq('id', maalForm.id).select(cols).single()
+      : await supabase.from(MAAL_TABLE).insert({ ...payload, created_by: user?.email ?? null }).select(cols).single();
+    setSaving(false);
+    if (res.error) { toast({ title: 'Kunne ikke gemme målsætning', description: res.error.message, variant: 'destructive' }); return; }
+    const row = res.data as MaalRow;
+    setMaal(prev => maalForm.id ? prev.map(x => x.id === row.id ? row : x) : [...prev, row]);
+    setMaalForm(null);
+  };
+  const deleteMaal = async () => {
+    if (!maalForm?.id) return;
+    if (!window.confirm(`Slet målsætningen "${maalForm.title}"?`)) return;
+    const { error } = await supabase.from(MAAL_TABLE).delete().eq('id', maalForm.id);
+    if (error) { toast({ title: 'Kunne ikke slette', description: error.message, variant: 'destructive' }); return; }
+    setMaal(prev => prev.filter(x => x.id !== maalForm.id));
+    setMaalForm(null);
+  };
+  /** Dobbeltklik på en tom plads i en række: ny målsætning på den dato. */
+  const onRowDoubleClick = (e: React.MouseEvent<HTMLDivElement>, projectId: string, quoteId: string | null, lineId: string | null) => {
+    if (e.target !== e.currentTarget) return; // dobbeltklik på bjælke/markør ignoreres
+    const rect = e.currentTarget.getBoundingClientRect();
+    const day = Math.floor((e.clientX - rect.left) / pxPerDay);
+    openNewMaal(projectId, quoteId, lineId, ymd(addDays(range.from, day)), true);
+  };
+
   // -- Render-hjælpere -------------------------------------------------------
   const levelLabel = (level: Level) => level === 'project' ? 'Projekt' : level === 'quote' ? 'Tilbud' : 'Produkt';
 
-  const GanttBars: React.FC<{ levelRows: FaseRow[]; level: Level }> = ({ levelRows, level }) => (
-    <div className="relative h-14" style={{ width: timelineWidth }}>
+  const GanttBars: React.FC<{ levelRows: FaseRow[]; level: Level; projectId: string; quoteId: string | null; lineId: string | null }> = ({ levelRows, level, projectId, quoteId, lineId }) => (
+    <div className="relative h-14" style={{ width: timelineWidth }}
+      onDoubleClick={e => onRowDoubleClick(e, projectId, quoteId, lineId)}
+      title="Dobbeltklik for at sætte en målsætning">
       {levelRows.filter(r => !faserOff.has(r.fase)).map(r => {
         const f = FASE_BY_KEY[r.fase];
         const rawLeft = xOf(r.start_date);
@@ -467,6 +540,25 @@ const Tidsplan: React.FC = () => {
           >
             {width > 40 ? f.label : ''}{width > 190 ? ` · ${format(parseISO(r.start_date), 'd/M')}–${format(parseISO(r.end_date), 'd/M')}` : ''}
             {r.status === 'faerdig' && width > 70 ? <Check className="inline h-4 w-4 ml-1 -mt-0.5" /> : null}
+          </button>
+        );
+      })}
+      {(maalByLevel.get(levelKey(projectId, quoteId, lineId)) ?? []).map(m => {
+        const x = xOf(m.target_date) + pxPerDay / 2;
+        if (x < -8 || x > timelineWidth + 8) return null;
+        const overdue = !m.done && parseISO(m.target_date) < today;
+        const tip = `Målsætning: ${m.title} · ${format(parseISO(m.target_date), 'd. MMM yyyy', { locale: da })}`
+          + (m.done ? ' · Nået' : overdue ? ' · Overskredet' : '') + (m.note ? `\n${m.note}` : '');
+        return (
+          <button key={m.id} type="button" onClick={() => openMaal(m)}
+            className="absolute top-1/2 -translate-y-1/2 z-10 flex items-center gap-1 group focus:outline-none"
+            style={{ left: x - 9 }} title={tip}>
+            <span className={cn('block h-[18px] w-[18px] rotate-45 border-2 shadow-sm transition-transform group-hover:scale-110',
+              m.done ? 'bg-emerald-500 border-emerald-700' : overdue ? 'bg-red-500 border-red-700' : 'bg-yellow-300 border-yellow-600')} />
+            <span className={cn('max-w-[180px] truncate rounded bg-background/95 border border-border px-1.5 py-0.5 text-xs font-medium text-foreground shadow-sm',
+              m.done && 'line-through text-muted-foreground')}>
+              {m.title}
+            </span>
           </button>
         );
       })}
@@ -581,6 +673,11 @@ const Tidsplan: React.FC = () => {
             })}
           </div>
 
+          <Button size="sm" className="h-9 gap-1.5 ml-auto" disabled={visibleProjects.length === 0}
+            onClick={() => openNewMaal(visibleProjects[0]?.id ?? '', null, null, ymd(today), false)}>
+            <Flag className="h-4 w-4" /> Ny målsætning
+          </Button>
+
           {filtersActive && (
             <Button variant="ghost" size="sm" className="h-9 gap-1" onClick={resetFilters}><X className="h-4 w-4" /> Nulstil filtre</Button>
           )}
@@ -684,15 +781,15 @@ const Tidsplan: React.FC = () => {
                     const pOpen = expandedProjects.has(p.id);
                     return (
                       <React.Fragment key={p.id}>
-                        <div className="border-b border-border"><GanttBars level="project" levelRows={rowsByLevel.get(levelKey(p.id, null, null)) ?? []} /></div>
+                        <div className="border-b border-border"><GanttBars level="project" projectId={p.id} quoteId={null} lineId={null} levelRows={rowsByLevel.get(levelKey(p.id, null, null)) ?? []} /></div>
                         {pOpen && pQuotes.map(q => {
                           const qLines = linesByQuote.get(q.id) ?? [];
                           const qOpen = expandedQuotes.has(q.id);
                           return (
                             <React.Fragment key={q.id}>
-                              <div className="border-b border-border/60"><GanttBars level="quote" levelRows={rowsByLevel.get(levelKey(p.id, q.id, null)) ?? []} /></div>
+                              <div className="border-b border-border/60"><GanttBars level="quote" projectId={p.id} quoteId={q.id} lineId={null} levelRows={rowsByLevel.get(levelKey(p.id, q.id, null)) ?? []} /></div>
                               {qOpen && qLines.map(l => (
-                                <div key={l.id} className="border-b border-border/40"><GanttBars level="line" levelRows={rowsByLevel.get(levelKey(p.id, q.id, l.id)) ?? []} /></div>
+                                <div key={l.id} className="border-b border-border/40"><GanttBars level="line" projectId={p.id} quoteId={q.id} lineId={l.id} levelRows={rowsByLevel.get(levelKey(p.id, q.id, l.id)) ?? []} /></div>
                               ))}
                             </React.Fragment>
                           );
@@ -752,6 +849,88 @@ const Tidsplan: React.FC = () => {
               </DialogFooter>
             </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Målsætning */}
+      <Dialog open={!!maalForm} onOpenChange={open => { if (!open) setMaalForm(null); }}>
+        <DialogContent className="sm:max-w-md">
+          {maalForm && (() => {
+            const proj = candidateProjects.find(p => p.id === maalForm.project_id);
+            const q = quotes.find(x => x.id === maalForm.quote_id);
+            const l = lines.find(x => x.id === maalForm.quote_line_id);
+            const where = [proj ? `${proj.projectNumber ?? ''} ${proj.name}`.trim() : '', q ? `${q.quote_number ?? ''} ${q.title ?? ''}`.trim() : '', l?.title ?? ''].filter(Boolean).join(' › ');
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2"><Flag className="h-4 w-4" /> {maalForm.id ? 'Målsætning' : 'Ny målsætning'}</DialogTitle>
+                  <DialogDescription>{maalForm.fixedLevel ? where : 'Vælg hvor målsætningen skal stå i tidsplanen.'}</DialogDescription>
+                </DialogHeader>
+                <div className="grid grid-cols-2 gap-3">
+                  {!maalForm.fixedLevel && (
+                    <>
+                      <div className="space-y-1 col-span-2">
+                        <Label>Projekt</Label>
+                        <Select value={maalForm.project_id} onValueChange={v => setMaalForm(f => f && ({ ...f, project_id: v, quote_id: null, quote_line_id: null }))}>
+                          <SelectTrigger><SelectValue placeholder="Vælg projekt" /></SelectTrigger>
+                          <SelectContent>
+                            {visibleProjects.map(p => <SelectItem key={p.id} value={p.id}>{p.projectNumber} {p.name}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1 col-span-2">
+                        <Label>Tilbud (valgfrit)</Label>
+                        <Select value={maalForm.quote_id ?? '__none'} onValueChange={v => setMaalForm(f => f && ({ ...f, quote_id: v === '__none' ? null : v, quote_line_id: null }))}>
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__none">Hele projektet</SelectItem>
+                            {(quotesByProject.get(maalForm.project_id) ?? []).map(x => <SelectItem key={x.id} value={x.id}>{x.quote_number} {x.title}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      {maalForm.quote_id && (
+                        <div className="space-y-1 col-span-2">
+                          <Label>Produkt (valgfrit)</Label>
+                          <Select value={maalForm.quote_line_id ?? '__none'} onValueChange={v => setMaalForm(f => f && ({ ...f, quote_line_id: v === '__none' ? null : v }))}>
+                            <SelectTrigger><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none">Hele tilbuddet</SelectItem>
+                              {(linesByQuote.get(maalForm.quote_id) ?? []).map(x => <SelectItem key={x.id} value={x.id}>{x.title}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+                    </>
+                  )}
+                  <div className="space-y-1 col-span-2">
+                    <Label htmlFor="tm-title">Målsætning</Label>
+                    <Input id="tm-title" autoFocus value={maalForm.title} onChange={e => setMaalForm(f => f && ({ ...f, title: e.target.value }))}
+                      onKeyDown={e => { if (e.key === 'Enter') saveMaal(); }} placeholder="Fx: Tegninger godkendt" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="tm-date">Dato</Label>
+                    <Input id="tm-date" type="date" value={maalForm.target_date} onChange={e => setMaalForm(f => f && ({ ...f, target_date: e.target.value }))} />
+                  </div>
+                  <label className="flex items-end gap-2 pb-2 text-sm cursor-pointer">
+                    <Checkbox checked={maalForm.done} onCheckedChange={v => setMaalForm(f => f && ({ ...f, done: v === true }))} /> Nået
+                  </label>
+                  <div className="space-y-1 col-span-2">
+                    <Label htmlFor="tm-note">Note</Label>
+                    <Textarea id="tm-note" rows={2} value={maalForm.note} onChange={e => setMaalForm(f => f && ({ ...f, note: e.target.value }))} />
+                  </div>
+                </div>
+                <DialogFooter className="sm:justify-between">
+                  <div>
+                    {maalForm.id && <Button variant="ghost" className="text-red-600 gap-1" onClick={deleteMaal}><Trash2 className="h-4 w-4" /> Slet</Button>}
+                  </div>
+                  <div className="flex gap-2">
+                    <Button variant="outline" onClick={() => setMaalForm(null)}>Annullér</Button>
+                    <Button onClick={saveMaal} disabled={saving}>{saving ? 'Gemmer…' : 'Gem'}</Button>
+                  </div>
+                </DialogFooter>
+              </>
+            );
+          })()}
         </DialogContent>
       </Dialog>
     </Layout>
