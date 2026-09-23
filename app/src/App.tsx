@@ -60,6 +60,7 @@ import ProjectMaterials from "./pages/ProjectMaterials";
 import ProjectMaterialsV1 from "./pages/ProjectMaterialsV1";
 import ProjectMaterialDetail from "./pages/ProjectMaterialDetail";
 import PortfolioMaterials from "@/pages/PortfolioMaterials";
+import Tidsplan from "./pages/Tidsplan";
 import TestPage from "./pages/TestPage";
 import NotFound from "./pages/NotFound";
 
@@ -145,6 +146,9 @@ const App = () => (
           <Route path="/project/price-requests/new" element={<ProtectedRoute><AppProviders><PriceRequestForm /></AppProviders></ProtectedRoute>} />
           <Route path="/project/price-requests/:id" element={<ProtectedRoute><AppProviders><PriceRequestDetail /></AppProviders></ProtectedRoute>} />
           <Route path="/project/price-requests/:id/edit" element={<ProtectedRoute><AppProviders><PriceRequestForm /></AppProviders></ProtectedRoute>} />
+
+          {/* Tidsplan — Gantt over vundne projekter (Projekt → Tilbud → Produkt) */}
+          <Route path="/tidsplan" element={<ProtectedRoute><AppProviders><Tidsplan /></AppProviders></ProtectedRoute>} />
 
           {/* Global tilbudsoversigt */}
           <Route path="/quotes" element={<ProtectedRoute><AppProviders><AllQuotes /></AppProviders></ProtectedRoute>} />

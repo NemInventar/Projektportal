@@ -21,7 +21,8 @@ import {
   Contact,
   Layers,
   Factory,
-  AlertTriangle
+  AlertTriangle,
+  CalendarRange
 } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -66,6 +67,12 @@ const Sidebar = () => {
       icon: FolderOpen,
       path: '/',
       active: isActive('/')
+    },
+    {
+      label: 'Tidsplan',
+      icon: CalendarRange,
+      path: '/tidsplan',
+      active: isActive('/tidsplan')
     },
     {
       label: 'Portefølje',
