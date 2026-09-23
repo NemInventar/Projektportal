@@ -15,7 +15,7 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
-import { ChevronRight, ChevronDown, CalendarRange, AlertTriangle, Check, Filter, Search, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronDown, CalendarRange, AlertTriangle, Check, Filter, Search, X } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/hooks/use-toast';
@@ -76,12 +76,13 @@ type Level = 'project' | 'quote' | 'line';
 type ViewKey = 'dag' | 'uge' | 'maaned' | 'kvartal' | 'aar';
 type Unit = 'day' | 'week' | 'month' | 'quarter' | 'year';
 
-const VIEWS: { key: ViewKey; label: string; pxPerDay: number; major: Unit; minor: Unit }[] = [
-  { key: 'dag',     label: 'Dag',     pxPerDay: 36,  major: 'month', minor: 'day' },
-  { key: 'uge',     label: 'Uge',     pxPerDay: 12,  major: 'month', minor: 'week' },
-  { key: 'maaned',  label: 'Måned',   pxPerDay: 4,   major: 'year',  minor: 'month' },
-  { key: 'kvartal', label: 'Kvartal', pxPerDay: 1.6, major: 'year',  minor: 'quarter' },
-  { key: 'aar',     label: 'År',      pxPerDay: 0.7, major: 'year',  minor: 'quarter' },
+// spanDays = hvor mange dage vinduet viser. Bredden på skærmen er altid den samme.
+const VIEWS: { key: ViewKey; label: string; spanDays: number; major: Unit; minor: Unit }[] = [
+  { key: 'dag',     label: 'Dag',     spanDays: 28,   major: 'month', minor: 'day' },
+  { key: 'uge',     label: 'Uge',     spanDays: 91,   major: 'month', minor: 'week' },
+  { key: 'maaned',  label: 'Måned',   spanDays: 182,  major: 'year',  minor: 'month' },
+  { key: 'kvartal', label: 'Kvartal', spanDays: 365,  major: 'year',  minor: 'quarter' },
+  { key: 'aar',     label: 'År',      spanDays: 1096, major: 'year',  minor: 'quarter' },
 ];
 const VIEW_BY_KEY = Object.fromEntries(VIEWS.map(v => [v.key, v])) as Record<ViewKey, typeof VIEWS[number]>;
 
@@ -159,7 +160,6 @@ const Tidsplan: React.FC = () => {
   const [prefs, setPrefs] = useState<Prefs>(loadPrefs);
   useEffect(() => { try { localStorage.setItem(LS_KEY, JSON.stringify(prefs)); } catch { /* ignore */ } }, [prefs]);
   const view = VIEW_BY_KEY[prefs.view] ?? VIEW_BY_KEY.uge;
-  const pxPerDay = view.pxPerDay;
   const typesOff = useMemo(() => new Set(prefs.typesOff), [prefs.typesOff]);
   const hiddenProjects = useMemo(() => new Set(prefs.hiddenProjects), [prefs.hiddenProjects]);
   const faserOff = useMemo(() => new Set(prefs.faserOff), [prefs.faserOff]);
@@ -168,7 +168,6 @@ const Tidsplan: React.FC = () => {
       const arr = p[key] as string[];
       return { ...p, [key]: arr.includes(value) ? arr.filter(x => x !== value) : [...arr, value] };
     });
-  const scrollRef = React.useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState<FaseRow | null>(null);
   const [editForm, setEditForm] = useState({ start_date: '', end_date: '', status: 'planlagt' as FaseStatus, note: '' });
   const [saving, setSaving] = useState(false);
@@ -311,18 +310,36 @@ const Tidsplan: React.FC = () => {
   };
 
   // -- Tidsakse --------------------------------------------------------------
-  const today = new Date();
+  // Tidsaksen har FAST bredde (fylder skærmen). Visningen bestemmer kun hvor mange dage
+  // vinduet dækker; pile/"I dag" flytter vinduet. Intet vandret scroll, ingen resize af siden.
+  const today = startOfDay(new Date());
+  const timelineRef = React.useRef<HTMLDivElement>(null);
+  const [timelineWidth, setTimelineWidth] = useState(900);
+  useEffect(() => {
+    const el = timelineRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(entries => { const w = entries[0]?.contentRect.width; if (w && w > 100) setTimelineWidth(w); });
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+  const spanDays = view.spanDays;
+  const [windowStart, setWindowStart] = useState<Date>(() => addDays(today, -Math.round(spanDays * 0.2)));
+  const prevSpan = React.useRef(spanDays);
+  // Skift af visning: behold det samme midtpunkt i tid.
+  useEffect(() => {
+    if (prevSpan.current === spanDays) return;
+    setWindowStart(ws => addDays(ws, Math.round((prevSpan.current - spanDays) / 2)));
+    prevSpan.current = spanDays;
+  }, [spanDays]);
+  const shiftWindow = (dir: -1 | 1) => setWindowStart(ws => addDays(ws, dir * Math.max(1, Math.round(spanDays / 3))));
+  const goToday = () => setWindowStart(addDays(today, -Math.round(spanDays * 0.2)));
+
   const range = useMemo(() => {
-    const starts = rows.map(r => parseISO(r.start_date));
-    const ends = rows.map(r => parseISO(r.end_date));
-    const lo = starts.length ? minDate([...starts, addDays(today, -14)]) : addDays(today, -14);
-    const hi = ends.length ? maxDate([...ends, addDays(today, 60)]) : addDays(today, 120);
-    // Rundes ud til hele "store" enheder, så header-båndet starter og slutter pænt.
-    const from = startOfUnit(addDays(lo, -7), view.major);
-    const to = addDays(addUnit(startOfUnit(addDays(hi, 21), view.major), view.major), -1);
-    return { from, to, days: differenceInCalendarDays(to, from) + 1 };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, view.major]);
+    const from = startOfDay(windowStart);
+    const to = addDays(from, spanDays - 1);
+    return { from, to, days: spanDays };
+  }, [windowStart, spanDays]);
+  const pxPerDay = timelineWidth / range.days;
 
   const ticks = (u: Unit) => {
     const out: { start: Date; end: Date }[] = [];
@@ -337,16 +354,7 @@ const Tidsplan: React.FC = () => {
 
   const xOf = (dateStr: string) => differenceInCalendarDays(parseISO(dateStr), range.from) * pxPerDay;
   const wOf = (start: string, end: string) => (differenceInCalendarDays(parseISO(end), parseISO(start)) + 1) * pxPerDay;
-  const timelineWidth = range.days * pxPerDay;
   const todayX = differenceInCalendarDays(today, range.from) * pxPerDay;
-
-  // Ved skift af visning: rul så "i dag" står lidt inde i billedet.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollLeft = Math.max(0, todayX - Math.min(300, el.clientWidth / 4));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prefs.view, loading]);
 
   const filtersActive = typesOff.size !== TYPE_DEFAULT_OFF.size || [...TYPE_DEFAULT_OFF].some(t => !typesOff.has(t))
     || hiddenProjects.size > 0 || faserOff.size > 0 || prefs.search.trim() !== '';
@@ -381,8 +389,11 @@ const Tidsplan: React.FC = () => {
     <div className="relative h-14" style={{ width: timelineWidth }}>
       {levelRows.filter(r => !faserOff.has(r.fase)).map(r => {
         const f = FASE_BY_KEY[r.fase];
-        const left = xOf(r.start_date);
-        const width = Math.max(wOf(r.start_date, r.end_date), 2);
+        const rawLeft = xOf(r.start_date);
+        const rawRight = rawLeft + wOf(r.start_date, r.end_date);
+        if (rawRight < 0 || rawLeft > timelineWidth) return null; // uden for vinduet
+        const left = Math.max(0, rawLeft);
+        const width = Math.max(Math.min(rawRight, timelineWidth) - left, 2);
         const overdue = r.status !== 'faerdig' && parseISO(r.end_date) < today;
         return (
           <button
@@ -436,7 +447,16 @@ const Tidsplan: React.FC = () => {
               Projekter forsvinder herfra når de sættes i <em>Garanti</em>.
             </p>
           </div>
-          {/* Visning */}
+          {/* Navigation + visning */}
+          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
+            <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => shiftWindow(-1)} title="Tilbage"><ChevronLeft className="h-4 w-4" /></Button>
+            <Button variant="outline" size="sm" className="h-9" onClick={goToday}>I dag</Button>
+            <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => shiftWindow(1)} title="Frem"><ChevronRight className="h-4 w-4" /></Button>
+            <span className="ml-2 text-sm text-muted-foreground whitespace-nowrap tabular-nums">
+              {format(range.from, 'd. MMM yyyy', { locale: da })} – {format(range.to, 'd. MMM yyyy', { locale: da })}
+            </span>
+          </div>
           <div className="inline-flex rounded-md border border-border bg-muted/40 p-0.5" role="group" aria-label="Visning">
             {VIEWS.map(v => (
               <Button key={v.key} size="sm" variant={prefs.view === v.key ? 'default' : 'ghost'} className="h-8 px-3"
@@ -444,6 +464,7 @@ const Tidsplan: React.FC = () => {
                 {v.label}
               </Button>
             ))}
+          </div>
           </div>
         </div>
 
@@ -531,10 +552,10 @@ const Tidsplan: React.FC = () => {
 
         {!tableMissing && visibleProjects.length > 0 && (
           <div className="border rounded-md overflow-hidden bg-card">
-            <div className="overflow-x-auto" ref={scrollRef}>
-              <div className="flex" style={{ minWidth: 460 + timelineWidth }}>
+            <div className="overflow-hidden">
+              <div className="flex w-full">
                 {/* Venstre: hierarki */}
-                <div className="w-[460px] shrink-0 sticky left-0 z-20 bg-card border-r border-border">
+                <div className="w-[460px] shrink-0 z-20 bg-card border-r border-border">
                   <div className="h-14 border-b border-border flex items-end px-3 pb-2 text-sm font-medium text-muted-foreground uppercase tracking-wider">Projekt / Tilbud / Produkt</div>
                   {visibleProjects.map(p => {
                     const pQuotes = quotesByProject.get(p.id) ?? [];
@@ -568,7 +589,7 @@ const Tidsplan: React.FC = () => {
                 </div>
 
                 {/* Højre: tidsakse + bjælker */}
-                <div className="relative" style={{ width: timelineWidth }}>
+                <div className="relative flex-1 min-w-0 overflow-hidden" ref={timelineRef}>
                   {/* Header: stor enhed øverst, lille enhed nederst (afhænger af visning) */}
                   <div className="h-14 border-b border-border relative bg-muted/30 overflow-hidden">
                     {majorTicks.map(t => (
