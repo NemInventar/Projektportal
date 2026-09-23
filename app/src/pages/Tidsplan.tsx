@@ -108,7 +108,7 @@ const Tidsplan: React.FC = () => {
   const [tableMissing, setTableMissing] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const [expandedQuotes, setExpandedQuotes] = useState<Set<string>>(new Set());
-  const [pxPerDay, setPxPerDay] = useState(4);
+  const [pxPerDay, setPxPerDay] = useState(10);
   const [editing, setEditing] = useState<FaseRow | null>(null);
   const [editForm, setEditForm] = useState({ start_date: '', end_date: '', status: 'planlagt' as FaseStatus, note: '' });
   const [saving, setSaving] = useState(false);
@@ -293,7 +293,7 @@ const Tidsplan: React.FC = () => {
   const levelLabel = (level: Level) => level === 'project' ? 'Projekt' : level === 'quote' ? 'Tilbud' : 'Produkt';
 
   const GanttBars: React.FC<{ levelRows: FaseRow[]; level: Level }> = ({ levelRows, level }) => (
-    <div className="relative h-9" style={{ width: timelineWidth }}>
+    <div className="relative h-14" style={{ width: timelineWidth }}>
       {levelRows.map(r => {
         const f = FASE_BY_KEY[r.fase];
         const left = xOf(r.start_date);
@@ -306,7 +306,7 @@ const Tidsplan: React.FC = () => {
             onClick={() => openEdit(r)}
             title={`${f.label} · ${format(parseISO(r.start_date), 'd. MMM', { locale: da })} – ${format(parseISO(r.end_date), 'd. MMM yyyy', { locale: da })} · ${STATUS_LABEL[r.status]}${r.note ? `\n${r.note}` : ''}`}
             className={cn(
-              'absolute top-1.5 h-6 rounded-sm text-[11px] leading-6 text-white px-1.5 truncate text-left shadow-sm hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-ring',
+              'absolute top-2 h-10 rounded text-sm font-medium leading-10 text-white px-2 truncate text-left shadow-sm hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-ring',
               f.color,
               level === 'project' ? 'opacity-100' : level === 'quote' ? 'opacity-90' : 'opacity-80',
               r.status === 'faerdig' && 'opacity-50 line-through',
@@ -315,8 +315,8 @@ const Tidsplan: React.FC = () => {
             )}
             style={{ left, width }}
           >
-            {width > 60 ? f.label : ''}
-            {r.status === 'faerdig' && width > 90 ? <Check className="inline h-3 w-3 ml-1 -mt-0.5" /> : null}
+            {width > 40 ? f.label : ''}{width > 190 ? ` · ${format(parseISO(r.start_date), 'd/M')}–${format(parseISO(r.end_date), 'd/M')}` : ''}
+            {r.status === 'faerdig' && width > 70 ? <Check className="inline h-4 w-4 ml-1 -mt-0.5" /> : null}
           </button>
         );
       })}
@@ -326,23 +326,23 @@ const Tidsplan: React.FC = () => {
   const RowLabel: React.FC<{ depth: number; expandable?: boolean; expanded?: boolean; onToggle?: () => void; title: string; sub?: string; level: Level; count?: number }> =
     ({ depth, expandable, expanded, onToggle, title, sub, level, count }) => (
       <div
-        className={cn('h-9 flex items-center gap-1 pr-2 border-r border-border bg-card', expandable && 'cursor-pointer hover:bg-muted/60')}
-        style={{ paddingLeft: 8 + depth * 18 }}
+        className={cn('h-14 flex items-center gap-1 pr-2 border-r border-border bg-card', expandable && 'cursor-pointer hover:bg-muted/60')}
+        style={{ paddingLeft: 12 + depth * 24 }}
         onClick={expandable ? onToggle : undefined}
       >
         {expandable ? (expanded ? <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />) : <span className="w-4 shrink-0" />}
         <div className="min-w-0 flex-1">
-          <div className={cn('truncate text-sm', level === 'project' ? 'font-semibold' : level === 'quote' ? 'font-medium' : 'text-muted-foreground')} title={title}>{title}</div>
-          {sub ? <div className="truncate text-[11px] text-muted-foreground -mt-0.5">{sub}</div> : null}
+          <div className={cn('truncate text-base', level === 'project' ? 'font-semibold' : level === 'quote' ? 'font-medium' : 'text-muted-foreground')} title={title}>{title}</div>
+          {sub ? <div className="truncate text-xs text-muted-foreground -mt-0.5">{sub}</div> : null}
         </div>
-        {count !== undefined ? <Badge variant="outline" className="text-[10px] h-4 px-1">{count}</Badge> : null}
+        {count !== undefined ? <Badge variant="outline" className="text-xs h-5 px-1.5">{count}</Badge> : null}
       </div>
     );
 
   // -- Side ------------------------------------------------------------------
   return (
     <Layout>
-      <div className="p-6 space-y-4">
+      <div className="p-4 space-y-4 w-full">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2"><CalendarRange className="h-6 w-6" /> Tidsplan</h1>
@@ -359,8 +359,8 @@ const Tidsplan: React.FC = () => {
                 </span>
               ))}
             </div>
-            <Button variant="outline" size="icon" onClick={() => setPxPerDay(v => Math.max(2, v - 1))} title="Zoom ud"><ZoomOut className="h-4 w-4" /></Button>
-            <Button variant="outline" size="icon" onClick={() => setPxPerDay(v => Math.min(12, v + 1))} title="Zoom ind"><ZoomIn className="h-4 w-4" /></Button>
+            <Button variant="outline" size="icon" onClick={() => setPxPerDay(v => Math.max(3, v - 2))} title="Zoom ud"><ZoomOut className="h-4 w-4" /></Button>
+            <Button variant="outline" size="icon" onClick={() => setPxPerDay(v => Math.min(30, v + 2))} title="Zoom ind"><ZoomIn className="h-4 w-4" /></Button>
           </div>
         </div>
 
@@ -383,10 +383,10 @@ const Tidsplan: React.FC = () => {
         {!tableMissing && visibleProjects.length > 0 && (
           <div className="border rounded-md overflow-hidden bg-card">
             <div className="overflow-x-auto">
-              <div className="flex" style={{ minWidth: 320 + timelineWidth }}>
+              <div className="flex" style={{ minWidth: 460 + timelineWidth }}>
                 {/* Venstre: hierarki */}
-                <div className="w-[320px] shrink-0 sticky left-0 z-20 bg-card border-r border-border">
-                  <div className="h-12 border-b border-border flex items-end px-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">Projekt / Tilbud / Produkt</div>
+                <div className="w-[460px] shrink-0 sticky left-0 z-20 bg-card border-r border-border">
+                  <div className="h-14 border-b border-border flex items-end px-3 pb-2 text-sm font-medium text-muted-foreground uppercase tracking-wider">Projekt / Tilbud / Produkt</div>
                   {visibleProjects.map(p => {
                     const pQuotes = quotesByProject.get(p.id) ?? [];
                     const pOpen = expandedProjects.has(p.id);
@@ -421,18 +421,18 @@ const Tidsplan: React.FC = () => {
                 {/* Højre: tidsakse + bjælker */}
                 <div className="relative" style={{ width: timelineWidth }}>
                   {/* Header: måneder + uger */}
-                  <div className="h-12 border-b border-border relative bg-muted/30">
+                  <div className="h-14 border-b border-border relative bg-muted/30">
                     {weeks.map(w => {
                       const left = differenceInCalendarDays(w.start, range.from) * pxPerDay;
                       return (
                         <React.Fragment key={w.start.toISOString()}>
                           {w.showMonth && (
-                            <div className="absolute top-0 text-[11px] font-medium text-foreground pl-1 border-l border-border h-6 leading-6 whitespace-nowrap" style={{ left }}>
+                            <div className="absolute top-0 text-sm font-semibold text-foreground pl-1 border-l border-border h-7 leading-7 whitespace-nowrap" style={{ left }}>
                               {format(w.start, 'MMM yyyy', { locale: da })}
                             </div>
                           )}
-                          <div className="absolute top-6 h-6 text-[10px] text-muted-foreground border-l border-border/60 pl-0.5 leading-6" style={{ left, width: 7 * pxPerDay }}>
-                            {pxPerDay >= 3 ? `${w.week}` : ''}
+                          <div className="absolute top-7 h-7 text-xs text-muted-foreground border-l border-border/60 pl-1 leading-7" style={{ left, width: 7 * pxPerDay }}>
+                            {pxPerDay >= 3 ? `Uge ${w.week}` : ''}
                           </div>
                         </React.Fragment>
                       );
@@ -440,7 +440,7 @@ const Tidsplan: React.FC = () => {
                   </div>
 
                   {/* Baggrunds-gitter (uger) */}
-                  <div className="absolute inset-x-0 top-12 bottom-0 pointer-events-none">
+                  <div className="absolute inset-x-0 top-14 bottom-0 pointer-events-none">
                     {weeks.map(w => (
                       <div key={w.start.toISOString()} className="absolute top-0 bottom-0 border-l border-border/30" style={{ left: differenceInCalendarDays(w.start, range.from) * pxPerDay }} />
                     ))}
