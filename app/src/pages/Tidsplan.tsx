@@ -341,6 +341,59 @@ const Tidsplan: React.FC = () => {
   }, [windowStart, spanDays]);
   const pxPerDay = timelineWidth / range.days;
 
+  // -- Panorering: træk med musen eller scroll vandret ---------------------
+  // Træk: tag fat hvor som helst på tidsaksen (også på en bjælke) og træk til siden.
+  // Scroll: vandret scroll på touchpad, Shift+hjul, eller almindeligt hjul over datolinjen.
+  const pxPerDayRef = React.useRef(pxPerDay);
+  pxPerDayRef.current = pxPerDay;
+  const dragRef = React.useRef<{ x: number; start: Date; moved: boolean } | null>(null);
+  const suppressClickRef = React.useRef(false);
+  const [dragging, setDragging] = useState(false);
+
+  const onPanPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    dragRef.current = { x: e.clientX, start: windowStart, moved: false };
+    const onMove = (ev: PointerEvent) => {
+      const d = dragRef.current; if (!d) return;
+      const dx = ev.clientX - d.x;
+      if (!d.moved && Math.abs(dx) < 4) return;
+      if (!d.moved) { d.moved = true; setDragging(true); }
+      setWindowStart(addDays(d.start, -Math.round(dx / pxPerDayRef.current)));
+    };
+    const onUp = () => {
+      const d = dragRef.current;
+      if (d?.moved) { suppressClickRef.current = true; setTimeout(() => { suppressClickRef.current = false; }, 0); }
+      dragRef.current = null; setDragging(false);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
+
+  const wheelAccRef = React.useRef(0);
+  const headerRef = React.useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = timelineRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      const overHeader = !!headerRef.current && headerRef.current.contains(e.target as Node);
+      let delta = 0;
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) delta = e.deltaX;
+      else if (e.shiftKey || overHeader) delta = e.deltaY;
+      if (!delta) return; // almindeligt lodret scroll ruller siden som normalt
+      e.preventDefault();
+      wheelAccRef.current += delta;
+      const days = Math.trunc(wheelAccRef.current / pxPerDayRef.current);
+      if (days !== 0) {
+        wheelAccRef.current -= days * pxPerDayRef.current;
+        setWindowStart(ws => addDays(ws, days));
+      }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  });
+
   const ticks = (u: Unit) => {
     const out: { start: Date; end: Date }[] = [];
     let d = startOfUnit(range.from, u);
@@ -362,6 +415,7 @@ const Tidsplan: React.FC = () => {
 
   // -- Redigering ------------------------------------------------------------
   const openEdit = (r: FaseRow) => {
+    if (suppressClickRef.current) return; // det var et træk, ikke et klik
     setEditing(r);
     setEditForm({ start_date: r.start_date, end_date: r.end_date, status: r.status, note: r.note ?? '' });
   };
@@ -589,9 +643,9 @@ const Tidsplan: React.FC = () => {
                 </div>
 
                 {/* Højre: tidsakse + bjælker */}
-                <div className="relative flex-1 min-w-0 overflow-hidden" ref={timelineRef}>
+                <div className={cn("relative flex-1 min-w-0 overflow-hidden select-none touch-pan-y", dragging ? "cursor-grabbing" : "cursor-grab")} ref={timelineRef} onPointerDown={onPanPointerDown}>
                   {/* Header: stor enhed øverst, lille enhed nederst (afhænger af visning) */}
-                  <div className="h-14 border-b border-border relative bg-muted/30 overflow-hidden">
+                  <div ref={headerRef} className="h-14 border-b border-border relative bg-muted/30 overflow-hidden" title="Træk eller scroll for at flytte perioden">
                     {majorTicks.map(t => (
                       <div key={`M${t.start.toISOString()}`} className="absolute top-0 h-7 leading-7 pl-1.5 border-l border-border text-sm font-semibold text-foreground whitespace-nowrap overflow-hidden capitalize"
                         style={{ left: tickX(t.start), width: tickW(t) }}>
