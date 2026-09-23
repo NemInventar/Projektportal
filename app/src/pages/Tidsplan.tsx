@@ -401,6 +401,51 @@ const Tidsplan: React.FC = () => {
     window.addEventListener('pointerup', onUp);
   };
 
+  // -- Træk i faser: midten flytter, kanterne ændrer start/slut ---------------
+  type BarMode = 'move' | 'start' | 'end';
+  const [barPreview, setBarPreview] = useState<{ id: string; start: string; end: string } | null>(null);
+  const barDragRef = React.useRef<{ row: FaseRow; mode: BarMode; x: number; moved: boolean; start: string; end: string } | null>(null);
+
+  const onBarPointerDown = (e: React.PointerEvent, row: FaseRow, mode: BarMode) => {
+    if (e.button !== 0) return;
+    e.stopPropagation(); // ikke panorering af tidsaksen
+    barDragRef.current = { row, mode, x: e.clientX, moved: false, start: row.start_date, end: row.end_date };
+    const onMove = (ev: PointerEvent) => {
+      const d = barDragRef.current; if (!d) return;
+      const dx = ev.clientX - d.x;
+      if (!d.moved && Math.abs(dx) < 4) return;
+      d.moved = true;
+      const days = Math.round(dx / pxPerDayRef.current);
+      const s0 = parseISO(d.row.start_date), e0 = parseISO(d.row.end_date);
+      let ns = s0, ne = e0;
+      if (d.mode === 'move') { ns = addDays(s0, days); ne = addDays(e0, days); }
+      else if (d.mode === 'start') { ns = addDays(s0, days); if (ns > e0) ns = e0; }
+      else { ne = addDays(e0, days); if (ne < s0) ne = s0; }
+      d.start = ymd(ns); d.end = ymd(ne);
+      setBarPreview({ id: d.row.id, start: d.start, end: d.end });
+    };
+    const onUp = async () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      const d = barDragRef.current;
+      barDragRef.current = null;
+      if (!d || !d.moved) { setBarPreview(null); return; } // almindeligt klik -> onClick åbner dialogen
+      suppressClickRef.current = true; setTimeout(() => { suppressClickRef.current = false; }, 0);
+      if (d.start === d.row.start_date && d.end === d.row.end_date) { setBarPreview(null); return; }
+      // Optimistisk: opdatér lokalt, gem, rul tilbage ved fejl
+      const prev = { start_date: d.row.start_date, end_date: d.row.end_date };
+      setRows(rs => rs.map(r => r.id === d.row.id ? { ...r, start_date: d.start, end_date: d.end } : r));
+      setBarPreview(null);
+      const { error } = await supabase.from(TABLE).update({ start_date: d.start, end_date: d.end, updated_by: user?.email ?? null }).eq('id', d.row.id);
+      if (error) {
+        setRows(rs => rs.map(r => r.id === d.row.id ? { ...r, ...prev } : r));
+        toast({ title: 'Kunne ikke flytte fasen', description: error.message, variant: 'destructive' });
+      }
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
+
   const wheelAccRef = React.useRef(0);
   const headerRef = React.useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -541,7 +586,9 @@ const Tidsplan: React.FC = () => {
     <div className="relative h-14" style={{ width: timelineWidth }}
       onDoubleClick={e => onRowDoubleClick(e, projectId, quoteId, lineId)}
       title="Dobbeltklik for at sætte en målsætning">
-      {levelRows.filter(r => !r.removed && !faserOff.has(r.fase)).map(r => {
+      {levelRows.filter(r => !r.removed && !faserOff.has(r.fase)).map(orig => {
+        const isDraggingBar = barPreview?.id === orig.id;
+        const r = isDraggingBar ? { ...orig, start_date: barPreview!.start, end_date: barPreview!.end } : orig;
         const f = FASE_BY_KEY[r.fase];
         const rawLeft = xOf(r.start_date);
         const rawRight = rawLeft + wOf(r.start_date, r.end_date);
@@ -559,10 +606,12 @@ const Tidsplan: React.FC = () => {
           <button
             key={r.id}
             type="button"
-            onClick={() => openEdit(r)}
+            onClick={() => openEdit(orig)}
+            onPointerDown={e => onBarPointerDown(e, orig, 'move')}
             title={`${f.label} · ${format(parseISO(r.start_date), 'd. MMM', { locale: da })} – ${format(parseISO(r.end_date), 'd. MMM yyyy', { locale: da })} · ${STATUS_LABEL[r.status]}${igang ? ` (${pct}%)` : ''}${r.note ? `\n${r.note}` : ''}`}
             className={cn(
-              'absolute top-2 h-10 rounded text-sm font-medium leading-10 text-white px-2 truncate text-left shadow-sm hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-ring overflow-hidden',
+              'group/bar absolute top-2 h-10 rounded text-sm font-medium leading-10 text-white px-2 truncate text-left shadow-sm hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-ring overflow-hidden cursor-grab active:cursor-grabbing touch-none',
+              isDraggingBar && 'z-20 shadow-lg ring-2 ring-foreground/50',
               f.color,
               level === 'project' ? 'opacity-100' : level === 'quote' ? 'opacity-90' : 'opacity-80',
               r.status === 'faerdig' && 'opacity-50 line-through',
@@ -571,6 +620,10 @@ const Tidsplan: React.FC = () => {
             )}
             style={{ left, width }}
           >
+            <span onPointerDown={e => onBarPointerDown(e, orig, 'start')}
+              className="absolute inset-y-0 left-0 w-2.5 z-20 cursor-ew-resize bg-black/0 group-hover/bar:bg-black/20 rounded-l" title="Træk for at ændre start" />
+            <span onPointerDown={e => onBarPointerDown(e, orig, 'end')}
+              className="absolute inset-y-0 right-0 w-2.5 z-20 cursor-ew-resize bg-black/0 group-hover/bar:bg-black/20 rounded-r" title="Træk for at ændre slut" />
             {igang && doneEdge < width && (
               // Resten af fasen (efter i dag) lysnes og stribes
               <span className="absolute inset-y-0 right-0 pointer-events-none"
@@ -581,9 +634,13 @@ const Tidsplan: React.FC = () => {
             )}
             <span className="relative z-10 drop-shadow-[0_1px_1px_rgba(0,0,0,0.45)]">
               {igang && width > 24 ? <span className="inline-block h-2 w-2 rounded-full bg-white mr-1.5 align-middle animate-pulse" /> : null}
-              {width > 40 ? f.label : ''}
-              {igang && width > 110 ? ` · I gang ${pct}%` : ''}
-              {!igang && width > 190 ? ` · ${format(parseISO(r.start_date), 'd/M')}–${format(parseISO(r.end_date), 'd/M')}` : ''}
+              {isDraggingBar
+                ? `${format(parseISO(r.start_date), 'd/M')}–${format(parseISO(r.end_date), 'd/M')} (${totalDays} d)`
+                : <>
+                    {width > 40 ? f.label : ''}
+                    {igang && width > 110 ? ` · I gang ${pct}%` : ''}
+                    {!igang && width > 190 ? ` · ${format(parseISO(r.start_date), 'd/M')}–${format(parseISO(r.end_date), 'd/M')}` : ''}
+                  </>}
               {r.status === 'faerdig' && width > 70 ? <Check className="inline h-4 w-4 ml-1 -mt-0.5" /> : null}
             </span>
           </button>
