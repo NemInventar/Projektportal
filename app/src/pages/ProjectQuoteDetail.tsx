@@ -103,6 +103,7 @@ const COST_SLOT_LABELS: Record<string, string> = {
   material_transport: 'Mat. transport',
   product_transport: 'Transport',
   labor_production: 'Produktion',
+  labor_korpus: 'Korpus',
   labor_dk: 'Montage DK',
   other: 'Øvrigt',
 };
@@ -112,6 +113,7 @@ const COST_SLOT_BADGE_CLASSES: Record<string, string> = {
   material_transport: 'bg-sky-100 text-sky-800 hover:bg-sky-100',
   product_transport: 'bg-sky-100 text-sky-800 hover:bg-sky-100',
   labor_production: 'bg-amber-100 text-amber-800 hover:bg-amber-100',
+  labor_korpus: 'bg-amber-100 text-amber-800 hover:bg-amber-100',
   labor_dk: 'bg-amber-100 text-amber-800 hover:bg-amber-100',
   other: 'bg-gray-100 text-gray-700 hover:bg-gray-100',
 };
@@ -5539,7 +5541,8 @@ const ProjectQuoteDetail = () => {
                                       {/* Expanded breakdown — aligned med parent-kolonnerne */}
                                       {isExpanded && item.costBreakdown && (
                                         <div className="text-xs text-muted-foreground pt-2 border-t space-y-1">
-                                          {(['materials','material_transport','product_transport','labor_production','labor_dk','other'] as const).map(slot => {
+                                          {/* Samme kategoriliste som prisformlen (quotePricing) — ellers summer rækkerne ikke til Total cost */}
+                                          {COST_CATEGORIES.map(slot => {
                                             const val = (item.costBreakdown as any)?.[slot] ?? 0;
                                             const total = val * localQty;
                                             const isActive = val > 0;
