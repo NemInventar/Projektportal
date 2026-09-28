@@ -119,7 +119,7 @@ const fmt = (n: number) =>
 
 // ─── Quote total calculation ──────────────────────────────────────────────────
 // Bruger shared helper fra @/lib/quotePricing for at undgå duplikeret logik.
-import { calculateLine, pricingFromLine, type CostItem } from '@/lib/quotePricing';
+import { calculateLine, pricingFromLine, salgsprisFromRow, type CostItem } from '@/lib/quotePricing';
 
 function calcSellingPrice(items: any[], quantity: number, pricingOrLineRow: any): number {
   const costItems: CostItem[] = (items || []).map((it) => ({
@@ -127,6 +127,7 @@ function calcSellingPrice(items: any[], quantity: number, pricingOrLineRow: any)
     cost_total_per_unit: it.cost_total_per_unit != null ? parseFloat(it.cost_total_per_unit) : null,
     cost_breakdown_json: it.cost_breakdown_json,
     effective_category_factors: it.effective_category_factors ?? null,
+    salgspris: salgsprisFromRow(it),
   }));
   const pricing = pricingFromLine(pricingOrLineRow);
   return calculateLine(costItems, quantity, pricing).totalSellingPrice;
@@ -683,7 +684,7 @@ export default function Dashboard() {
           .from('project_quote_lines_2026_01_16_23_00')
           .select(`id, project_quote_id, quantity,
             pricing_mode, markup_pct, target_unit_price, risk_per_unit, effective_category_factors, adjust_pct,
-            project_quote_line_items_2026_01_16_23_00(qty,cost_breakdown_json,cost_total_per_unit,effective_category_factors)`)
+            project_quote_line_items_2026_01_16_23_00(qty,cost_breakdown_json,cost_total_per_unit,effective_category_factors,project_products_2026_01_15_12_49(salgspris))`)
           .in('project_quote_id', quoteIds)
           .neq('archived', true);
 

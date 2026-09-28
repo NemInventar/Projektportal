@@ -4,7 +4,7 @@ import { pdf } from '@react-pdf/renderer';
 import { QuotePDF } from '@/components/QuotePDF';
 import { QuoteAppendixPDF } from '@/components/QuoteAppendixPDF';
 import { supabase } from '@/integrations/supabase/client';
-import { calculateLine, itemSellPerUnit, itemCostByCategory, COST_CATEGORIES, COST_CATEGORY_LABELS, type CategoryFactors, type CostCategory, type PricingMode } from '@/lib/quotePricing';
+import { calculateLine, itemSellPerUnit, itemCostByCategory, salgsprisFromRow, COST_CATEGORIES, COST_CATEGORY_LABELS, type CategoryFactors, type CostCategory, type PricingMode } from '@/lib/quotePricing';
 import Layout from '@/components/Layout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -240,6 +240,8 @@ interface QuoteLineItem {
   effectiveCategoryFactors?: CategoryFactors | null;
   /** Låst til prisbogens/en aftalt pris — må ikke få ny kost fra produktets stykliste (DB-vagt trg_kost_laast_vagt). */
   costLocked?: boolean;
+  /** L3: produktets godkendte salgspris pr. enhed (project_products.salgspris). null = regnes af kost × faktor. */
+  salgspris?: number | null;
 }
 
 interface CostBreakdown {
@@ -685,7 +687,7 @@ const ProjectQuoteDetail = () => {
         .from('project_quote_lines_2026_01_16_23_00')
         .select(`
           *,
-          project_quote_line_items_2026_01_16_23_00(*)
+          project_quote_line_items_2026_01_16_23_00(*, project_products_2026_01_15_12_49(salgspris))
         `)
         .eq('project_quote_id', id)
         .neq('archived', true)
@@ -703,7 +705,7 @@ const ProjectQuoteDetail = () => {
             .from('project_quote_lines_2026_01_16_23_00')
             .select(`
               *,
-              project_quote_line_items_2026_01_16_23_00(*)
+              project_quote_line_items_2026_01_16_23_00(*, project_products_2026_01_15_12_49(salgspris))
             `)
             .eq('project_quote_id', id)
             .neq('archived', true)
@@ -747,6 +749,7 @@ const ProjectQuoteDetail = () => {
             factorProfile: item.factor_profile ?? null,
             effectiveCategoryFactors: item.effective_category_factors ?? null,
             costLocked: item.cost_locked === true,
+            salgspris: salgsprisFromRow(item),
           })) || [],
           // Billed/render-felter
           renderContext: line.render_context ?? null,
@@ -1364,6 +1367,7 @@ const ProjectQuoteDetail = () => {
     cost_total_per_unit: it.costTotalPerUnit ?? null,
     cost_breakdown_json: it.costBreakdown,
     effective_category_factors: it.effectiveCategoryFactors ?? null,
+    salgspris: it.salgspris ?? null,
   }));
   const toSharedPricing = (line: QuoteLine) => line.pricing ? {
     pricing_mode: line.pricing.pricingMode,

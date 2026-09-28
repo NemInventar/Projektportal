@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
-import { calculateLine, pricingFromLine } from '@/lib/quotePricing';
+import { calculateLine, pricingFromLine, salgsprisFromRow } from '@/lib/quotePricing';
 import Layout from '@/components/Layout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -330,7 +330,7 @@ const ProjectQuotes = () => {
         .select(`
           id, quantity, archived,
           pricing_mode, markup_pct, target_unit_price, risk_per_unit, effective_category_factors, adjust_pct,
-          project_quote_line_items_2026_01_16_23_00(qty,cost_breakdown_json,cost_total_per_unit,effective_category_factors)
+          project_quote_line_items_2026_01_16_23_00(qty,cost_breakdown_json,cost_total_per_unit,effective_category_factors,project_products_2026_01_15_12_49(salgspris))
         `)
         .eq('project_quote_id', quoteId)
         .neq('archived', true);
@@ -348,6 +348,7 @@ const ProjectQuotes = () => {
           cost_total_per_unit: it.cost_total_per_unit != null ? parseFloat(it.cost_total_per_unit) : null,
           cost_breakdown_json: it.cost_breakdown_json,
           effective_category_factors: it.effective_category_factors ?? null,
+          salgspris: salgsprisFromRow(it),
         }));
         const t = calculateLine(items, parseFloat(line.quantity) || 0, pricingFromLine(line));
         totalSellingPrice += t.totalSellingPrice;

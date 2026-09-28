@@ -20,7 +20,7 @@ import React from 'react';
 import { pdf } from '@react-pdf/renderer';
 import { QuotePDF } from './QuotePDF.tsx';
 import { QuoteAppendixPDF } from './QuoteAppendixPDF.tsx';
-import { calculateLine, pricingFromLine } from './quotePricing.ts';
+import { calculateLine, pricingFromLine, salgsprisFromRow } from './quotePricing.ts';
 import { PDFDocument } from 'pdf-lib';
 
 interface LineItemRow {
@@ -131,7 +131,7 @@ async function loadQuoteData(
     .from('project_quote_lines_2026_01_16_23_00')
     .select(`
       *,
-      project_quote_line_items_2026_01_16_23_00(*)
+      project_quote_line_items_2026_01_16_23_00(*, project_products_2026_01_15_12_49(salgspris))
     `)
     .eq('project_quote_id', quoteId)
     .neq('archived', true)
@@ -218,6 +218,7 @@ async function renderQuotePdf(loaded: LoadedQuoteData): Promise<Uint8Array> {
       cost_total_per_unit: it.cost_total_per_unit != null ? Number(it.cost_total_per_unit) : 0,
       cost_breakdown_json: it.cost_breakdown_json,
       effective_category_factors: it.effective_category_factors ?? null,
+      salgspris: salgsprisFromRow(it),
     }));
     const pricing = pricingFromLine(line);
     const t = calculateLine(items, Number(line.quantity ?? 0), pricing);

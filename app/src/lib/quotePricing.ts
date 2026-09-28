@@ -21,6 +21,9 @@
  * Risk lægges altid oveni cost som "risk_per_unit" og trækkes IKKE som margin.
  * (Cost → Risk → Margin-rækkefølgen fra ARCHITECTURE.md §3.4). I faktor-mode går risk igennem ×1.
  *
+ * L3 (28-09-2026): har produktet en godkendt salgspris (project_products.salgspris), sælges varen til
+ * antal × salgspris — uden faktor/avance. Fast linjepris vinder stadig. Risiko og adjust_pct ligger på posten.
+ *
  * Spejl af DB-funktionen fn_quote_line_sell — ændres formlen ét sted, skal den ændres begge steder.
  */
 
@@ -66,6 +69,9 @@ export interface CostItem {
   cost_total_per_unit?: number | null;
   /** Produktets eget faktorsæt (materialiseret af DB). NULL/undefined = arv linjens category_factors. */
   effective_category_factors?: CategoryFactors | null;
+  /** L3 (28-09-2026): produktets godkendte salgspris pr. enhed (project_products.salgspris).
+   *  Sat → varen sælges til antal × salgspris (ingen faktor/avance). NULL = regnes af kost som før. */
+  salgspris?: number | null;
   cost_breakdown_json?: {
     materials?: number;
     material_transport?: number;
@@ -172,11 +178,17 @@ export function sellingPricePerUnit(
   }
 
   const adj = 1 + (pricing.adjust_pct ?? 0) / 100;
+  // L3: varer hvis produkt har salgspris sælges til antal × salgspris; resten regnes som før
+  const hasSp = (it: CostItem) => it.salgspris != null;
+  const spPerUnit = lineQuantity > 0
+    ? items.filter(hasSp).reduce((a, it) => a + (it.salgspris as number) * (it.qty ?? 0), 0) / lineQuantity
+    : 0;
 
   if (pricing.pricing_mode === 'category_factors') {
     const lineF = pricing.category_factors ?? {};
     let total = 0;
     for (const it of items) {
+      if (hasSp(it)) continue;
       const c = itemCostByCategory(it);
       const f = it.effective_category_factors ?? lineF; // produktets eget faktorsæt, ellers linjens
       let itemSell = 0;
@@ -184,12 +196,13 @@ export function sellingPricePerUnit(
       total += itemSell * (it.qty ?? 0);
     }
     const sellPerUnit = lineQuantity > 0 ? total / lineQuantity : 0;
-    return (sellPerUnit + risk) * adj;
+    return (sellPerUnit + spPerUnit + risk) * adj;
   }
 
-  // markup_pct default
+  // markup_pct default — avancen lægges kun på varer uden salgspris
   const markup = pricing.markup_pct ?? 0;
-  return totalCostPerUnit * (1 + markup / 100) * adj;
+  const costNoSpPerUnit = costPerUnit(items.filter(it => !hasSp(it)), lineQuantity);
+  return ((costNoSpPerUnit + risk) * (1 + markup / 100) + spPerUnit) * adj;
 }
 
 /**
@@ -228,6 +241,7 @@ export function itemSellPerUnit(
   if (pricing.pricing_mode === 'category_factors') {
     const lineF = pricing.category_factors ?? {};
     return items.map(it => {
+      if (it.salgspris != null) return it.salgspris * adj;
       const c = itemCostByCategory(it);
       const f = it.effective_category_factors ?? lineF;
       let s = 0;
@@ -237,7 +251,7 @@ export function itemSellPerUnit(
   }
 
   const markup = pricing.markup_pct ?? 0;
-  return items.map(it => itemCostPerUnit(it) * (1 + markup / 100) * adj);
+  return items.map(it => (it.salgspris != null ? it.salgspris : itemCostPerUnit(it) * (1 + markup / 100)) * adj);
 }
 
 export interface LineTotals {
@@ -335,5 +349,16 @@ export function costItemFromRow(it: any): CostItem {
     cost_total_per_unit: it?.cost_total_per_unit != null ? Number(it.cost_total_per_unit) : null,
     cost_breakdown_json: it?.cost_breakdown_json ?? null,
     effective_category_factors: toFactors(it?.effective_category_factors),
+    salgspris: salgsprisFromRow(it),
   };
+}
+
+/** L3: produktets salgspris fra en item-række — flad (`salgspris`) eller embedded via FK
+ *  (`project_products_2026_01_15_12_49(salgspris)`). Prisen bor på produktet, aldrig på varen. */
+export function salgsprisFromRow(it: any): number | null {
+  const pp = it?.project_products_2026_01_15_12_49;
+  const raw = it?.salgspris ?? (Array.isArray(pp) ? pp[0]?.salgspris : pp?.salgspris);
+  if (raw == null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
 }
