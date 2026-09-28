@@ -4,7 +4,7 @@ import { pdf } from '@react-pdf/renderer';
 import { QuotePDF } from '@/components/QuotePDF';
 import { QuoteAppendixPDF } from '@/components/QuoteAppendixPDF';
 import { supabase } from '@/integrations/supabase/client';
-import { calculateLine, itemSellPerUnit, COST_CATEGORIES, COST_CATEGORY_LABELS, type CategoryFactors, type PricingMode } from '@/lib/quotePricing';
+import { calculateLine, itemSellPerUnit, itemCostByCategory, COST_CATEGORIES, COST_CATEGORY_LABELS, type CategoryFactors, type CostCategory, type PricingMode } from '@/lib/quotePricing';
 import Layout from '@/components/Layout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -453,6 +453,10 @@ const ProjectQuoteDetail = () => {
   // Material summary data (Q-V1-10)
   const [productMaterialLines, setProductMaterialLines] = useState<any[]>([]);
   const [projectMaterials, setProjectMaterials] = useState<any[]>([]);
+  // Produkternes øvrige styklistelinjer (arbejde, transport, øvrigt) — til nedbrydningen pr. produkt (28-09-2026)
+  const [productLaborLines, setProductLaborLines] = useState<any[]>([]);
+  const [productTransportLines, setProductTransportLines] = useState<any[]>([]);
+  const [productOtherLines, setProductOtherLines] = useState<any[]>([]);
   
   // Update all prices state
   const [updatingAllPrices, setUpdatingAllPrices] = useState(false);
@@ -824,6 +828,16 @@ const ProjectQuoteDetail = () => {
         .in('project_product_id', Array.from(productIds));
 
       if (materialLinesError) throw materialLinesError;
+
+      const pidList = Array.from(productIds);
+      const [laborRes, transportRes, otherRes] = await Promise.all([
+        supabase.from('project_product_labor_lines_2026_01_15_12_49').select('*').in('project_product_id', pidList),
+        supabase.from('project_product_transport_lines_2026_01_15_12_49').select('*').in('project_product_id', pidList),
+        supabase.from('project_product_other_cost_lines_2026_01_15_12_49').select('*').in('project_product_id', pidList),
+      ]);
+      setProductLaborLines(laborRes.data || []);
+      setProductTransportLines(transportRes.data || []);
+      setProductOtherLines(otherRes.data || []);
 
       // Get unique material IDs
       const materialIds = new Set<string>();
@@ -1363,6 +1377,153 @@ const ProjectQuoteDetail = () => {
     const out: Record<string, number> = {};
     line.items.forEach((it, i) => { out[it.id] = sells[i] ?? 0; });
     return out;
+  };
+
+  // Nedbrydning af ét produkt på tilbuddet (28-09-2026): styklisten på sagen linje for linje, og pr. kategori
+  // styklistens kost mod den kost prisen bygger på (cost_breakdown_json) × faktor = salg. Afviger de, vises det.
+  const kr2 = (n: number) => n.toLocaleString('da-DK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const LABOR_TYPE_CATEGORY: Record<string, CostCategory> = {
+    korpus_production: 'labor_korpus', dk_installation: 'labor_dk', production: 'labor_production', other: 'other',
+  };
+  const LABOR_TYPE_LABEL: Record<string, string> = {
+    korpus_production: 'Korpus-produktion', dk_installation: 'Montage DK', production: 'Produktion (UE)', other: 'Andet arbejde',
+  };
+  const renderItemBreakdown = (line: QuoteLine, item: QuoteLineItem, sellPerUnit: number) => {
+    const pid = item.sourceType === 'project_product' ? item.projectProductId : null;
+    type BomRow = { group: string; del: string; hvad: string; antal: string; stykpris: number | null; kost: number; cat: CostCategory };
+    const rows: BomRow[] = [];
+    if (pid) {
+      productMaterialLines.filter(l => l.project_product_id === pid)
+        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+        .forEach(l => {
+          const m = projectMaterials.find(pm => pm.id === l.project_material_id);
+          const pris = Number(l.unit_cost_override ?? m?.unit_price ?? 0);
+          const q = Number(l.qty ?? 0);
+          rows.push({ group: 'Materialer', del: l.line_title || m?.name || 'Materiale', hvad: m?.name ?? '', antal: `${kr2(q)} ${l.unit ?? ''}`, stykpris: pris, kost: q * pris, cat: 'materials' });
+        });
+      productLaborLines.filter(l => l.project_product_id === pid)
+        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+        .forEach(l => {
+          const q = Number(l.qty ?? 0); const pris = Number(l.unit_cost ?? 0);
+          rows.push({ group: 'Arbejde', del: l.title || LABOR_TYPE_LABEL[l.labor_type] || 'Arbejde', hvad: LABOR_TYPE_LABEL[l.labor_type] ?? l.labor_type ?? '', antal: `${kr2(q)} ${l.unit ?? 't'}`, stykpris: pris, kost: q * pris, cat: LABOR_TYPE_CATEGORY[l.labor_type] ?? 'other' });
+        });
+      productTransportLines.filter(l => l.project_product_id === pid).forEach(l => {
+        const q = Number(l.qty ?? 0); const pris = Number(l.unit_cost ?? 0);
+        rows.push({ group: 'Transport', del: l.title || 'Transport', hvad: '', antal: `${kr2(q)} ${l.unit ?? ''}`, stykpris: pris, kost: q * pris, cat: 'product_transport' });
+      });
+      productOtherLines.filter(l => l.project_product_id === pid).forEach(l => {
+        const q = Number(l.qty ?? 0); const pris = Number(l.unit_cost ?? 0);
+        rows.push({ group: 'Øvrigt', del: l.title || 'Øvrigt', hvad: '', antal: `${kr2(q)} ${l.unit ?? ''}`, stykpris: pris, kost: q * pris, cat: 'other' });
+      });
+    }
+    const bomByCat: Record<string, number> = {};
+    rows.forEach(r => { bomByCat[r.cat] = (bomByCat[r.cat] ?? 0) + r.kost; });
+    const priceCost = itemCostByCategory({ qty: item.qty, cost_total_per_unit: item.costTotalPerUnit, cost_breakdown_json: item.costBreakdown as any });
+    const isFactor = line.pricing?.pricingMode === 'category_factors';
+    const factors = (item.effectiveCategoryFactors ?? line.pricing?.effectiveCategoryFactors ?? {}) as CategoryFactors;
+    const cats = COST_CATEGORIES.filter(k => (priceCost[k] ?? 0) !== 0 || (bomByCat[k] ?? 0) !== 0);
+    const bomTotal = rows.reduce((a, r) => a + r.kost, 0);
+    const priceTotal = COST_CATEGORIES.reduce((a, k) => a + (priceCost[k] ?? 0), 0);
+    const factorSell = cats.reduce((a, k) => a + (priceCost[k] ?? 0) * (factors[k] ?? 1), 0);
+    const afviger = pid != null && cats.some(k => Math.abs((bomByCat[k] ?? 0) - (priceCost[k] ?? 0)) >= 1);
+    const groups = ['Materialer', 'Arbejde', 'Transport', 'Øvrigt'];
+    return (
+      <div className="pt-3 border-t space-y-4 text-sm">
+        {afviger && (
+          <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900 text-xs">
+            Styklisten passer ikke med prisen: styklisten giver {kr2(bomTotal)} kr pr. {item.unit}, prisen bygger på {kr2(priceTotal)} kr.
+            {item.costLocked ? ' Prisen er låst (fra prisbogen); styklisten på sagen er ikke opdateret.' : ' Tryk "Opdater pris" for at hente styklistens kost.'}
+          </div>
+        )}
+        {pid && (
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Stykliste pr. {item.unit} (på sagen)</div>
+            {rows.length === 0 ? (
+              <div className="text-xs text-muted-foreground">Produktet har ingen styklistelinjer.</div>
+            ) : (
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-muted-foreground border-b">
+                    <th className="text-left font-medium py-1">Del</th>
+                    <th className="text-left font-medium py-1">Materiale / type</th>
+                    <th className="text-right font-medium py-1">Antal</th>
+                    <th className="text-right font-medium py-1">Stykpris</th>
+                    <th className="text-right font-medium py-1">Kost</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {groups.filter(g => rows.some(r => r.group === g)).map(g => (
+                    <React.Fragment key={g}>
+                      <tr><td colSpan={5} className="pt-2 pb-0.5 font-semibold">{g}</td></tr>
+                      {rows.filter(r => r.group === g).map((r, i) => (
+                        <tr key={g + i} className="border-b border-muted">
+                          <td className="py-0.5 pr-2">{r.del}</td>
+                          <td className="py-0.5 pr-2 text-muted-foreground">{r.hvad !== r.del ? r.hvad : ''}</td>
+                          <td className="py-0.5 text-right tabular-nums whitespace-nowrap">{r.antal}</td>
+                          <td className="py-0.5 text-right tabular-nums whitespace-nowrap">{r.stykpris != null ? kr2(r.stykpris) : ''}</td>
+                          <td className="py-0.5 text-right tabular-nums whitespace-nowrap">{kr2(r.kost)}</td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
+                  ))}
+                  <tr className="font-semibold">
+                    <td colSpan={4} className="pt-1">Stykliste i alt</td>
+                    <td className="pt-1 text-right tabular-nums">{kr2(bomTotal)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Sådan er salgsprisen bygget pr. {item.unit}</div>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-muted-foreground border-b">
+                <th className="text-left font-medium py-1">Kategori</th>
+                {pid && <th className="text-right font-medium py-1">Stykliste</th>}
+                <th className="text-right font-medium py-1">Kost i prisen</th>
+                {isFactor && <th className="text-right font-medium py-1">Faktor</th>}
+                {isFactor && <th className="text-right font-medium py-1">Salg</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {cats.map(k => {
+                const diff = pid ? Math.abs((bomByCat[k] ?? 0) - (priceCost[k] ?? 0)) >= 1 : false;
+                return (
+                  <tr key={k} className="border-b border-muted">
+                    <td className="py-0.5">{COST_CATEGORY_LABELS[k]}</td>
+                    {pid && <td className={`py-0.5 text-right tabular-nums ${diff ? 'text-amber-700 font-medium' : ''}`}>{bomByCat[k] != null ? kr2(bomByCat[k]) : '–'}</td>}
+                    <td className="py-0.5 text-right tabular-nums">{kr2(priceCost[k] ?? 0)}</td>
+                    {isFactor && <td className="py-0.5 text-right tabular-nums">× {(factors[k] ?? 1).toLocaleString('da-DK')}</td>}
+                    {isFactor && <td className="py-0.5 text-right tabular-nums">{kr2((priceCost[k] ?? 0) * (factors[k] ?? 1))}</td>}
+                  </tr>
+                );
+              })}
+              {isFactor && Math.abs(sellPerUnit - factorSell) >= 0.01 && (
+                <tr className="border-b border-muted">
+                  <td className="py-0.5">Linjejustering ({(line.pricing?.adjustPct ?? 0).toLocaleString('da-DK')} %)</td>
+                  {pid && <td />}<td /><td />
+                  <td className="py-0.5 text-right tabular-nums">{kr2(sellPerUnit - factorSell)}</td>
+                </tr>
+              )}
+              <tr className="font-semibold">
+                <td className="pt-1">I alt pr. {item.unit}</td>
+                {pid && <td className="pt-1 text-right tabular-nums">{kr2(bomTotal)}</td>}
+                <td className="pt-1 text-right tabular-nums">{kr2(priceTotal)}</td>
+                {isFactor && <td />}
+                {isFactor && <td className="pt-1 text-right tabular-nums">{kr2(sellPerUnit)}</td>}
+              </tr>
+            </tbody>
+          </table>
+          <div className="text-xs text-muted-foreground mt-1">
+            Salgspris {kr2(sellPerUnit)} kr · kost {kr2(priceTotal)} kr · DB {kr2(sellPerUnit - priceTotal)} kr
+            {sellPerUnit > 0 ? ` = ${((1 - priceTotal / sellPerUnit) * 100).toLocaleString('da-DK', { maximumFractionDigits: 1 })} %` : ''}
+            {!isFactor ? ' · linjen har fast pris/avance — salget er fordelt efter kost' : ''}
+          </div>
+        </div>
+      </div>
+    );
   };
 
   const calculateLineTotals = (line: QuoteLine) => {
@@ -5559,42 +5720,8 @@ const ProjectQuoteDetail = () => {
                                           </Button>
                                         </div>
                                       </div>
-                                      {/* Expanded breakdown — aligned med parent-kolonnerne */}
-                                      {isExpanded && item.costBreakdown && (
-                                        <div className="text-xs text-muted-foreground pt-2 border-t space-y-1">
-                                          {/* Samme kategoriliste som prisformlen (quotePricing) — ellers summer rækkerne ikke til Total cost */}
-                                          {COST_CATEGORIES.map(slot => {
-                                            const val = (item.costBreakdown as any)?.[slot] ?? 0;
-                                            const total = val * localQty;
-                                            const isActive = val > 0;
-                                            return (
-                                              <div
-                                                key={slot}
-                                                className={`grid grid-cols-[24px_minmax(0,1fr)_130px_110px_110px_110px_110px_180px] gap-3 ${isActive ? 'text-foreground' : ''}`}
-                                              >
-                                                <span />
-                                                <span>{COST_SLOT_LABELS[slot]}</span>
-                                                <span />
-                                                <span className="text-right tabular-nums">{val.toLocaleString('da-DK')} kr / {item.unit}</span>
-                                                <span className="text-right tabular-nums">{total.toLocaleString('da-DK')} kr</span>
-                                                <span />
-                                                <span />
-                                                <span />
-                                              </div>
-                                            );
-                                          })}
-                                          <div className="grid grid-cols-[24px_minmax(0,1fr)_130px_110px_110px_110px_110px_180px] gap-3 font-medium text-emerald-600 pt-1 border-t">
-                                            <span />
-                                            <span>Total cost</span>
-                                            <span />
-                                            <span className="text-right tabular-nums">{formatCurrency(item.costTotalPerUnit)} / {item.unit}</span>
-                                            <span className="text-right tabular-nums">{formatCurrency(item.costTotalPerUnit * localQty)}</span>
-                                            <span />
-                                            <span />
-                                            <span />
-                                          </div>
-                                        </div>
-                                      )}
+                                      {/* Nedbrydning: stykliste linje for linje + kost i prisen × faktor = salg (28-09-2026) */}
+                                      {isExpanded && renderItemBreakdown(line, item, sellPerUnit)}
                                     </div>
                                   );
                                 })()}
