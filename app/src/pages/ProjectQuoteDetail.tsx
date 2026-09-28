@@ -236,6 +236,8 @@ interface QuoteLineItem {
   factorProfile?: string | null;
   /** Materialiseret af DB fra factorProfile/overstyring. null = brug linjens faktorsæt. */
   effectiveCategoryFactors?: CategoryFactors | null;
+  /** Låst til prisbogens/en aftalt pris — må ikke få ny kost fra produktets stykliste (DB-vagt trg_kost_laast_vagt). */
+  costLocked?: boolean;
 }
 
 interface CostBreakdown {
@@ -743,6 +745,7 @@ const ProjectQuoteDetail = () => {
             costTotalPerUnit: parseFloat(item.cost_total_per_unit || 0),
             factorProfile: item.factor_profile ?? null,
             effectiveCategoryFactors: item.effective_category_factors ?? null,
+            costLocked: item.cost_locked === true,
           })) || [],
           // Billed/render-felter
           renderContext: line.render_context ?? null,
@@ -2103,9 +2106,10 @@ const ProjectQuoteDetail = () => {
     setCheckingUpdates(true);
     try {
       const productItems = lines.flatMap(line => 
-        line.items.filter(item => item.sourceType === 'project_product' && item.projectProductId)
+        // Låste varer (prisbogens pris) sammenlignes ikke med styklisten — ellers tilbyder "Opdater alle priser" at overskrive dem
+        line.items.filter(item => item.sourceType === 'project_product' && item.projectProductId && !item.costLocked)
       );
-      
+
       if (productItems.length === 0) return;
       
       const productIds = productItems.map(item => item.projectProductId).filter(Boolean);
@@ -2686,8 +2690,8 @@ const ProjectQuoteDetail = () => {
       // Find all product items with 0 or null cost
       const zeroCostItems = line.items.filter(
         item => item.sourceType === 'project_product' && 
-                (item.costTotalPerUnit === 0 || item.costTotalPerUnit === null || !item.costTotalPerUnit) && 
-                item.projectProductId
+                (item.costTotalPerUnit === 0 || item.costTotalPerUnit === null || !item.costTotalPerUnit) &&
+                item.projectProductId && !item.costLocked
       );
       
       console.log('Found zero cost items:', zeroCostItems.length, zeroCostItems.map(i => ({ title: i.title, cost: i.costTotalPerUnit })));
@@ -2737,11 +2741,11 @@ const ProjectQuoteDetail = () => {
       
       // Find all product items across all lines
       const allProductItems = lines.flatMap(line => 
-        line.items.filter(item => 
-          item.sourceType === 'project_product' && item.projectProductId
+        line.items.filter(item =>
+          item.sourceType === 'project_product' && item.projectProductId && !item.costLocked
         )
       );
-      
+
       console.log('Updating all product prices. Total items:', allProductItems.length);
       
       if (allProductItems.length === 0) {
@@ -6653,7 +6657,7 @@ const ProjectQuoteDetail = () => {
             </DialogHeader>
             <div className="py-4">
               <p className="mb-4">
-                Dette vil opdatere ALLE {lines.flatMap(line => line.items.filter(item => item.sourceType === 'project_product' && item.projectProductId)).length} produkter i tilbuddet til deres nyeste priser fra produktdatabasen.
+                Dette vil opdatere ALLE {lines.flatMap(line => line.items.filter(item => item.sourceType === 'project_product' && item.projectProductId && !item.costLocked)).length} produkter i tilbuddet til deres nyeste priser fra produktdatabasen.
               </p>
               <p className="text-sm text-muted-foreground mb-2">
                 <strong>Eksisterende priser vil blive overskrevet.</strong>
