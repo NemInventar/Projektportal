@@ -732,7 +732,10 @@ const ProjectQuoteDetail = () => {
             effectiveCategoryFactors: line.effective_category_factors ?? null,
             adjustPct: line.adjust_pct != null ? parseFloat(line.adjust_pct) : 0,
           },
-          items: line.project_quote_line_items_2026_01_16_23_00?.map((item: any) => ({
+          // Varerne i tilbudslistens rækkefølge: positionsnummeret i titlen, numerisk (4.4.2.2 før 4.4.2.10)
+          items: [...(line.project_quote_line_items_2026_01_16_23_00 ?? [])]
+            .sort((a: any, b: any) => String(a.title ?? '').localeCompare(String(b.title ?? ''), 'da', { numeric: true }))
+            .map((item: any) => ({
             id: item.id,
             sourceType: item.source_type,
             projectProductId: item.project_product_id,
