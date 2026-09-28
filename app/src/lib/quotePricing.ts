@@ -192,6 +192,54 @@ export function sellingPricePerUnit(
   return totalCostPerUnit * (1 + markup / 100) * adj;
 }
 
+/**
+ * Salgspris pr. enhed for hvert item på linjen (28-09-2026), i samme rækkefølge som items.
+ * Samme formel som sellingPricePerUnit, så Σ item_salg × item.qty + postens tillæg = linjens salg.
+ * - category_factors: Σ kost_kategori × faktor (itemets eget sæt, ellers linjens) × adjust
+ * - markup_pct: vareforbrug × (1 + markup) × adjust
+ * - target_unit_price: linjens faste pris fordelt efter kost (inkl. Korpus); uden kost efter antal
+ * Risikotillægget hører til posten og fordeles ikke ud på produkterne.
+ */
+export function itemSellPerUnit(
+  items: CostItem[],
+  lineQuantity: number,
+  pricing: LinePricing | null | undefined,
+): number[] {
+  if (!pricing) return items.map(it => itemCostPerUnit(it));
+
+  if (pricing.pricing_mode === 'target_unit_price' && pricing.target_unit_price != null) {
+    const total = pricing.target_unit_price * lineQuantity;
+    const weights = items.map(it => {
+      const c = itemCostByCategory(it);
+      return COST_CATEGORIES.reduce((a, k) => a + c[k], 0) * (it.qty ?? 0);
+    });
+    const wSum = weights.reduce((a, w) => a + w, 0);
+    const qSum = items.reduce((a, it) => a + (it.qty ?? 0), 0);
+    return items.map((it, i) => {
+      const q = it.qty ?? 0;
+      if (q <= 0) return 0;
+      if (wSum > 0) return (total * weights[i]) / wSum / q;
+      return qSum > 0 ? total / qSum : 0;
+    });
+  }
+
+  const adj = 1 + (pricing.adjust_pct ?? 0) / 100;
+
+  if (pricing.pricing_mode === 'category_factors') {
+    const lineF = pricing.category_factors ?? {};
+    return items.map(it => {
+      const c = itemCostByCategory(it);
+      const f = it.effective_category_factors ?? lineF;
+      let s = 0;
+      for (const k of COST_CATEGORIES) s += c[k] * (f[k] ?? 1);
+      return s * adj;
+    });
+  }
+
+  const markup = pricing.markup_pct ?? 0;
+  return items.map(it => itemCostPerUnit(it) * (1 + markup / 100) * adj);
+}
+
 export interface LineTotals {
   costPerUnit: number;
   riskPerUnit: number;

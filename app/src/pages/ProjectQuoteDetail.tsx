@@ -4,7 +4,7 @@ import { pdf } from '@react-pdf/renderer';
 import { QuotePDF } from '@/components/QuotePDF';
 import { QuoteAppendixPDF } from '@/components/QuoteAppendixPDF';
 import { supabase } from '@/integrations/supabase/client';
-import { calculateLine, COST_CATEGORIES, COST_CATEGORY_LABELS, type CategoryFactors, type PricingMode } from '@/lib/quotePricing';
+import { calculateLine, itemSellPerUnit, COST_CATEGORIES, COST_CATEGORY_LABELS, type CategoryFactors, type PricingMode } from '@/lib/quotePricing';
 import Layout from '@/components/Layout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -1342,6 +1342,29 @@ const ProjectQuoteDetail = () => {
     }
   };
 
+  const toSharedItems = (line: QuoteLine) => line.items.map(it => ({
+    qty: it.qty,
+    cost_total_per_unit: it.costTotalPerUnit ?? null,
+    cost_breakdown_json: it.costBreakdown,
+    effective_category_factors: it.effectiveCategoryFactors ?? null,
+  }));
+  const toSharedPricing = (line: QuoteLine) => line.pricing ? {
+    pricing_mode: line.pricing.pricingMode,
+    markup_pct: line.pricing.markupPct ?? 25,
+    target_unit_price: line.pricing.targetUnitPrice ?? null,
+    risk_per_unit: line.pricing.riskPerUnit ?? 0,
+    category_factors: line.pricing.effectiveCategoryFactors ?? null,
+    adjust_pct: line.pricing.adjustPct ?? 0,
+  } : null;
+
+  // Salg pr. enhed pr. produkt (28-09-2026): samme formel som linjen, så produkterne + postens tillæg = linjens salg
+  const lineItemSells = (line: QuoteLine): Record<string, number> => {
+    const sells = itemSellPerUnit(toSharedItems(line), line.quantity, toSharedPricing(line));
+    const out: Record<string, number> = {};
+    line.items.forEach((it, i) => { out[it.id] = sells[i] ?? 0; });
+    return out;
+  };
+
   const calculateLineTotals = (line: QuoteLine) => {
     // Calculate cost breakdown per unit (til visning + % af salgspris i UI)
     const totalCostBreakdown = line.items.reduce((acc, item) => {
@@ -1375,21 +1398,7 @@ const ProjectQuoteDetail = () => {
     } : { materials: 0, material_transport: 0, product_transport: 0, labor_production: 0, labor_korpus: 0, labor_dk: 0, other: 0 };
 
     // Delegér sell/cost/profit-beregning til shared helper for konsistens med lister + dashboard
-    const sharedItems = line.items.map(it => ({
-      qty: it.qty,
-      cost_total_per_unit: it.costTotalPerUnit ?? null,
-      cost_breakdown_json: it.costBreakdown,
-      effective_category_factors: it.effectiveCategoryFactors ?? null,
-    }));
-    const sharedPricing = line.pricing ? {
-      pricing_mode: line.pricing.pricingMode,
-      markup_pct: line.pricing.markupPct ?? 25,
-      target_unit_price: line.pricing.targetUnitPrice ?? null,
-      risk_per_unit: line.pricing.riskPerUnit ?? 0,
-      category_factors: line.pricing.effectiveCategoryFactors ?? null,
-      adjust_pct: line.pricing.adjustPct ?? 0,
-    } : null;
-    const t = calculateLine(sharedItems, line.quantity, sharedPricing);
+    const t = calculateLine(toSharedItems(line), line.quantity, toSharedPricing(line));
 
     const baseCostPerUnit = t.costPerUnit;
     const riskPerUnit = t.riskPerUnit;
@@ -5416,6 +5425,7 @@ const ProjectQuoteDetail = () => {
                                   const primarySlot = isSinglePurpose ? activeSlots[0] : null;
                                   const isExpanded = expandedItemIds.has(item.id);
                                   const localQty = itemQtyEdits[item.id] ?? item.qty;
+                                  const sellPerUnit = lineItemSells(line)[item.id] ?? 0;
                                   const toggleExpand = () => setExpandedItemIds(prev => {
                                     const next = new Set(prev);
                                     if (next.has(item.id)) next.delete(item.id); else next.add(item.id);
@@ -5424,7 +5434,7 @@ const ProjectQuoteDetail = () => {
                                   return (
                                     <div className="space-y-2">
                                       {/* Compact line — grid med faste kolonner så rækkerne flugter */}
-                                      <div className="grid grid-cols-[24px_minmax(0,1fr)_140px_140px_140px_180px] items-center gap-3">
+                                      <div className="grid grid-cols-[24px_minmax(0,1fr)_130px_110px_110px_110px_110px_180px] items-center gap-3">
                                         {/* 1. Chevron */}
                                         <button
                                           type="button"
@@ -5482,13 +5492,19 @@ const ProjectQuoteDetail = () => {
                                           />
                                           <span className="text-sm text-muted-foreground">{item.unit}</span>
                                         </div>
-                                        {/* 4. Pris pr. enhed */}
-                                        <span className="text-sm text-right tabular-nums">
+                                        {/* 4–5. Kost pr. enhed + i alt */}
+                                        <span className="text-sm text-right tabular-nums text-muted-foreground" title="Kost pr. enhed">
                                           {formatCurrency(item.costTotalPerUnit)} / {item.unit}
                                         </span>
-                                        {/* 5. Total */}
-                                        <span className="text-sm font-semibold text-right tabular-nums">
+                                        <span className="text-sm text-right tabular-nums text-muted-foreground" title="Kost i alt">
                                           {formatCurrency(item.costTotalPerUnit * item.qty)}
+                                        </span>
+                                        {/* 6–7. Salg pr. enhed + i alt (samme formel som linjen) */}
+                                        <span className="text-sm text-right tabular-nums" title="Salgspris pr. enhed">
+                                          {formatCurrency(sellPerUnit)} / {item.unit}
+                                        </span>
+                                        <span className="text-sm font-semibold text-right tabular-nums" title="Salg i alt">
+                                          {formatCurrency(sellPerUnit * localQty)}
                                         </span>
                                         {/* 6. Actions */}
                                         <div className="flex gap-1 justify-end">
@@ -5541,7 +5557,7 @@ const ProjectQuoteDetail = () => {
                                             return (
                                               <div
                                                 key={slot}
-                                                className={`grid grid-cols-[24px_minmax(0,1fr)_140px_140px_140px_180px] gap-3 ${isActive ? 'text-foreground' : ''}`}
+                                                className={`grid grid-cols-[24px_minmax(0,1fr)_130px_110px_110px_110px_110px_180px] gap-3 ${isActive ? 'text-foreground' : ''}`}
                                               >
                                                 <span />
                                                 <span>{COST_SLOT_LABELS[slot]}</span>
@@ -5549,15 +5565,19 @@ const ProjectQuoteDetail = () => {
                                                 <span className="text-right tabular-nums">{val.toLocaleString('da-DK')} kr / {item.unit}</span>
                                                 <span className="text-right tabular-nums">{total.toLocaleString('da-DK')} kr</span>
                                                 <span />
+                                                <span />
+                                                <span />
                                               </div>
                                             );
                                           })}
-                                          <div className="grid grid-cols-[24px_minmax(0,1fr)_140px_140px_140px_180px] gap-3 font-medium text-emerald-600 pt-1 border-t">
+                                          <div className="grid grid-cols-[24px_minmax(0,1fr)_130px_110px_110px_110px_110px_180px] gap-3 font-medium text-emerald-600 pt-1 border-t">
                                             <span />
                                             <span>Total cost</span>
                                             <span />
                                             <span className="text-right tabular-nums">{formatCurrency(item.costTotalPerUnit)} / {item.unit}</span>
                                             <span className="text-right tabular-nums">{formatCurrency(item.costTotalPerUnit * localQty)}</span>
+                                            <span />
+                                            <span />
                                             <span />
                                           </div>
                                         </div>
@@ -5567,6 +5587,22 @@ const ProjectQuoteDetail = () => {
                                 })()}
                               </div>
                             ))}
+                            {/* Postens tillæg/fradrag (risikotillæg) — så produkterne + tillæg = linjens salg */}
+                            {(() => {
+                              const sells = lineItemSells(line);
+                              const productsSell = line.items.reduce((a, it) => a + (sells[it.id] ?? 0) * it.qty, 0);
+                              const rest = calculateLineTotals(line).totalSellingPrice - productsSell;
+                              if (Math.abs(rest) < 0.5) return null;
+                              return (
+                                <div className="px-3 grid grid-cols-[24px_minmax(0,1fr)_130px_110px_110px_110px_110px_180px] gap-3 text-sm text-muted-foreground">
+                                  <span />
+                                  <span>{rest < 0 ? 'Fradrag på posten' : 'Tillæg på posten'} (risikotillæg)</span>
+                                  <span /><span /><span /><span />
+                                  <span className="text-right tabular-nums font-semibold">{formatCurrency(rest)}</span>
+                                  <span />
+                                </div>
+                              );
+                            })()}
                           </div>
                         ) : (
                           <div className="text-center py-6 text-muted-foreground border-2 border-dashed rounded">
