@@ -564,16 +564,8 @@ const ProjectQuoteDetail = () => {
     }
   }, [lines]);
 
-  // Skriv cached_sell_total tilbage til databasen når lines ændres
-  useEffect(() => {
-    if (!id || lines.length === 0) return;
-    const total = lines.reduce((acc, line) => acc + calculateLineTotals(line).totalSellingPrice, 0);
-    supabase
-      .from('project_quotes_2026_01_16_23_00')
-      .update({ cached_sell_total: total })
-      .eq('id', id)
-      .then(() => {});
-  }, [lines, id]);
+  // cached_sell_total/cached_option_total skrives KUN af DB'en (recompute_quote_sell_total via
+  // triggere på linjer og varer, uden optioner). Browseren skrev tidligere en sum inkl. optioner tilbage.
 
   // Load material data for material summary (Q-V1-10)
   useEffect(() => {
