@@ -5372,6 +5372,17 @@ const ProjectQuoteDetail = () => {
                         
                         {line.items.length > 0 ? (
                           <div className="space-y-2">
+                            {/* Kolonneoverskrifter — samme grid som produktrækkerne */}
+                            <div className="px-3 grid grid-cols-[24px_minmax(0,1fr)_130px_110px_110px_110px_110px_180px] gap-3 text-xs font-medium text-muted-foreground">
+                              <span />
+                              <span>Produkt</span>
+                              <span>Antal</span>
+                              <span className="text-right">Kost / enh.</span>
+                              <span className="text-right">Kost i alt</span>
+                              <span className="text-right text-foreground">Salg / enh.</span>
+                              <span className="text-right text-foreground">Salg i alt</span>
+                              <span />
+                            </div>
                             {line.items.map((item) => (
                               <div key={item.id} className="p-3 bg-muted/50 rounded border">
                                 {editingItem === item.id ? (
@@ -5445,8 +5456,9 @@ const ProjectQuoteDetail = () => {
                                           {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                                         </button>
                                         {/* 2. Titel + badge */}
-                                        <div className="flex items-center gap-2 min-w-0">
-                                          <span className="font-medium truncate">{item.title}</span>
+                                        <div className="min-w-0">
+                                          <div className="font-medium break-words leading-snug" title={item.title}>{item.title}</div>
+                                          <div className="flex flex-wrap items-center gap-2 mt-1">
                                           {primarySlot ? (
                                             <Badge className={`text-xs shrink-0 ${COST_SLOT_BADGE_CLASSES[primarySlot] || ''}`}>
                                               {COST_SLOT_LABELS[primarySlot]}
@@ -5477,6 +5489,7 @@ const ProjectQuoteDetail = () => {
                                               ))}
                                             </select>
                                           )}
+                                          </div>
                                         </div>
                                         {/* 3. Antal + enhed */}
                                         <div className="flex items-center gap-2">
