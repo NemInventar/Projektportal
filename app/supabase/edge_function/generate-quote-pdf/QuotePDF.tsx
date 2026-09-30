@@ -203,6 +203,53 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: PALETTE.muted,
   },
+  // Niveau 2: varerne under en post (antal + enhed + titel, ingen priser)
+  rowWithItems: {
+    borderBottomWidth: 0,
+    paddingBottom: 3,
+  },
+  itemsBlock: {
+    paddingLeft: 28,
+    paddingRight: 6,
+    paddingBottom: 8,
+    borderBottomWidth: 0.3,
+    borderBottomColor: PALETTE.line,
+  },
+  itemsLabel: {
+    fontSize: 6.5,
+    fontFamily: 'Helvetica-Bold',
+    color: PALETTE.muted,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginBottom: 3,
+  },
+  itemRow: {
+    flexDirection: 'row',
+    paddingVertical: 1.5,
+  },
+  itemQty: {
+    width: 52,
+    fontSize: 8.5,
+    color: PALETTE.ink,
+    textAlign: 'right',
+    paddingRight: 8,
+  },
+  itemTitle: {
+    flex: 1,
+    fontSize: 8.5,
+    color: PALETTE.ink,
+    lineHeight: 1.35,
+  },
+  tableNote: {
+    fontSize: 8.5,
+    color: PALETTE.muted,
+    lineHeight: 1.4,
+    marginBottom: 8,
+  },
+  // Optioner (indgår ikke i tilbudssummen)
+  optionsBlock: {
+    marginTop: 22,
+  },
   // Total-blok
   totalBlock: {
     marginTop: 14,
@@ -358,6 +405,12 @@ const styles = StyleSheet.create({
   },
 });
 
+interface PDFLineItem {
+  title: string;
+  quantity: number;
+  unit?: string | null;
+}
+
 interface PDFLine {
   title: string;
   description?: string;
@@ -365,6 +418,10 @@ interface PDFLine {
   unit: string;
   sellingPricePerUnit: number;
   totalSellingPrice: number;
+  /** Niveau 2 — vises kun når showItems er slået til på tilbuddet */
+  items?: PDFLineItem[];
+  /** Option/reguleringspost — står i egen tabel og tæller ikke med i summen */
+  isOption?: boolean;
 }
 
 interface PDFCustomer {
@@ -400,6 +457,8 @@ interface QuotePDFProps {
   createdBy?: PDFCreatedBy;
   introText?: string | null;
   notes?: string | null;
+  /** Vis varerne under hver post (project_quotes.pdf_show_items) */
+  showItems?: boolean;
 }
 
 const fmt = (n: number) =>
@@ -407,6 +466,9 @@ const fmt = (n: number) =>
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   }).format(n) + ' kr.';
+
+const fmtQty = (n: number) =>
+  new Intl.NumberFormat('da-DK', { maximumFractionDigits: 2 }).format(n);
 
 const formatCustomerAddress = (c?: PDFCustomer): string | null => {
   if (!c) return null;
@@ -431,9 +493,13 @@ export function QuotePDF({
   createdBy,
   introText,
   notes,
+  showItems = false,
 }: QuotePDFProps) {
+  // Optioner står i egen tabel og tæller ikke med i summen (samme regel som cached_option_total)
+  const mainLines = lines.filter(l => !l.isOption);
+  const optionLines = lines.filter(l => l.isOption);
   // Subtotal og moms beregnes kun ud fra prissatte linjer
-  const subtotal = lines.reduce((sum, l) => sum + (l.totalSellingPrice || 0), 0);
+  const subtotal = mainLines.reduce((sum, l) => sum + (l.totalSellingPrice || 0), 0);
   const vat = Math.round(subtotal * 0.25);
   const grandTotal = subtotal + vat;
 
@@ -441,6 +507,63 @@ export function QuotePDF({
 
   const intro = introText
     || 'Hermed vores tilbud på de beskrevne poster. Tilbuddet er udarbejdet på baggrund af det modtagne projektmateriale og forudsætninger angivet under vilkår.';
+
+  const tableHeader = (
+    <View style={styles.tableHeader}>
+      <Text style={[styles.tableHeaderText, styles.colNo]}>Nr.</Text>
+      <Text style={[styles.tableHeaderText, styles.colDesc]}>Beskrivelse</Text>
+      <Text style={[styles.tableHeaderText, styles.colQty]}>Antal</Text>
+      <Text style={[styles.tableHeaderText, styles.colUnit]}>Enh.</Text>
+      <Text style={[styles.tableHeaderText, styles.colUnitPrice]}>Enhedspris</Text>
+      <Text style={[styles.tableHeaderText, styles.colTotal]}>I alt</Text>
+    </View>
+  );
+
+  const renderLines = (list: PDFLine[], withItems: boolean) =>
+    list.flatMap((line, i) => {
+      // 0/tom = uprissat linje ("—"). Negative beløb SKAL vises — reduktions-/rabatlinjer
+      // (fx "Optimering -42.000") indgår i subtotalen og må ikke stå med blank beløbskolonne.
+      const hasPrice = !!line.totalSellingPrice;
+      const items = withItems ? (line.items ?? []) : [];
+      const rows = [
+        <View
+          key={`l${i}`}
+          style={items.length ? [styles.row, styles.rowWithItems] : styles.row}
+          wrap={false}
+          minPresenceAhead={items.length ? 30 : undefined}
+        >
+          <Text style={[styles.cellMuted, styles.colNo]}>{i + 1}</Text>
+          <View style={styles.colDesc}>
+            <Text style={styles.descTitle}>{line.title}</Text>
+            {line.description ? (
+              <Text style={styles.descBody}>{line.description}</Text>
+            ) : null}
+          </View>
+          <Text style={[styles.cell, styles.colQty]}>{fmtQty(line.quantity)}</Text>
+          <Text style={[styles.cellMuted, styles.colUnit]}>{line.unit}</Text>
+          <Text style={[hasPrice ? styles.cell : styles.cellMuted, styles.colUnitPrice]}>
+            {hasPrice ? fmt(line.sellingPricePerUnit) : '—'}
+          </Text>
+          <Text style={[hasPrice ? styles.cell : styles.cellMuted, styles.colTotal]}>
+            {hasPrice ? fmt(line.totalSellingPrice) : '—'}
+          </Text>
+        </View>,
+      ];
+      if (items.length) {
+        rows.push(
+          <View key={`i${i}`} style={styles.itemsBlock}>
+            <Text style={styles.itemsLabel}>Posten omfatter</Text>
+            {items.map((it, j) => (
+              <View key={j} style={styles.itemRow} wrap={false}>
+                <Text style={styles.itemQty}>{fmtQty(it.quantity)} {it.unit || 'stk'}</Text>
+                <Text style={styles.itemTitle}>{it.title}</Text>
+              </View>
+            ))}
+          </View>
+        );
+      }
+      return rows;
+    });
 
   return (
     <Document>
@@ -499,42 +622,12 @@ export function QuotePDF({
 
         {/* Tilbudslinje-tabel */}
         <Text style={styles.sectionHeader}>Tilbudslinjer</Text>
+        {showItems ? (
+          <Text style={styles.tableNote}>Under hver post står, hvad posten omfatter.</Text>
+        ) : null}
 
-        {/* Tabel-header */}
-        <View style={styles.tableHeader}>
-          <Text style={[styles.tableHeaderText, styles.colNo]}>Nr.</Text>
-          <Text style={[styles.tableHeaderText, styles.colDesc]}>Beskrivelse</Text>
-          <Text style={[styles.tableHeaderText, styles.colQty]}>Antal</Text>
-          <Text style={[styles.tableHeaderText, styles.colUnit]}>Enh.</Text>
-          <Text style={[styles.tableHeaderText, styles.colUnitPrice]}>Enhedspris</Text>
-          <Text style={[styles.tableHeaderText, styles.colTotal]}>I alt</Text>
-        </View>
-
-        {/* Linjer */}
-        {lines.map((line, i) => {
-          // 0/tom = uprissat linje ("—"). Negative beløb SKAL vises — reduktions-/rabatlinjer
-          // (fx "Optimering -42.000") indgår i subtotalen og må ikke stå med blank beløbskolonne.
-          const hasPrice = !!line.totalSellingPrice;
-          return (
-            <View key={i} style={styles.row} wrap={false}>
-              <Text style={[styles.cellMuted, styles.colNo]}>{i + 1}</Text>
-              <View style={styles.colDesc}>
-                <Text style={styles.descTitle}>{line.title}</Text>
-                {line.description ? (
-                  <Text style={styles.descBody}>{line.description}</Text>
-                ) : null}
-              </View>
-              <Text style={[styles.cell, styles.colQty]}>{line.quantity}</Text>
-              <Text style={[styles.cellMuted, styles.colUnit]}>{line.unit}</Text>
-              <Text style={[hasPrice ? styles.cell : styles.cellMuted, styles.colUnitPrice]}>
-                {hasPrice ? fmt(line.sellingPricePerUnit) : '—'}
-              </Text>
-              <Text style={[hasPrice ? styles.cell : styles.cellMuted, styles.colTotal]}>
-                {hasPrice ? fmt(line.totalSellingPrice) : '—'}
-              </Text>
-            </View>
-          );
-        })}
+        {tableHeader}
+        {renderLines(mainLines, showItems)}
 
         {/* Total-blok */}
         <View style={styles.totalBlock} wrap={false}>
@@ -552,6 +645,18 @@ export function QuotePDF({
             <Text style={styles.grandTotalValue}>{fmt(grandTotal)}</Text>
           </View>
         </View>
+
+        {/* Optioner — egen tabel, indgår ikke i summen ovenfor */}
+        {optionLines.length ? (
+          <View style={styles.optionsBlock}>
+            <View wrap={false} minPresenceAhead={60}>
+              <Text style={styles.sectionHeader}>Optioner</Text>
+              <Text style={styles.tableNote}>Priserne er ekskl. moms og indgår ikke i tilbudssummen.</Text>
+            </View>
+            {tableHeader}
+            {renderLines(optionLines, false)}
+          </View>
+        ) : null}
 
         {/* Betalingsplan */}
         {(() => {

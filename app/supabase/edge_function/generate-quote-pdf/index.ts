@@ -54,6 +54,7 @@ interface LineRow {
   render_image_url: string | null;
   active_image_source: 'render' | 'custom' | 'none' | null;
   include_in_appendix: boolean | null;
+  is_option?: boolean | null;
   project_quote_line_items_2026_01_16_23_00: LineItemRow[];
 }
 
@@ -75,6 +76,7 @@ interface QuoteRow {
   intro_text: string | null;
   customer_remarks: string | null;
   appendix_intro_text: string | null;
+  pdf_show_items?: boolean | null;
   customer_delivery_note: string | null;
   recipient_name: string | null;
   created_by_name_resolved: string | null;
@@ -229,6 +231,11 @@ async function renderQuotePdf(loaded: LoadedQuoteData): Promise<Uint8Array> {
       unit: line.unit,
       sellingPricePerUnit: t.sellingPricePerUnit,
       totalSellingPrice: t.totalSellingPrice,
+      // Niveau 2: varerne i tilbudslistens rækkefølge (samme sortering som portalen)
+      items: [...(line.project_quote_line_items_2026_01_16_23_00 ?? [])]
+        .sort((a: any, b: any) => String(a.title ?? '').localeCompare(String(b.title ?? ''), 'da', { numeric: true }))
+        .map((it: any) => ({ title: String(it.title ?? ''), quantity: Number(it.qty ?? 0), unit: it.unit ?? null })),
+      isOption: line.is_option === true,
     };
   });
 
@@ -272,6 +279,7 @@ async function renderQuotePdf(loaded: LoadedQuoteData): Promise<Uint8Array> {
     paymentTermsTemplate: quote.resolved_payment_terms_template ?? quote.payment_terms_template ?? '50_50_levering',
     introText: quote.intro_text ?? null,
     notes: quote.customer_remarks ?? null,
+    showItems: quote.pdf_show_items === true,
     createdBy: {
       name: quote.created_by_name_resolved ?? quote.created_by_name ?? null,
       email: quote.created_by_email_resolved ?? quote.created_by_email ?? null,

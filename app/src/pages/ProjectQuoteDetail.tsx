@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
 import {
   Select,
   SelectContent,
@@ -3015,6 +3016,8 @@ const ProjectQuoteDetail = () => {
         unit: line.unit,
         sellingPricePerUnit: totals.sellingPricePerUnit,
         totalSellingPrice: totals.totalSellingPrice,
+        items: (line.items || []).map(item => ({ title: item.title, quantity: item.qty, unit: item.unit })),
+        isOption: line.isOption === true,
       };
     });
     const formatDk = (iso?: string | null) =>
@@ -3052,6 +3055,7 @@ const ProjectQuoteDetail = () => {
         paymentTermsTemplate={quote.resolved_payment_terms_template ?? '50_50_levering'}
         introText={quote.intro_text ?? null}
         notes={quote.customer_remarks ?? null}
+        showItems={quote.pdf_show_items === true}
         createdBy={{
           name: quote.created_by_name_resolved ?? quote.created_by_name ?? null,
           email: quote.created_by_email_resolved ?? quote.created_by_email ?? null,
@@ -3947,6 +3951,21 @@ const ProjectQuoteDetail = () => {
                   </Select>
                   <p className="text-xs text-muted-foreground">
                     Styrer Betalingsplan-tabellen i tilbuds-PDF'en. Adskilt fra "Betalingsbetingelser" nedenfor (der angiver fakturafrist).
+                  </p>
+                </div>
+                {/* Niveau 2 i PDF'en — varerne under hver post */}
+                <div className="space-y-2 md:col-span-2">
+                  <div className="flex items-center gap-3">
+                    <Switch
+                      id="pdf_show_items"
+                      checked={quote?.pdf_show_items === true}
+                      onCheckedChange={(v) => updateQuoteMetadata({ pdf_show_items: v })}
+                      disabled={savingMetadata || isReadOnly}
+                    />
+                    <Label htmlFor="pdf_show_items">Vis varerne under hver post i PDF'en</Label>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    PDF'en viser så "Posten omfatter" med antal og enhed under hver post, uden priser. Modtageren kan dermed se, hvad der er med.
                   </p>
                 </div>
                 {/* Betalingsbetingelser */}
