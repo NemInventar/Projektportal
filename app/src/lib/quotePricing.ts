@@ -29,7 +29,7 @@
 
 export type PricingMode = 'markup_pct' | 'target_unit_price' | 'category_factors';
 
-/** Kostkategorier i cost_breakdown_json. labor_korpus = egen Korpus-produktion (allokeret, IKKE vareforbrug). */
+/** Kostkategorier i cost_breakdown_json. labor_korpus = egen Korpus-produktion. Alle kategorier er kost. */
 export const COST_CATEGORIES = [
   'materials',
   'material_transport',
@@ -85,9 +85,8 @@ export interface CostItem {
 }
 
 /**
- * Sum af én items VAREFORBRUG pr. enhed. labor_korpus (egen produktion) er bevidst IKKE med —
- * det er en fast udgift på 90002, ikke vareforbrug (canon Projekt-økonomi). Den indgår kun i
- * salgsprisen i faktor-mode via sin egen faktor.
+ * Avancegrundlaget pr. enhed i markup_pct-mode: delposterne uden labor_korpus (Korpus-produktion
+ * prissættes med sin egen faktor). Den fulde kost inkl. Korpus regnes i calculateLine.
  * Fallback til cost_total_per_unit kun hvis breakdown er helt tom.
  */
 export function itemCostPerUnit(item: CostItem): number {
@@ -263,17 +262,18 @@ export interface LineTotals {
   totalSellingPrice: number;
   totalProfit: number;
   dbPercent: number;
-  /** Egen Korpus-produktion pr. enhed — allokeret i prisen (faktor-mode), men ikke en del af costPerUnit. */
-  korpusAllocatedPerUnit: number;
+  /** Heraf egen Korpus-produktion pr. enhed (indgår i costPerUnit). */
+  korpusPerUnit: number;
 }
 
-/** Samlet beregning for én linje. */
+/** Samlet beregning for én linje. Kost = alle delposter inkl. Korpus-produktion (som v_quote_line_economics.line_cost). */
 export function calculateLine(
   items: CostItem[],
   lineQuantity: number,
   pricing: LinePricing | null | undefined,
 ): LineTotals {
-  const base = costPerUnit(items, lineQuantity);
+  const korpusPerUnit = lineCostByCategoryPerUnit(items, lineQuantity).labor_korpus;
+  const base = costPerUnit(items, lineQuantity) + korpusPerUnit;
   const risk = pricing?.risk_per_unit ?? 0;
   const totalCPU = base + risk;
   const sellPU = sellingPricePerUnit(items, lineQuantity, pricing);
@@ -282,7 +282,6 @@ export function calculateLine(
   const totalSell = sellPU * lineQuantity;
   const totalProfit = profitPU * lineQuantity;
   const dbPercent = totalSell > 0 ? (totalProfit / totalSell) * 100 : 0;
-  const korpusAllocatedPerUnit = lineCostByCategoryPerUnit(items, lineQuantity).labor_korpus;
   return {
     costPerUnit: base,
     riskPerUnit: risk,
@@ -292,7 +291,7 @@ export function calculateLine(
     totalSellingPrice: totalSell,
     totalProfit,
     dbPercent,
-    korpusAllocatedPerUnit,
+    korpusPerUnit,
   };
 }
 

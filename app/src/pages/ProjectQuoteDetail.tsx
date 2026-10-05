@@ -1592,6 +1592,7 @@ const ProjectQuoteDetail = () => {
         material_transport: sellingPricePerUnit > 0 ? (costBreakdownPerUnit.material_transport / sellingPricePerUnit) * 100 : 0,
         product_transport: sellingPricePerUnit > 0 ? (costBreakdownPerUnit.product_transport / sellingPricePerUnit) * 100 : 0,
         labor_production: sellingPricePerUnit > 0 ? (costBreakdownPerUnit.labor_production / sellingPricePerUnit) * 100 : 0,
+        labor_korpus: sellingPricePerUnit > 0 ? (costBreakdownPerUnit.labor_korpus / sellingPricePerUnit) * 100 : 0,
         labor_dk: sellingPricePerUnit > 0 ? (costBreakdownPerUnit.labor_dk / sellingPricePerUnit) * 100 : 0,
         other: sellingPricePerUnit > 0 ? (costBreakdownPerUnit.other / sellingPricePerUnit) * 100 : 0,
         risk: sellingPricePerUnit > 0 ? (riskPerUnit / sellingPricePerUnit) * 100 : 0,
@@ -1810,15 +1811,18 @@ const ProjectQuoteDetail = () => {
       }
       
       let laborProduction = 0;
+      let laborKorpus = 0;
       let laborDk = 0;
       let otherLabor = 0;
-      
+
       if (laborLines) {
         for (const line of laborLines) {
           const lineCost = (line.qty || 0) * (line.unit_cost || 0);
-          
+
           if (line.labor_type === 'production') {
             laborProduction += lineCost;
+          } else if (line.labor_type === 'korpus_production') {
+            laborKorpus += lineCost;
           } else if (line.labor_type === 'dk_installation') {
             laborDk += lineCost;
           } else if (line.labor_type === 'other') {
@@ -1871,13 +1875,15 @@ const ProjectQuoteDetail = () => {
         material_transport: materialTransport,
         product_transport: productTransport,
         labor_production: laborProduction,
+        labor_korpus: laborKorpus,
         labor_dk: laborDk,
         other: other
       };
-      
+
       console.log('Beregnet cost breakdown:', costBreakdown);
-      
-      const totalCost = Object.values(costBreakdown).reduce((sum, cost) => sum + cost, 0);
+
+      // cost_total_per_unit = delposterne uden labor_korpus, som snapshot_quote_line_costs i DB
+      const totalCost = Object.values(costBreakdown).reduce((sum, cost) => sum + cost, 0) - laborKorpus;
       console.log('Total cost per unit:', totalCost);
       
       // 4) Fejlhåndtering - vis advarsel hvis cost er 0
@@ -2304,9 +2310,10 @@ const ProjectQuoteDetail = () => {
           let currentMaterialTransport = 0;
           let currentProductTransport = 0;
           let currentLaborProduction = 0;
+          let currentLaborKorpus = 0;
           let currentLaborDk = 0;
           let currentOther = 0;
-          
+
           // Hent detaljerede data for produktet
           const { data: detailedProduct } = await supabase
             .from('project_products_2026_01_15_12_49')
@@ -2335,10 +2342,11 @@ const ProjectQuoteDetail = () => {
             detailedProduct.project_product_labor_lines_2026_01_15_12_49?.forEach(line => {
               const lineCost = (line.qty || 0) * (line.unit_cost || 0);
               if (line.labor_type === 'production') currentLaborProduction += lineCost;
+              else if (line.labor_type === 'korpus_production') currentLaborKorpus += lineCost;
               else if (line.labor_type === 'dk_installation') currentLaborDk += lineCost;
               else currentOther += lineCost;
             });
-            
+
             // Beregn transport
             currentProductTransport = detailedProduct.project_product_transport_lines_2026_01_15_12_49?.reduce((sum, line) => 
               sum + ((line.qty || 0) * (line.unit_cost || 0)), 0) || 0;
@@ -2348,20 +2356,25 @@ const ProjectQuoteDetail = () => {
               sum + ((line.qty || 0) * (line.unit_cost || 0)), 0) || 0;
           }
           
-          const currentTotalCost = currentMaterialCost + currentMaterialTransport + currentProductTransport + 
+          // Samme regel som snapshot_quote_line_costs i DB: cost_total_per_unit er delposterne uden
+          // labor_korpus (avancegrundlaget); labor_korpus står i breakdown og tæller i kosten via line_cost.
+          const currentTotalCost = currentMaterialCost + currentMaterialTransport + currentProductTransport +
                                  currentLaborProduction + currentLaborDk + currentOther;
-          
+          const snapshotKorpus = Number(item.costBreakdown?.labor_korpus ?? 0);
+
           // Sammenlign med snapshot
-          if (Math.abs(currentTotalCost - item.costTotalPerUnit) > 0.01) {
+          if (Math.abs(currentTotalCost - item.costTotalPerUnit) > 0.01 || Math.abs(currentLaborKorpus - snapshotKorpus) > 0.01) {
             updates[item.id] = {
-              oldCost: item.costTotalPerUnit,
-              newCost: currentTotalCost,
+              oldCost: item.costTotalPerUnit + snapshotKorpus,
+              newCost: currentTotalCost + currentLaborKorpus,
+              newCtpu: currentTotalCost,
               product: currentProduct,
               currentBreakdown: {
                 materials: currentMaterialCost,
                 material_transport: currentMaterialTransport,
                 product_transport: currentProductTransport,
                 labor_production: currentLaborProduction,
+                labor_korpus: currentLaborKorpus,
                 labor_dk: currentLaborDk,
                 other: currentOther
               }
@@ -2391,19 +2404,12 @@ const ProjectQuoteDetail = () => {
     if (!update) return;
     
     try {
-      const newCostBreakdown = {
-        materials: update.product.total_material_cost || 0,
-        transport: update.product.total_transport_cost || 0,
-        labor_production: update.product.total_labor_production_cost || 0,
-        labor_dk: update.product.total_labor_dk_cost || 0,
-        other: update.product.total_other_cost || 0
-      };
-      
+      // Breakdown og avancegrundlag er regnet i checkForProductUpdates efter samme regel som snapshot_quote_line_costs
       const { error } = await supabase
         .from('project_quote_line_items_2026_01_16_23_00')
         .update({
-          cost_breakdown_json: newCostBreakdown,
-          cost_total_per_unit: update.newCost
+          cost_breakdown_json: update.currentBreakdown,
+          cost_total_per_unit: update.newCtpu
         })
         .eq('id', itemId);
         
@@ -2782,10 +2788,11 @@ const ProjectQuoteDetail = () => {
       let materialCost = 0;
       let materialTransport = 0;
       let laborProductionCost = 0;
+      let laborKorpusCost = 0;
       let laborDkCost = 0;
       let transportCost = 0;
       let otherCost = 0;
-      
+
       // Materials
       if (currentProduct.project_product_material_lines_2026_01_15_12_49) {
         currentProduct.project_product_material_lines_2026_01_15_12_49.forEach(line => {
@@ -2801,11 +2808,12 @@ const ProjectQuoteDetail = () => {
         currentProduct.project_product_labor_lines_2026_01_15_12_49.forEach(line => {
           const lineCost = (line.qty || 0) * (line.unit_cost || 0);
           if (line.labor_type === 'production') laborProductionCost += lineCost;
+          else if (line.labor_type === 'korpus_production') laborKorpusCost += lineCost;
           else if (line.labor_type === 'dk_installation') laborDkCost += lineCost;
           else otherCost += lineCost;
         });
       }
-      
+
       // Transport
       if (currentProduct.project_product_transport_lines_2026_01_15_12_49) {
         transportCost = currentProduct.project_product_transport_lines_2026_01_15_12_49.reduce((sum, line) => 
@@ -2823,11 +2831,13 @@ const ProjectQuoteDetail = () => {
         material_transport: materialTransport,
         product_transport: transportCost,
         labor_production: laborProductionCost,
+        labor_korpus: laborKorpusCost,
         labor_dk: laborDkCost,
         other: otherCost
       };
-      
-      const newTotalCost = Object.values(newCostBreakdown).reduce((sum, cost) => sum + cost, 0);
+
+      // cost_total_per_unit = delposterne uden labor_korpus, som snapshot_quote_line_costs i DB
+      const newTotalCost = Object.values(newCostBreakdown).reduce((sum, cost) => sum + cost, 0) - laborKorpusCost;
       
       console.log('Calculated new cost:', newTotalCost, 'breakdown:', newCostBreakdown);
       
@@ -3217,19 +3227,21 @@ const ProjectQuoteDetail = () => {
         material_transport: acc.costBreakdown.material_transport + (lineTotals.costBreakdown.material_transport * qty),
         product_transport: acc.costBreakdown.product_transport + (lineTotals.costBreakdown.product_transport * qty),
         labor_production: acc.costBreakdown.labor_production + (lineTotals.costBreakdown.labor_production * qty),
+        labor_korpus: acc.costBreakdown.labor_korpus + (lineTotals.costBreakdown.labor_korpus * qty),
         labor_dk: acc.costBreakdown.labor_dk + (lineTotals.costBreakdown.labor_dk * qty),
         other: acc.costBreakdown.other + (lineTotals.costBreakdown.other * qty)
       }
     };
-  }, { 
-    totalSellingPrice: 0, 
-    totalProfit: 0, 
+  }, {
+    totalSellingPrice: 0,
+    totalProfit: 0,
     totalCost: 0,
     costBreakdown: {
       materials: 0,
       material_transport: 0,
       product_transport: 0,
       labor_production: 0,
+      labor_korpus: 0,
       labor_dk: 0,
       other: 0
     }
@@ -4897,11 +4909,11 @@ const ProjectQuoteDetail = () => {
                                 <td className="border border-gray-300 px-3 py-2 text-right">{((totals.costBreakdown.material_transport || 0) / totals.sellingPricePerUnit * 100).toFixed(0)}%</td>
                               </tr>
                               <tr>
-                                <td className="border border-gray-300 px-3 py-2">Produktion</td>
-                                <td className="border border-gray-300 px-3 py-2 text-right">{formatCurrency((totals.costBreakdown.labor_production * line.quantity))}</td>
-                                <td className="border border-gray-300 px-3 py-2 text-right">{formatCurrency(totals.costBreakdown.labor_production)}</td>
+                                <td className="border border-gray-300 px-3 py-2">Produktion (Korpus + købt)</td>
+                                <td className="border border-gray-300 px-3 py-2 text-right">{formatCurrency(((totals.costBreakdown.labor_production + totals.costBreakdown.labor_korpus) * line.quantity))}</td>
+                                <td className="border border-gray-300 px-3 py-2 text-right">{formatCurrency(totals.costBreakdown.labor_production + totals.costBreakdown.labor_korpus)}</td>
                                 <td className="border border-gray-300 px-3 py-2 text-right text-muted-foreground">–</td>
-                                <td className="border border-gray-300 px-3 py-2 text-right">{totals.costPercentages.labor_production.toFixed(0)}%</td>
+                                <td className="border border-gray-300 px-3 py-2 text-right">{(totals.costPercentages.labor_production + totals.costPercentages.labor_korpus).toFixed(0)}%</td>
                               </tr>
                               {/* Vis kun produkttransport hvis den findes */}
                               {(totals.costBreakdown.product_transport || totals.costBreakdown.transport || 0) > 0 && (
@@ -4936,8 +4948,9 @@ const ProjectQuoteDetail = () => {
                                     const totalBaseCost = ((totals.costBreakdown.materials || 0) + 
                                       (totals.costBreakdown.material_transport || 0) + 
                                       (totals.costBreakdown.product_transport || totals.costBreakdown.transport || 0) + 
-                                      (totals.costBreakdown.labor_production || 0) + 
-                                      (totals.costBreakdown.labor_dk || 0) + 
+                                      (totals.costBreakdown.labor_production || 0) +
+                                      (totals.costBreakdown.labor_korpus || 0) +
+                                      (totals.costBreakdown.labor_dk || 0) +
                                       (totals.costBreakdown.other || 0)) * line.quantity;
                                     return formatCurrency(totalBaseCost);
                                   })()}
@@ -4947,8 +4960,9 @@ const ProjectQuoteDetail = () => {
                                     const totalBaseCostPerUnit = (totals.costBreakdown.materials || 0) + 
                                       (totals.costBreakdown.material_transport || 0) + 
                                       (totals.costBreakdown.product_transport || totals.costBreakdown.transport || 0) + 
-                                      (totals.costBreakdown.labor_production || 0) + 
-                                      (totals.costBreakdown.labor_dk || 0) + 
+                                      (totals.costBreakdown.labor_production || 0) +
+                                      (totals.costBreakdown.labor_korpus || 0) +
+                                      (totals.costBreakdown.labor_dk || 0) +
                                       (totals.costBreakdown.other || 0);
                                     return formatCurrency(totalBaseCostPerUnit);
                                   })()}
@@ -4959,8 +4973,9 @@ const ProjectQuoteDetail = () => {
                                     const baseCostTotal = ((totals.costBreakdown.materials || 0) + 
                                       (totals.costBreakdown.material_transport || 0) + 
                                       (totals.costBreakdown.product_transport || totals.costBreakdown.transport || 0) + 
-                                      (totals.costBreakdown.labor_production || 0) + 
-                                      (totals.costBreakdown.labor_dk || 0) + 
+                                      (totals.costBreakdown.labor_production || 0) +
+                                      (totals.costBreakdown.labor_korpus || 0) +
+                                      (totals.costBreakdown.labor_dk || 0) +
                                       (totals.costBreakdown.other || 0)) * line.quantity;
                                     const baseCostShare = totals.totalSellingPrice > 0 ? (baseCostTotal / totals.totalSellingPrice) * 100 : 0;
                                     return baseCostShare.toFixed(0) + '%';
@@ -4988,8 +5003,9 @@ const ProjectQuoteDetail = () => {
                                     const baseCostPerUnit = (totals.costBreakdown.materials || 0) + 
                                       (totals.costBreakdown.material_transport || 0) + 
                                       (totals.costBreakdown.product_transport || totals.costBreakdown.transport || 0) + 
-                                      (totals.costBreakdown.labor_production || 0) + 
-                                      (totals.costBreakdown.labor_dk || 0) + 
+                                      (totals.costBreakdown.labor_production || 0) +
+                                      (totals.costBreakdown.labor_korpus || 0) +
+                                      (totals.costBreakdown.labor_dk || 0) +
                                       (totals.costBreakdown.other || 0);
                                     const markupPercent = baseCostPerUnit > 0 ? ((totals.totalProfit / line.quantity) / baseCostPerUnit) * 100 : 0;
                                     return '+' + markupPercent.toFixed(0) + '%';
@@ -5830,14 +5846,14 @@ const ProjectQuoteDetail = () => {
                 <div className="text-xs text-muted-foreground">af salgspris</div>
               </div>
 
-              {/* Labor produktion */}
+              {/* Produktion: egen Korpus-produktion + købt produktion */}
               <div className="text-center p-3 border rounded">
                 <div className="text-lg font-bold">
-                  {formatCurrency(quoteTotals.costBreakdown.labor_production)}
+                  {formatCurrency(quoteTotals.costBreakdown.labor_production + quoteTotals.costBreakdown.labor_korpus)}
                 </div>
-                <div className="text-xs text-muted-foreground mb-2">Labor produktion</div>
+                <div className="text-xs text-muted-foreground mb-2">Produktion (Korpus + købt)</div>
                 <div className="text-sm font-medium text-blue-600">
-                  {quoteTotals.totalSellingPrice > 0 ? ((quoteTotals.costBreakdown.labor_production / quoteTotals.totalSellingPrice) * 100).toFixed(1) : 0}%
+                  {quoteTotals.totalSellingPrice > 0 ? (((quoteTotals.costBreakdown.labor_production + quoteTotals.costBreakdown.labor_korpus) / quoteTotals.totalSellingPrice) * 100).toFixed(1) : 0}%
                 </div>
                 <div className="text-xs text-muted-foreground">af salgspris</div>
               </div>
@@ -6274,13 +6290,13 @@ const ProjectQuoteDetail = () => {
                       </td>
                     </tr>
                     <tr className="hover:bg-gray-50">
-                      <td className="border border-gray-300 px-4 py-2">Produktion</td>
+                      <td className="border border-gray-300 px-4 py-2">Produktion (Korpus + købt)</td>
                       <td className="border border-gray-300 px-4 py-2 text-right">
-                        {quoteTotals.costBreakdown.labor_production.toLocaleString('da-DK')} kr
+                        {(quoteTotals.costBreakdown.labor_production + quoteTotals.costBreakdown.labor_korpus).toLocaleString('da-DK')} kr
                       </td>
                       <td className="border border-gray-300 px-4 py-2 text-right">
-                        {quoteTotals.totalSellingPrice > 0 
-                          ? ((quoteTotals.costBreakdown.labor_production / quoteTotals.totalSellingPrice) * 100).toFixed(0) 
+                        {quoteTotals.totalSellingPrice > 0
+                          ? (((quoteTotals.costBreakdown.labor_production + quoteTotals.costBreakdown.labor_korpus) / quoteTotals.totalSellingPrice) * 100).toFixed(0)
                           : 0}%
                       </td>
                     </tr>
