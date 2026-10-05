@@ -729,7 +729,7 @@ export function QuotePDF({
             ) : null}
             {reservations ? (
               <View style={styles.termsRow}>
-                <Text style={styles.termsLabel}>Forbehold</Text>
+                <Text style={styles.termsLabel}>Kommentarer</Text>
                 <Text style={styles.termsValue}>{reservations}</Text>
               </View>
             ) : null}
