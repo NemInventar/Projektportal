@@ -610,9 +610,11 @@ const Products = () => {
         const markupItem = usage.find(u => u.pricingMode === 'markup_pct' && u.ctpu > 0);
         if (markupItem) estSellPerUnit = markupItem.ctpu * (1 + (markupItem.markupPct ?? 0) / 100);
       }
-      // DG mod snapshottets kost (ekskl. Korpus) — falder tilbage til kostlinjerne hvis snapshot mangler
+      // DG mod fuld kost inkl. Korpus-timer (som v_quote_line_economics.line_cost = ctpu + labor_korpus).
+      // ctpu i snapshottet er uden Korpus, så den lægges til; falder tilbage til kostlinjerne hvis snapshot mangler.
       const snapCost = factorItem?.ctpu ?? usage[0]?.ctpu ?? null;
-      const dgBase = snapCost != null && snapCost > 0 ? snapCost : costExKorpus;
+      const snapKorpus = Number((factorItem ?? usage[0])?.breakdown?.labor_korpus ?? korpus);
+      const dgBase = snapCost != null && snapCost > 0 ? snapCost + snapKorpus : costExKorpus + korpus;
       const dgPct = estSellPerUnit != null && estSellPerUnit > 0 ? ((estSellPerUnit - dgBase) / estSellPerUnit) * 100 : null;
       const marginBand: MarginBand = dgPct == null ? 'Ukendt' : dgPct >= 55 ? 'Høj (≥55 %)' : dgPct >= 35 ? 'Mellem (35–55 %)' : 'Lav (<35 %)';
 
