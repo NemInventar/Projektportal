@@ -241,9 +241,21 @@ interface QuoteLineItem {
   effectiveCategoryFactors?: CategoryFactors | null;
   /** Låst til prisbogens/en aftalt pris — må ikke få ny kost fra produktets stykliste (DB-vagt trg_kost_laast_vagt). */
   costLocked?: boolean;
+  /** Produktet er bygget af prisbogen (project_products.notes bærer "prisbog_fra:<id>" / "Prisbog #nr"). fn_prisbog_paa_tilbud sætter cost_locked=false på sådanne varer, så markøren står kun her. */
+  fraPrisbog?: boolean;
   /** L3: produktets godkendte salgspris pr. enhed (project_products.salgspris). null = regnes af kost × faktor. */
   salgspris?: number | null;
 }
+
+/** Produktet er bygget af prisbogen? fn_prisbog_paa_tilbud skriver "prisbog_fra:<id>" og "Prisbog #nr" i project_products.notes (embed: objekt eller 1-elements-array). */
+const erPrisbogNote = (pp: any): boolean => {
+  const row = Array.isArray(pp) ? pp[0] : pp;
+  return /prisbog_fra:|prisbog #\d/i.test(String(row?.notes ?? ''));
+};
+
+/** Varer som "Opdater produkt" / "Opdater alle priser" / "Opdater pris" ALDRIG må røre: cost_locked eller prisbog-oprindelse. */
+const erLaast = (item: { costLocked?: boolean; fraPrisbog?: boolean }): boolean =>
+  item.costLocked === true || item.fraPrisbog === true;
 
 interface CostBreakdown {
   materials: number;
@@ -688,7 +700,7 @@ const ProjectQuoteDetail = () => {
         .from('project_quote_lines_2026_01_16_23_00')
         .select(`
           *,
-          project_quote_line_items_2026_01_16_23_00(*, project_products_2026_01_15_12_49(salgspris))
+          project_quote_line_items_2026_01_16_23_00(*, project_products_2026_01_15_12_49(salgspris, notes))
         `)
         .eq('project_quote_id', id)
         .neq('archived', true)
@@ -706,7 +718,7 @@ const ProjectQuoteDetail = () => {
             .from('project_quote_lines_2026_01_16_23_00')
             .select(`
               *,
-              project_quote_line_items_2026_01_16_23_00(*, project_products_2026_01_15_12_49(salgspris))
+              project_quote_line_items_2026_01_16_23_00(*, project_products_2026_01_15_12_49(salgspris, notes))
             `)
             .eq('project_quote_id', id)
             .neq('archived', true)
@@ -750,6 +762,7 @@ const ProjectQuoteDetail = () => {
             factorProfile: item.factor_profile ?? null,
             effectiveCategoryFactors: item.effective_category_factors ?? null,
             costLocked: item.cost_locked === true,
+            fraPrisbog: erPrisbogNote(item.project_products_2026_01_15_12_49),
             salgspris: salgsprisFromRow(item),
           })) || [],
           // Billed/render-felter
@@ -1440,7 +1453,7 @@ const ProjectQuoteDetail = () => {
         {afviger && (
           <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900 text-xs">
             Styklisten passer ikke med prisen: styklisten giver {kr2(bomTotal)} kr pr. {item.unit}, prisen bygger på {kr2(priceTotal)} kr.
-            {item.costLocked ? ' Prisen er låst (fra prisbogen); styklisten på sagen er ikke opdateret.' : ' Tryk "Opdater pris" for at hente styklistens kost.'}
+            {erLaast(item) ? ' Prisen er låst (fra prisbogen); styklisten på sagen er ikke opdateret.' : ' Tryk "Opdater pris" for at hente styklistens kost.'}
           </div>
         )}
         {pid && (
@@ -2278,14 +2291,18 @@ const ProjectQuoteDetail = () => {
     }
   };
 
+  // Antal produktvarer som opdater-knapperne springer over (cost_locked eller prisbog-oprindelse)
+  const antalLaasteVarer = () =>
+    lines.reduce((n, line) => n + line.items.filter(item => item.sourceType === 'project_product' && item.projectProductId && erLaast(item)).length, 0);
+
   const checkForProductUpdates = async () => {
     if (!lines.length) return;
     
     setCheckingUpdates(true);
     try {
       const productItems = lines.flatMap(line => 
-        // Låste varer (prisbogens pris) sammenlignes ikke med styklisten — ellers tilbyder "Opdater alle priser" at overskrive dem
-        line.items.filter(item => item.sourceType === 'project_product' && item.projectProductId && !item.costLocked)
+        // Låste varer og prisbog-varer sammenlignes ikke med styklisten — ellers tilbyder "Opdater alle priser" at overskrive dem
+        line.items.filter(item => item.sourceType === 'project_product' && item.projectProductId && !erLaast(item))
       );
 
       if (productItems.length === 0) return;
@@ -2333,7 +2350,8 @@ const ProjectQuoteDetail = () => {
             // Beregn materialer
             detailedProduct.project_product_material_lines_2026_01_15_12_49?.forEach(line => {
               const qty = line.qty || 0;
-              const unitCost = line.unit_cost_override || line.project_materials_2026_01_15_06_45?.unit_price || 0;
+              // ?? som snapshot_quote_line_costs (COALESCE): en override på 0 er en override
+              const unitCost = line.unit_cost_override ?? line.project_materials_2026_01_15_06_45?.unit_price ?? 0;
               currentMaterialCost += qty * unitCost;
               currentMaterialTransport += line.project_materials_2026_01_15_06_45?.transport_estimated_cost || 0;
             });
@@ -2402,7 +2420,14 @@ const ProjectQuoteDetail = () => {
   const updateProductItem = async (itemId: string) => {
     const update = productUpdates[itemId];
     if (!update) return;
-    
+
+    // Vagt: låste varer og prisbog-varer får aldrig ny kost her, uanset hvad der ligger i productUpdates
+    const laast = lines.flatMap(l => l.items).find(i => i.id === itemId);
+    if (laast && erLaast(laast)) {
+      toast({ title: "Ikke opdateret", description: "låst/prisbog — ikke opdateret (1)" });
+      return;
+    }
+
     try {
       // Breakdown og avancegrundlag er regnet i checkForProductUpdates efter samme regel som snapshot_quote_line_costs
       const { error } = await supabase
@@ -2797,7 +2822,7 @@ const ProjectQuoteDetail = () => {
       if (currentProduct.project_product_material_lines_2026_01_15_12_49) {
         currentProduct.project_product_material_lines_2026_01_15_12_49.forEach(line => {
           const qty = line.qty || 0;
-          const unitCost = line.unit_cost_override || line.project_materials_2026_01_15_06_45?.unit_price || 0;
+          const unitCost = line.unit_cost_override ?? line.project_materials_2026_01_15_06_45?.unit_price ?? 0;
           materialCost += qty * unitCost;
           materialTransport += line.project_materials_2026_01_15_06_45?.transport_estimated_cost || 0;
         });
@@ -2873,7 +2898,7 @@ const ProjectQuoteDetail = () => {
       const zeroCostItems = line.items.filter(
         item => item.sourceType === 'project_product' && 
                 (item.costTotalPerUnit === 0 || item.costTotalPerUnit === null || !item.costTotalPerUnit) &&
-                item.projectProductId && !item.costLocked
+                item.projectProductId && !erLaast(item)
       );
       
       console.log('Found zero cost items:', zeroCostItems.length, zeroCostItems.map(i => ({ title: i.title, cost: i.costTotalPerUnit })));
@@ -2924,16 +2949,19 @@ const ProjectQuoteDetail = () => {
       // Find all product items across all lines
       const allProductItems = lines.flatMap(line => 
         line.items.filter(item =>
-          item.sourceType === 'project_product' && item.projectProductId && !item.costLocked
+          item.sourceType === 'project_product' && item.projectProductId && !erLaast(item)
         )
       );
+      const antalLaast = antalLaasteVarer();
 
       console.log('Updating all product prices. Total items:', allProductItems.length);
       
       if (allProductItems.length === 0) {
         toast({
           title: "Ingen produkter at opdatere",
-          description: "Der er ingen produkter i tilbuddet",
+          description: antalLaast > 0
+            ? `låst/prisbog — ikke opdateret (${antalLaast})`
+            : "Der er ingen produkter i tilbuddet",
         });
         setUpdatingAllPrices(false);
         return;
@@ -2959,7 +2987,7 @@ const ProjectQuoteDetail = () => {
       
       toast({
         title: "Opdatering fuldført",
-        description: `${successCount} produkter opdateret${failCount > 0 ? `, ${failCount} fejlede` : ''}`,
+        description: `${successCount} produkter opdateret${failCount > 0 ? `, ${failCount} fejlede` : ''}${antalLaast > 0 ? ` · låst/prisbog — ikke opdateret (${antalLaast})` : ''}`,
       });
       
       // Reload data to show updated prices
@@ -3522,6 +3550,11 @@ const ProjectQuoteDetail = () => {
               >
                 Opdater alle priser ({Object.keys(productUpdates).length})
               </Button>
+            )}
+            {antalLaasteVarer() > 0 && (
+              <span className="text-xs text-muted-foreground" title="Varer med låst kost eller fra prisbogen røres ikke af Opdater-knapperne">
+                låst/prisbog — ikke opdateret ({antalLaasteVarer()})
+              </span>
             )}
             {updatingAllPrices && (
               <Button variant="default" size="sm" disabled className="gap-2">
@@ -5138,14 +5171,15 @@ const ProjectQuoteDetail = () => {
                               const factorOf = (k: string) => (ovr as any)[k] ?? (eff as any)[k] ?? 1;
                               const rows = COST_CATEGORIES.filter(k => costOf(k) > 0 || (ovr as any)[k] != null);
                               const sellPerUnit = COST_CATEGORIES.reduce((a, k) => a + costOf(k) * factorOf(k), 0) + (pricingFormData.riskPerUnit || 0);
-                              const costPerUnitExKorpus = COST_CATEGORIES.filter(k => k !== 'labor_korpus').reduce((a, k) => a + costOf(k), 0) + (pricingFormData.riskPerUnit || 0);
-                              const dbPct = sellPerUnit > 0 ? ((sellPerUnit - costPerUnitExKorpus) / sellPerUnit) * 100 : 0;
+                              // Korpus-timer × 85 kr er kost (som v_quote_line_economics.line_cost): DG regnes mod alle kategorier inkl. labor_korpus
+                              const costPerUnitAll = COST_CATEGORIES.reduce((a, k) => a + costOf(k), 0) + (pricingFormData.riskPerUnit || 0);
+                              const dbPct = sellPerUnit > 0 ? ((sellPerUnit - costPerUnitAll) / sellPerUnit) * 100 : 0;
                               return (
                                 <div className="mt-4">
                                   <Label className="text-sm font-medium mb-2 block">Faktor pr. kostkategori</Label>
                                   <p className="text-xs text-muted-foreground mb-2">
                                     Tomt felt = tilbuddets/husets standard. Udfyld kun det der skal afvige på denne linje.
-                                    Egen produktion (Korpus) allokeres i prisen men tæller ikke som vareforbrug.
+                                    Egen produktion (Korpus-timer × 85 kr) er kost og tæller med i vareforbrug, DB og DG.
                                   </p>
                                   <div className="border rounded-lg overflow-hidden">
                                     <table className="w-full text-sm">
@@ -5204,14 +5238,14 @@ const ProjectQuoteDetail = () => {
                                         )}
                                         <tr className="border-t-2 bg-green-50 font-semibold">
                                           <td className="px-3 py-2">Salgspris</td>
-                                          <td className="px-3 py-2 text-right">{formatCurrency(costPerUnitExKorpus)}</td>
+                                          <td className="px-3 py-2 text-right">{formatCurrency(costPerUnitAll)}</td>
                                           <td className="px-3 py-2 text-right">-</td>
                                           <td className="px-3 py-2 text-right">-</td>
                                           <td className="px-3 py-2 text-right text-green-700">{formatCurrency(sellPerUnit)}</td>
                                           <td className="px-3 py-2 text-right text-green-700">{formatCurrency(sellPerUnit * line.quantity)}</td>
                                         </tr>
                                         <tr className="border-t bg-blue-50">
-                                          <td className="px-3 py-2 font-semibold">DG (vareforbrug, uden egen produktion)</td>
+                                          <td className="px-3 py-2 font-semibold">DG (inkl. Korpus-produktion)</td>
                                           <td className="px-3 py-2 text-right">-</td>
                                           <td className="px-3 py-2 text-right">-</td>
                                           <td className="px-3 py-2 text-right">-</td>
@@ -5729,6 +5763,7 @@ const ProjectQuoteDetail = () => {
                                               size="sm"
                                               variant="outline"
                                               className="h-7"
+                                              disabled={erLaast(item)}
                                               onClick={async () => {
                                                 try {
                                                   const result = await updateItemCostSnapshot(item.id, item.projectProductId!);
@@ -5743,7 +5778,7 @@ const ProjectQuoteDetail = () => {
                                                   toast({ title: 'Fejl', description: 'Kunne ikke opdatere produktprisen', variant: 'destructive' });
                                                 }
                                               }}
-                                              title="Opdater til nyeste produktpris"
+                                              title={erLaast(item) ? 'låst/prisbog — ikke opdateret' : 'Opdater til nyeste produktpris'}
                                             >
                                               Opdater pris
                                             </Button>
@@ -6870,8 +6905,13 @@ const ProjectQuoteDetail = () => {
             </DialogHeader>
             <div className="py-4">
               <p className="mb-4">
-                Dette vil opdatere ALLE {lines.flatMap(line => line.items.filter(item => item.sourceType === 'project_product' && item.projectProductId && !item.costLocked)).length} produkter i tilbuddet til deres nyeste priser fra produktdatabasen.
+                Dette vil opdatere {lines.flatMap(line => line.items.filter(item => item.sourceType === 'project_product' && item.projectProductId && !erLaast(item))).length} produkter i tilbuddet til deres nyeste priser fra produktdatabasen.
               </p>
+              {antalLaasteVarer() > 0 && (
+                <p className="text-sm text-muted-foreground mb-2">
+                  låst/prisbog — ikke opdateret ({antalLaasteVarer()})
+                </p>
+              )}
               <p className="text-sm text-muted-foreground mb-2">
                 <strong>Eksisterende priser vil blive overskrevet.</strong>
               </p>
