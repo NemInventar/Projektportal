@@ -313,9 +313,57 @@ const ProjectQuoteDetail = () => {
   // Filtrering + sortering af produkt-opsummeringen (bruges langt nede i render, men SKAL deklareres
   // her før early-returns — 22-09-2026 lå de efter `if (loading) return` → "Rendered more hooks" → hvid side)
   const [summarySearch, setSummarySearch] = useState('');
-  const [summarySort, setSummarySort] = useState<{ felt: 'navn' | 'antal' | 'cost'; faldende: boolean }>(
-    { felt: 'cost', faldende: true }
+  const [summarySort, setSummarySort] = useState<{ felt: 'navn' | 'antal' | 'cost' | 'salg' | 'db'; faldende: boolean }>(
+    { felt: 'salg', faldende: true }
   );
+  // Kolonnevalg i produktopsummeringen: kost og salg pr. stk og i alt (Joachim 13-10-2026).
+  // Persisteres pr. browser. SKAL stå her, før early-returns (hook-rækkefølge).
+  const PROD_COLS = [
+    { key: 'positioner', label: 'Positioner', gruppe: 'Generelt' },
+    { key: 'antal', label: 'Antal', gruppe: 'Generelt' },
+    { key: 'enhed', label: 'Enhed', gruppe: 'Generelt' },
+    { key: 'matStk', label: 'Materialer', gruppe: 'Pr. stk' },
+    { key: 'prodStk', label: 'Korpus', gruppe: 'Pr. stk' },
+    { key: 'kosStk', label: 'Kosovo i alt', gruppe: 'Pr. stk' },
+    { key: 'trStk', label: 'Transport', gruppe: 'Pr. stk' },
+    { key: 'monStk', label: 'Montage', gruppe: 'Pr. stk' },
+    { key: 'kostStk', label: 'Kost i alt', gruppe: 'Pr. stk' },
+    { key: 'dbStk', label: 'DB', gruppe: 'Pr. stk' },
+    { key: 'salgStk', label: 'Salg', gruppe: 'Pr. stk' },
+    { key: 'matTot', label: 'Materialer', gruppe: 'I alt' },
+    { key: 'prodTot', label: 'Korpus', gruppe: 'I alt' },
+    { key: 'kosTot', label: 'Kosovo i alt', gruppe: 'I alt' },
+    { key: 'trTot', label: 'Transport', gruppe: 'I alt' },
+    { key: 'monTot', label: 'Montage', gruppe: 'I alt' },
+    { key: 'kostTot', label: 'Kost i alt', gruppe: 'I alt' },
+    { key: 'dbTot', label: 'DB', gruppe: 'I alt' },
+    { key: 'salgTot', label: 'Salg', gruppe: 'I alt' },
+    { key: 'dg', label: 'DG %', gruppe: 'I alt' },
+  ] as const;
+  type ProdColKey = typeof PROD_COLS[number]['key'];
+  const PROD_COLS_KEY = 'quote.productSummary.cols.v1';
+  const [prodCols, setProdCols] = useState<Record<ProdColKey, boolean>>(() => {
+    const def = Object.fromEntries(
+      PROD_COLS.map(c => [c.key, c.gruppe === 'Pr. stk' || c.key === 'antal' || c.key === 'enhed'])
+    ) as Record<ProdColKey, boolean>;
+    def.salgTot = true;
+    def.dg = true;
+    try {
+      const raw = localStorage.getItem(PROD_COLS_KEY);
+      return raw ? { ...def, ...JSON.parse(raw) } : def;
+    } catch { return def; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(PROD_COLS_KEY, JSON.stringify(prodCols)); } catch {}
+  }, [prodCols]);
+  // Én samlet tabel som standard; opdelingen på kostart kan slås til.
+  const SUMMARY_SPLIT_KEY = 'quote.productSummary.split.v1';
+  const [summarySplit, setSummarySplit] = useState<boolean>(() => {
+    try { return localStorage.getItem(SUMMARY_SPLIT_KEY) === '1'; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(SUMMARY_SPLIT_KEY, summarySplit ? '1' : '0'); } catch {}
+  }, [summarySplit]);
   // Sandheden for redigerbarhed: lås-state. Når true er hele tilbuddet read-only.
   const isReadOnly = !!quote?.is_locked;
   // Employees + crm_contacts til FK-dropdowns
@@ -3307,11 +3355,14 @@ const ProjectQuoteDetail = () => {
   // Positionsnummeret står forrest i item-titlen, fx "4.4.2.1 Højskab ... — Montage DK, ...".
   const POS_MOENSTER = /^(\d+(?:\.\d+)+)/;
 
+  // Et prisbogsprodukt har både materialer, Korpus, transport og montage på samme item.
+  // Derfor afgør materialerne først — ellers lander alle skabe under "Transport" (13-10-2026).
   const kostArtFor = (item: { costBreakdown: any }, produktNavn: string): KostArt => {
     const cb = item.costBreakdown || {};
     const tal = (k: string) => Number(cb[k]) || 0;
-    if (tal('product_transport') > 0 || tal('material_transport') > 0) return 'transport';
+    if (tal('materials') > 0 || tal('other') > 0) return 'produkt';
     if (tal('labor_production') > 0 || tal('labor_korpus') > 0) return 'produktion';
+    if (tal('product_transport') > 0 || tal('material_transport') > 0 || tal('transport') > 0) return 'transport';
     if (tal('labor_dk') > 0) {
       // Montagetillæg på et produkt vs. selvstændig timepost (optioner, regningsarbejde)
       return /^montage/i.test(produktNavn) ? 'montage' : 'timer';
@@ -3322,8 +3373,13 @@ const ProjectQuoteDetail = () => {
   const buildProductSummary = (allLines: typeof lines) => {
     // Option-flaget sidder på linjen — bær det med ned på posten, så en option
     // og en fast post af samme produkt ikke lægges sammen.
-    const allItems = allLines.flatMap(line =>
-      (line.items || []).map(item => ({ ...item, erOption: line.isOption === true })));
+    // Salg pr. item kommer fra samme prisformel som linjen (salgspris eller kost × faktor).
+    const allItems = allLines.flatMap(line => {
+      const sells = lineItemSells(line);
+      return (line.items || []).map(item => ({
+        ...item, erOption: line.isOption === true, sellPerUnit: sells[item.id] ?? 0,
+      }));
+    });
     const productItems = allItems.filter(item => item.sourceType === 'project_product');
 
     const grouped = productItems.reduce((acc, item) => {
@@ -3347,17 +3403,34 @@ const ProjectQuoteDetail = () => {
           positioner: new Set<string>(),
           totalQty: 0,
           totalCost: 0,
+          mat: 0, prod: 0, tr: 0, dk: 0,
+          totalSell: 0,
         };
       }
       const pos = POS_MOENSTER.exec(item.title)?.[1];
       if (pos) acc[key].positioner.add(pos);
+      // Kost pr. art som itemCostByCategory: materialer + andet, Korpus + UE-produktion,
+      // produkt- + materialetransport, montage DK. Uden fordeling falder hele kosten på materialer.
+      const cb = item.costBreakdown || {};
+      const tal = (k: string) => Number(cb[k]) || 0;
+      let mat = tal('materials') + tal('other');
+      const prod = tal('labor_korpus') + tal('labor_production');
+      const tr = (cb.product_transport != null ? tal('product_transport') : tal('transport')) + tal('material_transport');
+      const dk = tal('labor_dk');
+      if (mat + prod + tr + dk <= 0 && item.costTotalPerUnit > 0) mat = item.costTotalPerUnit;
       acc[key].totalQty += item.qty;
-      acc[key].totalCost += item.costTotalPerUnit * item.qty;
+      acc[key].mat += mat * item.qty;
+      acc[key].prod += prod * item.qty;
+      acc[key].tr += tr * item.qty;
+      acc[key].dk += dk * item.qty;
+      acc[key].totalCost += (mat + prod + tr + dk) * item.qty;
+      acc[key].totalSell += item.sellPerUnit * item.qty;
       return acc;
     }, {} as Record<string, {
       title: string; rawTitle: string; projectProductId: string | null;
       kostArt: KostArt; erOption: boolean; unit: string; positioner: Set<string>;
       totalQty: number; totalCost: number;
+      mat: number; prod: number; tr: number; dk: number; totalSell: number;
     }>);
 
     return Object.values(grouped).map(g => ({
@@ -3372,7 +3445,7 @@ const ProjectQuoteDetail = () => {
   // Filtrering + sortering af opsummeringen: state'en (summarySearch/summarySort) er deklareret
   // oppe hos de øvrige hooks — her er vi EFTER early-returns, og hooks må ikke kaldes betinget.
 
-  const toggleSummarySort = (felt: 'navn' | 'antal' | 'cost') => {
+  const toggleSummarySort = (felt: 'navn' | 'antal' | 'cost' | 'salg' | 'db') => {
     setSummarySort(prev => prev.felt === felt
       ? { felt, faldende: !prev.faldende }
       : { felt, faldende: felt !== 'navn' });
@@ -3390,6 +3463,8 @@ const ProjectQuoteDetail = () => {
     return [...matcher].sort((a, b) => {
       if (summarySort.felt === 'navn') return retning * a.title.localeCompare(b.title, 'da-DK');
       if (summarySort.felt === 'antal') return retning * (a.totalQty - b.totalQty);
+      if (summarySort.felt === 'salg') return retning * (a.totalSell - b.totalSell);
+      if (summarySort.felt === 'db') return retning * ((a.totalSell - a.totalCost) - (b.totalSell - b.totalCost));
       return retning * (a.totalCost - b.totalCost);
     });
   })();
@@ -3397,6 +3472,7 @@ const ProjectQuoteDetail = () => {
   const summaryFast = filtreretSummary.filter(p => !p.erOption).reduce((s, p) => s + p.totalCost, 0);
   const summaryOption = filtreretSummary.filter(p => p.erOption).reduce((s, p) => s + p.totalCost, 0);
   const summaryTotal = summaryFast + summaryOption;
+  const summaryFastSalg = filtreretSummary.filter(p => !p.erOption).reduce((s, p) => s + p.totalSell, 0);
 
   // Build material summary (Q-V1-10)
   const buildMaterialSummary = (
@@ -5950,6 +6026,7 @@ const ProjectQuoteDetail = () => {
         </Card>
 
         {/* Product Summary (Q-V1-09) - Internal use only */}
+        {/* Kost og salg pr. produkt med kolonnevalg, pr. stk og i alt (Joachim 13-10-2026). */}
         {productSummary.length > 0 && (() => {
           const kr = (v: number) =>
             v.toLocaleString('da-DK', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -5962,8 +6039,10 @@ const ProjectQuoteDetail = () => {
             : k === 'produktion' ? Factory
             : Package;
 
+          type SummaryRow = typeof productSummary[number];
+          type SortFelt = 'navn' | 'antal' | 'cost' | 'salg' | 'db';
           const SortKnap = ({ felt, children, højre }: {
-            felt: 'navn' | 'antal' | 'cost'; children: React.ReactNode; højre?: boolean;
+            felt: SortFelt; children: React.ReactNode; højre?: boolean;
           }) => (
             <button
               type="button"
@@ -5977,6 +6056,57 @@ const ProjectQuoteDetail = () => {
             </button>
           );
 
+          const stkCols = PROD_COLS.filter(c => c.gruppe === 'Pr. stk' && prodCols[c.key]);
+          const totCols = PROD_COLS.filter(c => c.gruppe === 'I alt' && prodCols[c.key]);
+          const sortFeltFor: Partial<Record<ProdColKey, SortFelt>> = { kostTot: 'cost', dbTot: 'db', salgTot: 'salg' };
+
+          // Én værdi pr. celle. Pr. stk = total / antal, så summerne altid kan følges ned.
+          const vaerdi = (p: { totalQty: number; mat: number; prod: number; tr: number; dk: number; totalCost: number; totalSell: number }, key: ProdColKey): number => {
+            const q = p.totalQty || 0;
+            const prStk = (v: number) => (q ? v / q : 0);
+            const db = p.totalSell - p.totalCost;
+            switch (key) {
+              case 'matStk': return prStk(p.mat);
+              case 'prodStk': return prStk(p.prod);
+              case 'kosStk': return prStk(p.mat + p.prod);
+              case 'trStk': return prStk(p.tr);
+              case 'monStk': return prStk(p.dk);
+              case 'kostStk': return prStk(p.totalCost);
+              case 'dbStk': return prStk(db);
+              case 'salgStk': return prStk(p.totalSell);
+              case 'matTot': return p.mat;
+              case 'prodTot': return p.prod;
+              case 'kosTot': return p.mat + p.prod;
+              case 'trTot': return p.tr;
+              case 'monTot': return p.dk;
+              case 'kostTot': return p.totalCost;
+              case 'dbTot': return db;
+              case 'salgTot': return p.totalSell;
+              case 'dg': return p.totalSell > 0 ? (db / p.totalSell) * 100 : 0;
+              default: return 0;
+            }
+          };
+          const fmt = (key: ProdColKey, v: number) => (key === 'dg' ? `${v.toFixed(0)} %` : kr(v));
+          const fremhaev = (key: ProdColKey) =>
+            key === 'salgStk' || key === 'salgTot' ? 'font-semibold'
+            : key === 'dbStk' || key === 'dbTot' || key === 'dg' ? 'text-green-700'
+            : key === 'kostStk' || key === 'kostTot' ? 'font-medium'
+            : 'text-muted-foreground';
+
+          const summer = (rækker: SummaryRow[]) => rækker.reduce((s, p) => ({
+            totalQty: s.totalQty + p.totalQty, mat: s.mat + p.mat, prod: s.prod + p.prod, tr: s.tr + p.tr,
+            dk: s.dk + p.dk, totalCost: s.totalCost + p.totalCost, totalSell: s.totalSell + p.totalSell,
+          }), { totalQty: 0, mat: 0, prod: 0, tr: 0, dk: 0, totalCost: 0, totalSell: 0 });
+
+          const grupper = summarySplit
+            ? KOST_ARTER.map(art => ({
+                key: art.key as string, label: art.label, hint: art.hint, Ikon: ikonFor(art.key),
+                rækker: filtreretSummary.filter(p => p.kostArt === art.key),
+              }))
+            : [{ key: 'alle', label: 'Alle produkter', hint: '', Ikon: Package, rækker: filtreretSummary }];
+
+          const summaryFastDb = summaryFastSalg - summaryFast;
+
           return (
             <Card>
               <CardHeader>
@@ -5984,83 +6114,137 @@ const ProjectQuoteDetail = () => {
                   <div>
                     <CardTitle>Produktopsummering (intern)</CardTitle>
                     <p className="text-sm text-muted-foreground">
-                      Opdelt på kostart — produkter, montage og transport hver for sig
+                      Kost og salg pr. produkt — vælg kolonner pr. stk og i alt
                     </p>
                   </div>
-                  <div className="relative w-full sm:w-72">
-                    <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      placeholder="Søg i navn eller position…"
-                      value={summarySearch}
-                      onChange={(e) => setSummarySearch(e.target.value)}
-                      className="pl-8"
-                    />
+                  <div className="flex w-full sm:w-auto items-center gap-2">
+                    <div className="relative w-full sm:w-72">
+                      <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        placeholder="Søg i navn eller position…"
+                        value={summarySearch}
+                        onChange={(e) => setSummarySearch(e.target.value)}
+                        className="pl-8"
+                      />
+                    </div>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm">
+                          Kolonner <ChevronDown className="h-4 w-4 ml-1" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-56 max-h-[70vh] overflow-y-auto">
+                        {(['Generelt', 'Pr. stk', 'I alt'] as const).map((gruppe, gi) => (
+                          <div key={gruppe}>
+                            {gi > 0 && <DropdownMenuSeparator />}
+                            <DropdownMenuLabel>{gruppe}</DropdownMenuLabel>
+                            {PROD_COLS.filter(c => c.gruppe === gruppe).map(c => (
+                              <DropdownMenuCheckboxItem
+                                key={c.key}
+                                checked={prodCols[c.key]}
+                                onCheckedChange={(v) => setProdCols(prev => ({ ...prev, [c.key]: !!v }))}
+                                onSelect={(e) => e.preventDefault()}
+                              >
+                                {c.label}
+                              </DropdownMenuCheckboxItem>
+                            ))}
+                          </div>
+                        ))}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuCheckboxItem
+                          checked={summarySplit}
+                          onCheckedChange={(v) => setSummarySplit(!!v)}
+                          onSelect={(e) => e.preventDefault()}
+                        >
+                          Opdel på kostart
+                        </DropdownMenuCheckboxItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 </div>
               </CardHeader>
               <CardContent className="space-y-6">
-                {KOST_ARTER.map(art => {
-                  const rækker = filtreretSummary.filter(p => p.kostArt === art.key);
+                {grupper.map(g => {
+                  const rækker = g.rækker;
                   if (rækker.length === 0) return null;
-                  const Ikon = ikonFor(art.key);
-                  const delsum = rækker.reduce((s, p) => s + p.totalCost, 0);
+                  const sum = summer(rækker);
                   const optRækker = rækker.filter(p => p.erOption);
-                  const optSum = optRækker.reduce((s, p) => s + p.totalCost, 0);
-                  const optQty = optRækker.reduce((s, p) => s + p.totalQty, 0);
-                  // Én enhed pr. kostart gør en samlet mængde meningsfuld
+                  const optSum = optRækker.reduce((s, p) => s + p.totalSell, 0);
+                  // Én enhed i gruppen gør en samlet mængde meningsfuld
                   const enheder = new Set(rækker.map(p => p.unit));
-                  const samletAntal = enheder.size === 1
-                    ? rækker.reduce((s, p) => s + p.totalQty, 0) : null;
+                  const samletAntal = enheder.size === 1 ? sum.totalQty : null;
+                  const Ikon = g.Ikon;
 
                   return (
-                    <div key={art.key}>
-                      <div className="flex items-baseline justify-between gap-3 border-b pb-1.5 mb-2">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <Ikon className="h-4 w-4 text-muted-foreground shrink-0" />
-                          <span className="font-semibold">{art.label}</span>
-                          <span className="text-xs text-muted-foreground">
-                            {art.hint} · {rækker.length} {rækker.length === 1 ? 'post' : 'poster'}
-                          </span>
-                          {optSum > 0 && (
-                            <span className="text-xs rounded bg-amber-100 text-amber-900 px-1.5 py-0.5 whitespace-nowrap">
-                              heraf option: {kr(optSum)} kr
-                              {enheder.size === 1 && ` · ${antal(optQty)} ${rækker[0].unit}`}
+                    <div key={g.key}>
+                      {summarySplit && (
+                        <div className="flex items-baseline justify-between gap-3 border-b pb-1.5 mb-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <Ikon className="h-4 w-4 text-muted-foreground shrink-0" />
+                            <span className="font-semibold">{g.label}</span>
+                            <span className="text-xs text-muted-foreground">
+                              {g.hint} · {rækker.length} {rækker.length === 1 ? 'post' : 'poster'}
                             </span>
-                          )}
+                            {optSum > 0 && (
+                              <span className="text-xs rounded bg-amber-100 text-amber-900 px-1.5 py-0.5 whitespace-nowrap">
+                                heraf option: {kr(optSum)} kr i salg
+                              </span>
+                            )}
+                          </div>
+                          <span className="font-semibold tabular-nums whitespace-nowrap">
+                            {kr(sum.totalSell)} kr
+                          </span>
                         </div>
-                        <span className="font-semibold tabular-nums whitespace-nowrap">
-                          {kr(delsum)} kr
-                        </span>
-                      </div>
+                      )}
 
                       <div className="overflow-x-auto">
                         <table className="w-full text-sm">
                           <thead>
+                            {(stkCols.length > 0 || totCols.length > 0) && (
+                              <tr className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                                <th colSpan={1 + (prodCols.positioner ? 1 : 0) + (prodCols.antal ? 1 : 0) + (prodCols.enhed ? 1 : 0)} />
+                                {stkCols.length > 0 && (
+                                  <th colSpan={stkCols.length} className="px-3 pt-1 text-center border-b border-l">Pr. stk (kr)</th>
+                                )}
+                                {totCols.length > 0 && (
+                                  <th colSpan={totCols.length} className="px-3 pt-1 text-center border-b border-l">I alt (kr)</th>
+                                )}
+                              </tr>
+                            )}
                             <tr className="border-b bg-muted/40">
                               <th className="px-3 py-2 text-left">
                                 <SortKnap felt="navn">Produkt</SortKnap>
                               </th>
-                              <th className="px-3 py-2 text-left font-medium text-muted-foreground w-44">
-                                Positioner
-                              </th>
-                              <th className="px-3 py-2 text-right w-24">
-                                <SortKnap felt="antal" højre>Antal</SortKnap>
-                              </th>
-                              <th className="px-3 py-2 text-center font-medium text-muted-foreground w-20">
-                                Enhed
-                              </th>
-                              <th className="px-3 py-2 text-right w-32">
-                                <SortKnap felt="cost" højre>Samlet cost</SortKnap>
-                              </th>
+                              {prodCols.positioner && (
+                                <th className="px-3 py-2 text-left font-medium text-muted-foreground w-44">Positioner</th>
+                              )}
+                              {prodCols.antal && (
+                                <th className="px-3 py-2 text-right w-20">
+                                  <SortKnap felt="antal" højre>Antal</SortKnap>
+                                </th>
+                              )}
+                              {prodCols.enhed && (
+                                <th className="px-3 py-2 text-center font-medium text-muted-foreground w-16">Enhed</th>
+                              )}
+                              {stkCols.map((c, i) => (
+                                <th key={c.key} className={`px-3 py-2 text-right font-medium whitespace-nowrap ${i === 0 ? 'border-l' : ''}`}>
+                                  {c.label}
+                                </th>
+                              ))}
+                              {totCols.map((c, i) => (
+                                <th key={c.key} className={`px-3 py-2 text-right whitespace-nowrap ${i === 0 ? 'border-l' : ''}`}>
+                                  {sortFeltFor[c.key]
+                                    ? <SortKnap felt={sortFeltFor[c.key]!} højre>{c.label}</SortKnap>
+                                    : <span className="font-medium">{c.label}</span>}
+                                </th>
+                              ))}
                             </tr>
                           </thead>
                           <tbody>
                             {rækker.map((p, i) => (
                               <tr
-                                key={`${p.kostArt}-${p.projectProductId || p.title || i}`}
-                                className={`border-b last:border-0 hover:bg-muted/50 ${
-                                  p.erOption ? 'bg-amber-50/60' : ''
-                                }`}
+                                key={`${p.kostArt}-${p.projectProductId || p.title || i}-${p.erOption ? 'opt' : 'fast'}`}
+                                className={`border-b last:border-0 hover:bg-muted/50 ${p.erOption ? 'bg-amber-50/60' : ''}`}
                               >
                                 <td className="px-3 py-2">
                                   {p.title}
@@ -6070,27 +6254,50 @@ const ProjectQuoteDetail = () => {
                                     </span>
                                   )}
                                 </td>
-                                <td className="px-3 py-2 text-xs text-muted-foreground">
-                                  {p.positionsListe.length > 0 ? p.positionsListe.join(' · ') : '—'}
-                                </td>
-                                <td className="px-3 py-2 text-right tabular-nums font-medium">
-                                  {antal(p.totalQty)}
-                                </td>
-                                <td className="px-3 py-2 text-center text-muted-foreground">{p.unit}</td>
-                                <td className="px-3 py-2 text-right tabular-nums font-semibold">
-                                  {kr(p.totalCost)} kr
-                                </td>
+                                {prodCols.positioner && (
+                                  <td className="px-3 py-2 text-xs text-muted-foreground">
+                                    {p.positionsListe.length > 0 ? p.positionsListe.join(' · ') : '—'}
+                                  </td>
+                                )}
+                                {prodCols.antal && (
+                                  <td className="px-3 py-2 text-right tabular-nums font-medium">{antal(p.totalQty)}</td>
+                                )}
+                                {prodCols.enhed && (
+                                  <td className="px-3 py-2 text-center text-muted-foreground">{p.unit}</td>
+                                )}
+                                {stkCols.map((c, ci) => (
+                                  <td key={c.key} className={`px-3 py-2 text-right tabular-nums whitespace-nowrap ${fremhaev(c.key)} ${ci === 0 ? 'border-l' : ''}`}>
+                                    {fmt(c.key, vaerdi(p, c.key))}
+                                  </td>
+                                ))}
+                                {totCols.map((c, ci) => (
+                                  <td key={c.key} className={`px-3 py-2 text-right tabular-nums whitespace-nowrap ${fremhaev(c.key)} ${ci === 0 ? 'border-l' : ''}`}>
+                                    {fmt(c.key, vaerdi(p, c.key))}
+                                  </td>
+                                ))}
                               </tr>
                             ))}
                             <tr className="bg-muted/30 font-semibold">
-                              <td className="px-3 py-2" colSpan={2}>I alt {art.label.toLowerCase()}</td>
-                              <td className="px-3 py-2 text-right tabular-nums">
-                                {samletAntal !== null ? antal(samletAntal) : ''}
-                              </td>
-                              <td className="px-3 py-2 text-center text-muted-foreground">
-                                {samletAntal !== null ? rækker[0].unit : ''}
-                              </td>
-                              <td className="px-3 py-2 text-right tabular-nums">{kr(delsum)} kr</td>
+                              <td className="px-3 py-2">I alt {g.label.toLowerCase()}</td>
+                              {prodCols.positioner && <td />}
+                              {prodCols.antal && (
+                                <td className="px-3 py-2 text-right tabular-nums">
+                                  {samletAntal !== null ? antal(samletAntal) : ''}
+                                </td>
+                              )}
+                              {prodCols.enhed && (
+                                <td className="px-3 py-2 text-center text-muted-foreground">
+                                  {samletAntal !== null ? rækker[0].unit : ''}
+                                </td>
+                              )}
+                              {stkCols.map((c, ci) => (
+                                <td key={c.key} className={ci === 0 ? 'border-l' : ''} />
+                              ))}
+                              {totCols.map((c, ci) => (
+                                <td key={c.key} className={`px-3 py-2 text-right tabular-nums whitespace-nowrap ${ci === 0 ? 'border-l' : ''}`}>
+                                  {fmt(c.key, vaerdi(sum, c.key))}
+                                </td>
+                              ))}
                             </tr>
                           </tbody>
                         </table>
@@ -6107,7 +6314,7 @@ const ProjectQuoteDetail = () => {
                   <div className="border-t-2 pt-3 space-y-1">
                     <div className="flex items-baseline justify-between gap-3">
                       <span className="font-bold">
-                        Samlet cost — faste poster
+                        Salg — faste poster
                         {summarySearch.trim() && (
                           <span className="ml-2 text-xs font-normal text-muted-foreground">
                             (filtreret — {filtreretSummary.length} af {productSummary.length} poster)
@@ -6115,25 +6322,39 @@ const ProjectQuoteDetail = () => {
                         )}
                       </span>
                       <span className="font-bold tabular-nums whitespace-nowrap">
-                        {kr(summaryFast)} kr
+                        {kr(summaryFastSalg)} kr
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between gap-3 text-sm">
+                      <span>Kost — faste poster</span>
+                      <span className="tabular-nums whitespace-nowrap">{kr(summaryFast)} kr</span>
+                    </div>
+                    <div className="flex items-baseline justify-between gap-3 text-sm text-green-700">
+                      <span>DB — faste poster</span>
+                      <span className="tabular-nums whitespace-nowrap">
+                        {kr(summaryFastDb)} kr
+                        {summaryFastSalg > 0 && ` · ${((summaryFastDb / summaryFastSalg) * 100).toFixed(1)} %`}
                       </span>
                     </div>
                     {summaryOption > 0 && (
                       <>
                         <div className="flex items-baseline justify-between gap-3 text-amber-900">
                           <span className="text-sm">
-                            + optioner (tæller ikke med i hovedsummen)
+                            + optioner, kost (tæller ikke med i hovedsummen)
                           </span>
                           <span className="tabular-nums whitespace-nowrap">
                             {kr(summaryOption)} kr
                           </span>
                         </div>
                         <div className="flex items-baseline justify-between gap-3 text-muted-foreground text-sm border-t pt-1">
-                          <span>Alt medregnet</span>
+                          <span>Kost, alt medregnet</span>
                           <span className="tabular-nums whitespace-nowrap">{kr(summaryTotal)} kr</span>
                         </div>
                       </>
                     )}
+                    <p className="text-xs text-muted-foreground pt-1">
+                      Salg pr. vare er regnet som på tilbudslinjen (produktets salgspris eller kost × faktor). Risiko på linjeniveau er ikke fordelt ud på varerne.
+                    </p>
                   </div>
                 )}
               </CardContent>
