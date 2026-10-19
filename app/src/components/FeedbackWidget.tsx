@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { MessageSquare, X, Loader2 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -18,6 +19,9 @@ import {
  * (00_Faelles/feedback/feedback-widget.js): skriver til tabellen
  * dashboard_feedback via edge function `dashboard-feedback`, triage på
  * 00_Faelles/feedback/feedback.html under source = "erp".
+ *
+ * Fra 19-10-2026 (dashboard-feedback v6) kræver funktionen login: vi sender den
+ * indloggede brugers Supabase-token, og forfatteren er den, der er logget ind.
  *
  * Skift ALDRIG `SOURCE` bagefter — det splitter feedback-historikken.
  */
@@ -60,9 +64,13 @@ const FeedbackWidget: React.FC = () => {
     setSending(true);
     setStatus(null);
     try {
+      const { data: { session } } = await supabase.auth.getSession();
       const r = await fetch(FEEDBACK_FN, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
         body: JSON.stringify({
           author,
           source: SOURCE,
