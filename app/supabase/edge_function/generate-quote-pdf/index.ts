@@ -77,6 +77,9 @@ interface QuoteRow {
   customer_remarks: string | null;
   appendix_intro_text: string | null;
   pdf_show_items?: boolean | null;
+  pdf_language?: string | null;
+  vat_mode?: string | null;
+  eur_rate?: number | string | null;
   customer_delivery_note: string | null;
   recipient_name: string | null;
   created_by_name_resolved: string | null;
@@ -182,10 +185,16 @@ async function loadQuoteData(
   };
 }
 
-function formatDk(iso: string | null | undefined): string {
+function formatDk(iso: string | null | undefined, language: 'da' | 'en' = 'da'): string {
   if (!iso) return '';
-  return new Intl.DateTimeFormat('da-DK').format(new Date(iso));
+  // Samme som GUI'ens formatPdfDate: dansk 26.10.2026 · engelsk 26 October 2026
+  return language === 'en'
+    ? new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(iso))
+    : new Intl.DateTimeFormat('da-DK').format(new Date(iso));
 }
+
+// PDF'ens sprog (project_quotes.pdf_language) — alt andet end 'en' er dansk
+const pdfLanguageOf = (quote: QuoteRow): 'da' | 'en' => (quote.pdf_language === 'en' ? 'en' : 'da');
 
 // @react-pdf dekoder billeder i fuld opløsning — flere full-res renders (~2,3 MB/stk)
 // sprænger edge-funktionens compute (WORKER_RESOURCE_LIMIT). Nedskalér derfor Supabase-
@@ -239,8 +248,9 @@ async function renderQuotePdf(loaded: LoadedQuoteData): Promise<Uint8Array> {
     };
   });
 
-  const date = formatDk(quote.created_at);
-  const validUntil = quote.valid_until ? formatDk(quote.valid_until) : null;
+  const language = pdfLanguageOf(quote);
+  const date = formatDk(quote.created_at, language);
+  const validUntil = quote.valid_until ? formatDk(quote.valid_until, language) : null;
 
   const recipientName =
     quote.recipient_name ??
@@ -262,7 +272,7 @@ async function renderQuotePdf(loaded: LoadedQuoteData): Promise<Uint8Array> {
     ? { name: project.customer, contactName: recipientName }
     : { contactName: recipientName };
 
-  const quoteDateStr = quote.resolved_quote_date ? formatDk(quote.resolved_quote_date) : date;
+  const quoteDateStr = quote.resolved_quote_date ? formatDk(quote.resolved_quote_date, language) : date;
 
   const doc = React.createElement(QuotePDF as any, {
     projectName: project.name,
@@ -280,6 +290,9 @@ async function renderQuotePdf(loaded: LoadedQuoteData): Promise<Uint8Array> {
     introText: quote.intro_text ?? null,
     notes: quote.customer_remarks ?? null,
     showItems: quote.pdf_show_items === true,
+    language,
+    vatMode: quote.vat_mode === 'reverse_charge' ? 'reverse_charge' : 'dk',
+    eurRate: quote.eur_rate != null ? Number(quote.eur_rate) : null,
     createdBy: {
       name: quote.created_by_name_resolved ?? quote.created_by_name ?? null,
       email: quote.created_by_email_resolved ?? quote.created_by_email ?? null,
@@ -331,8 +344,9 @@ async function renderAppendixPdf(loaded: LoadedQuoteData): Promise<Uint8Array> {
       line.active_image_source === 'custom' ? line.custom_image_caption ?? null : null,
   }));
 
-  const date = formatDk(quote.created_at);
-  const quoteDateStr = quote.resolved_quote_date ? formatDk(quote.resolved_quote_date) : date;
+  const language = pdfLanguageOf(quote);
+  const date = formatDk(quote.created_at, language);
+  const quoteDateStr = quote.resolved_quote_date ? formatDk(quote.resolved_quote_date, language) : date;
 
   const doc = React.createElement(QuoteAppendixPDF as any, {
     projectName: project.name,
@@ -342,6 +356,7 @@ async function renderAppendixPdf(loaded: LoadedQuoteData): Promise<Uint8Array> {
     customer,
     lines: appendixLines,
     introText: quote.appendix_intro_text ?? null,
+    language,
   });
 
   const blob = await pdf(doc as any).toBlob();

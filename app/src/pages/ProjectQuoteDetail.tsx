@@ -257,6 +257,15 @@ const erPrisbogNote = (pp: any): boolean => {
 const erLaast = (item: { costLocked?: boolean; fraPrisbog?: boolean }): boolean =>
   item.costLocked === true || item.fraPrisbog === true;
 
+/** PDF'ens sprog (project_quotes.pdf_language) — alt andet end 'en' er dansk */
+const pdfLanguageOf = (quote: any): 'da' | 'en' => (quote?.pdf_language === 'en' ? 'en' : 'da');
+
+/** Datoer i PDF'en: dansk 26.10.2026 · engelsk 26 October 2026 */
+const formatPdfDate = (iso: string | null | undefined, language: 'da' | 'en'): string =>
+  !iso ? '' : language === 'en'
+    ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+    : new Date(iso).toLocaleDateString('da-DK');
+
 interface CostBreakdown {
   materials: number;
   transport?: number;
@@ -3106,8 +3115,7 @@ const ProjectQuoteDetail = () => {
         isOption: line.isOption === true,
       };
     });
-    const formatDk = (iso?: string | null) =>
-      iso ? new Date(iso).toLocaleDateString('da-DK') : '';
+    const formatDk = (iso?: string | null) => formatPdfDate(iso, pdfLanguageOf(quote));
     const date = formatDk(quote.created_at);
     const validUntil = quote.valid_until ? formatDk(quote.valid_until) : null;
     const linkedCompany = quote.company_id ? companies.find(c => c.id === quote.company_id) : undefined;
@@ -3142,6 +3150,9 @@ const ProjectQuoteDetail = () => {
         introText={quote.intro_text ?? null}
         notes={quote.customer_remarks ?? null}
         showItems={quote.pdf_show_items === true}
+        language={pdfLanguageOf(quote)}
+        vatMode={quote.vat_mode === 'reverse_charge' ? 'reverse_charge' : 'dk'}
+        eurRate={quote.eur_rate != null ? Number(quote.eur_rate) : null}
         createdBy={{
           name: quote.created_by_name_resolved ?? quote.created_by_name ?? null,
           email: quote.created_by_email_resolved ?? quote.created_by_email ?? null,
@@ -3179,7 +3190,7 @@ const ProjectQuoteDetail = () => {
 
   const buildAppendixPdfBlob = async (): Promise<Blob | null> => {
     if (!quote || !activeProject) return null;
-    const formatDk = (iso?: string | null) => iso ? new Date(iso).toLocaleDateString('da-DK') : '';
+    const formatDk = (iso?: string | null) => formatPdfDate(iso, pdfLanguageOf(quote));
     const date = formatDk(quote.created_at);
     const linkedCompany = quote.company_id ? companies.find(c => c.id === quote.company_id) : undefined;
     const customer = linkedCompany
@@ -3221,6 +3232,7 @@ const ProjectQuoteDetail = () => {
         customer={customer}
         lines={appendixLines}
         introText={quote.appendix_intro_text ?? null}
+        language={pdfLanguageOf(quote)}
       />
     ).toBlob();
   };
@@ -4087,6 +4099,70 @@ const ProjectQuoteDetail = () => {
                   </div>
                   <p className="text-xs text-muted-foreground">
                     PDF'en viser så "Posten omfatter" med antal og enhed under hver post, uden priser. Modtageren kan dermed se, hvad der er med.
+                  </p>
+                </div>
+                {/* Tilbud til udlandet: PDF'ens sprog, moms og euro (Milot 26-10-2026, 26039 Sylt) */}
+                <div className="space-y-2">
+                  <Label htmlFor="pdf_language">Sprog i PDF'en</Label>
+                  <Select
+                    value={quote?.pdf_language === 'en' ? 'en' : 'da'}
+                    onValueChange={(v) => updateQuoteMetadata({ pdf_language: v })}
+                    disabled={savingMetadata || isReadOnly}
+                  >
+                    <SelectTrigger id="pdf_language">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="da">Dansk</SelectItem>
+                      <SelectItem value="en">Engelsk</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Styrer PDF'ens faste tekster (overskrifter, total, betalingsplan, vilkår). Tilbuddets egne tekster skal skrives på samme sprog.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="vat_mode">Moms</Label>
+                  <Select
+                    value={quote?.vat_mode === 'reverse_charge' ? 'reverse_charge' : 'dk'}
+                    onValueChange={(v) => updateQuoteMetadata({ vat_mode: v })}
+                    disabled={savingMetadata || isReadOnly}
+                  >
+                    <SelectTrigger id="vat_mode">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="dk">Dansk moms 25 %</SelectItem>
+                      <SelectItem value="reverse_charge">Omvendt betalingspligt (kunde i et andet EU-land)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Omvendt betalingspligt: PDF'en lægger ikke dansk moms på og skriver, at køberen afregner momsen. Fx levering med montage i Tyskland.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="eur_rate">Vis beløb i euro (kurs)</Label>
+                  <Input
+                    id="eur_rate"
+                    key={quote?.eur_rate ?? 'tom'}
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="Tom = kun kroner, fx 7,46"
+                    defaultValue={quote?.eur_rate != null ? String(quote.eur_rate).replace('.', ',') : ''}
+                    onBlur={(e) => {
+                      const raw = e.target.value.trim().replace(',', '.');
+                      const next = raw === '' ? null : Number(raw);
+                      if (next !== null && !(next > 0)) {
+                        toast({ title: 'Ugyldig kurs', description: 'Skriv kroner pr. euro, fx 7,46 — eller lad feltet stå tomt.', variant: 'destructive' });
+                        return;
+                      }
+                      const current = quote?.eur_rate != null ? Number(quote.eur_rate) : null;
+                      if (next !== current) updateQuoteMetadata({ eur_rate: next });
+                    }}
+                    disabled={savingMetadata || isReadOnly}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Kroner pr. euro. PDF'en viser så beløbene også i euro — vejledende, der faktureres i kroner.
                   </p>
                 </div>
                 {/* Betalingsbetingelser */}

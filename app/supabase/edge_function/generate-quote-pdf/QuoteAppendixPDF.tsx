@@ -1,5 +1,6 @@
 // KOPI af app/src/components/QuoteAppendixPDF.tsx
 // Skal holdes synkroniseret med GUI-versionen.
+// Hvis du ændrer designet i GUI, opdater også her.
 
 import { Document, Page, Text, View, Image, StyleSheet } from '@react-pdf/renderer';
 import { COMPANY_INFO } from './company.ts';
@@ -15,8 +16,40 @@ const PALETTE = {
 
 const MARGIN = 62; // 22mm
 
-// Hardcoded system-wide disclaimer på alle bilag (kunde-facing). Joachim 2026-06-16.
-const RENDER_DISCLAIMER = 'Dette er renderinger, udførslen tilpasses det enkelte projekt.';
+// Bilagets faste tekster pr. sprog (project_quotes.pdf_language, Milot 26-10-2026). Disclaimeren står på alle bilag
+// (kunde-facing, Joachim 2026-06-16).
+const TEXT = {
+  da: {
+    disclaimer: 'Dette er renderinger, udførslen tilpasses det enkelte projekt.',
+    tagline: 'Snedker · Inventar · Specialopgaver',
+    appendix: 'Bilag',
+    appendixTo: 'Bilag til tilbud',
+    defaultIntro: (nr: string) => `Bilaget viser hver enkelt post i tilbuddet med billede og teknisk specifikation. Det giver et samlet overblik over materialer, mål og udførelse, og læses sammen med tilbudsdokument ${nr}.`,
+    customer: 'Kunde', quote: 'Tilbud', sender: 'Afsender', customerReg: 'CVR', ourReg: `CVR ${COMPANY_INFO.cvr}`, attn: 'Att.', date: 'Dato',
+    noContent: 'Ingen indhold',
+    emptyNote: 'Tilbuddet har ingen linjer med billeder eller levende beskrivelser. Tilføj dem i tilbuds-editoren for at fylde dette bilag.',
+    item: (i: number, n: number) => `Post ${i} af ${n}`,
+    noImage: 'Intet billede',
+    description: 'Beskrivelse',
+    spec: 'Teknisk spec',
+    page: 'Side',
+  },
+  en: {
+    disclaimer: 'These are renderings. The final design is adapted to each project.',
+    tagline: 'Joinery · Furniture · Special projects',
+    appendix: 'Appendix',
+    appendixTo: 'Appendix to quotation',
+    defaultIntro: (nr: string) => `This appendix shows each item in the quotation with an image and technical specification. It gives an overview of materials, dimensions and finish, and should be read together with quotation ${nr}.`,
+    customer: 'Customer', quote: 'Quotation', sender: 'From', customerReg: 'Reg. no.', ourReg: `VAT no. DK${COMPANY_INFO.cvr}`, attn: 'Attn.', date: 'Date',
+    noContent: 'No content',
+    emptyNote: 'The quotation has no lines with images or descriptions.',
+    item: (i: number, n: number) => `Item ${i} of ${n}`,
+    noImage: 'No image',
+    description: 'Description',
+    spec: 'Technical specification',
+    page: 'Page',
+  },
+} as const;
 
 const styles = StyleSheet.create({
   page: {
@@ -261,6 +294,8 @@ interface QuoteAppendixPDFProps {
   customer?: AppendixCustomer;
   lines: AppendixLine[];
   introText?: string | null;
+  /** Bilagets faste tekster (project_quotes.pdf_language) */
+  language?: 'da' | 'en';
 }
 
 export function QuoteAppendixPDF({
@@ -271,11 +306,12 @@ export function QuoteAppendixPDF({
   customer,
   lines,
   introText,
+  language = 'da',
 }: QuoteAppendixPDFProps) {
-  const intro = introText
-    || `Bilaget viser hver enkelt post i tilbuddet med billede og teknisk specifikation. Det giver et samlet overblik over materialer, mål og udførelse, og læses sammen med tilbudsdokument ${quoteNumber || '—'}.`;
+  const T = TEXT[language] ?? TEXT.da;
+  const intro = introText || T.defaultIntro(quoteNumber || '—');
   const visibleLines = lines.filter(l => l.imageUrl || l.livingDescription || l.technicalSpec);
-  const headerMeta = `Bilag · ${quoteNumber || ''}${quoteNumber && projectName ? ' · ' : ''}${projectName || ''}`;
+  const headerMeta = `${T.appendix} · ${quoteNumber || ''}${quoteNumber && projectName ? ' · ' : ''}${projectName || ''}`;
 
   return (
     <Document>
@@ -289,33 +325,33 @@ export function QuoteAppendixPDF({
 
         {/* Brand */}
         <Text style={styles.coverBrand}>NEM INVENTAR</Text>
-        <Text style={styles.coverTagline}>Snedker · Inventar · Specialopgaver</Text>
+        <Text style={styles.coverTagline}>{T.tagline}</Text>
 
         {/* Hero */}
-        <Text style={styles.coverLabel}>Bilag til tilbud</Text>
+        <Text style={styles.coverLabel}>{T.appendixTo}</Text>
         <Text style={styles.coverTitle}>{quoteTitle}</Text>
         <View style={styles.coverAccentLine} />
 
         <Text style={styles.coverIntro}>{intro}</Text>
-        <Text style={styles.coverDisclaimer}>{RENDER_DISCLAIMER}</Text>
+        <Text style={styles.coverDisclaimer}>{T.disclaimer}</Text>
 
         {/* Meta */}
         <View style={styles.coverMetaBlock}>
           <View style={styles.coverMetaCol}>
-            <Text style={styles.coverMetaLabel}>Kunde</Text>
+            <Text style={styles.coverMetaLabel}>{T.customer}</Text>
             {customer?.name ? <Text style={styles.coverMetaValueBold}>{customer.name}</Text> : <Text style={styles.coverMetaValue}>—</Text>}
-            {customer?.cvr ? <Text style={styles.coverMetaValue}>CVR {customer.cvr}</Text> : null}
-            {customer?.contactName ? <Text style={styles.coverMetaValue}>Att. {customer.contactName}</Text> : null}
+            {customer?.cvr ? <Text style={styles.coverMetaValue}>{T.customerReg} {customer.cvr}</Text> : null}
+            {customer?.contactName ? <Text style={styles.coverMetaValue}>{T.attn} {customer.contactName}</Text> : null}
           </View>
           <View style={styles.coverMetaCol}>
-            <Text style={styles.coverMetaLabel}>Tilbud</Text>
+            <Text style={styles.coverMetaLabel}>{T.quote}</Text>
             <Text style={styles.coverMetaValueBold}>{quoteNumber || '—'}</Text>
-            <Text style={styles.coverMetaValue}>Dato: {quoteDate}</Text>
+            <Text style={styles.coverMetaValue}>{T.date}: {quoteDate}</Text>
           </View>
           <View style={[styles.coverMetaCol, { paddingRight: 0 }]}>
-            <Text style={styles.coverMetaLabel}>Afsender</Text>
+            <Text style={styles.coverMetaLabel}>{T.sender}</Text>
             <Text style={styles.coverMetaValueBold}>{COMPANY_INFO.name}</Text>
-            <Text style={styles.coverMetaValue}>CVR {COMPANY_INFO.cvr}</Text>
+            <Text style={styles.coverMetaValue}>{T.ourReg}</Text>
             <Text style={styles.coverMetaValue}>{COMPANY_INFO.email}</Text>
           </View>
         </View>
@@ -326,7 +362,7 @@ export function QuoteAppendixPDF({
           <Text style={styles.pageFooterCenter}>
             {COMPANY_INFO.name} · {COMPANY_INFO.email} · {COMPANY_INFO.phone}
           </Text>
-          <Text render={({ pageNumber }) => `Side ${pageNumber}`} />
+          <Text render={({ pageNumber }) => `${T.page} ${pageNumber}`} />
         </View>
       </Page>
 
@@ -338,20 +374,17 @@ export function QuoteAppendixPDF({
             <Text style={styles.pageHeaderMeta}>{headerMeta}</Text>
           </View>
           <View style={styles.lineHeaderBlock}>
-            <Text style={styles.lineLabel}>Bilag</Text>
-            <Text style={styles.lineTitle}>Ingen indhold</Text>
+            <Text style={styles.lineLabel}>{T.appendix}</Text>
+            <Text style={styles.lineTitle}>{T.noContent}</Text>
             <View style={styles.lineAccentLine} />
           </View>
-          <Text style={styles.emptyNote}>
-            Tilbuddet har ingen linjer med billeder eller levende beskrivelser.
-            Tilføj dem i tilbuds-editoren for at fylde dette bilag.
-          </Text>
+          <Text style={styles.emptyNote}>{T.emptyNote}</Text>
           <View style={styles.pageFooter} fixed>
             <Text>{quoteDate}</Text>
             <Text style={styles.pageFooterCenter}>
               {COMPANY_INFO.name} · {COMPANY_INFO.email} · {COMPANY_INFO.phone}
             </Text>
-            <Text render={({ pageNumber }) => `Side ${pageNumber}`} />
+            <Text render={({ pageNumber }) => `${T.page} ${pageNumber}`} />
           </View>
         </Page>
       ) : (
@@ -364,7 +397,7 @@ export function QuoteAppendixPDF({
 
             {/* Hero per linje */}
             <View style={styles.lineHeaderBlock}>
-              <Text style={styles.lineLabel}>Post {i + 1} af {visibleLines.length}</Text>
+              <Text style={styles.lineLabel}>{T.item(i + 1, visibleLines.length)}</Text>
               <Text style={styles.lineTitle}>{line.title}</Text>
               <View style={styles.lineAccentLine} />
             </View>
@@ -377,7 +410,7 @@ export function QuoteAppendixPDF({
               </>
             ) : (
               <View style={styles.imageBox}>
-                <Text style={styles.imagePlaceholder}>Intet billede</Text>
+                <Text style={styles.imagePlaceholder}>{T.noImage}</Text>
               </View>
             )}
 
@@ -389,13 +422,13 @@ export function QuoteAppendixPDF({
                 <View style={styles.bodyRow}>
                   {line.livingDescription ? (
                     <View style={line.technicalSpec ? styles.bodyMain : { flex: 1 }}>
-                      <Text style={styles.blockLabel}>Beskrivelse</Text>
+                      <Text style={styles.blockLabel}>{T.description}</Text>
                       <Text style={styles.livingText}>{line.livingDescription}</Text>
                     </View>
                   ) : null}
                   {line.technicalSpec ? (
                     <View style={line.livingDescription ? styles.bodySide : { flex: 1 }}>
-                      <Text style={styles.blockLabel}>Teknisk spec</Text>
+                      <Text style={styles.blockLabel}>{T.spec}</Text>
                       <Text style={styles.specText}>{line.technicalSpec}</Text>
                     </View>
                   ) : null}
@@ -408,7 +441,7 @@ export function QuoteAppendixPDF({
               <Text style={styles.pageFooterCenter}>
                 {COMPANY_INFO.name} · {COMPANY_INFO.email} · {COMPANY_INFO.phone}
               </Text>
-              <Text render={({ pageNumber }) => `Side ${pageNumber}`} />
+              <Text render={({ pageNumber }) => `${T.page} ${pageNumber}`} />
             </View>
           </Page>
         ))
