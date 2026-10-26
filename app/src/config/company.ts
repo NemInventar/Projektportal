@@ -10,8 +10,10 @@ export const COMPANY_INFO = {
     zip: '2400',
     city: 'København NV',
   },
-  phone: '+45 20 54 14 88',
-  email: 'js@neminventar.dk',
+  // Tilbuddenes sidefod: tilbud@ og hovednummeret (Milot 27-10-2026) — ikke en persons mail og mobil.
+  // Hovednummeret står også i neminventar-astro src/lib/contact.ts og company_settings.
+  phone: '+45 42 42 26 84',
+  email: 'tilbud@neminventar.dk',
   bank: {
     name: 'Merkur Andelskasse',
     regNo: '8401',
