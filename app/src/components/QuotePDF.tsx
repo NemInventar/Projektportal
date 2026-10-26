@@ -202,6 +202,13 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: PALETTE.muted,
   },
+  // Beløbet i euro under kronebeløbet (kun når tilbuddet har en EUR-kurs)
+  eurCell: {
+    fontSize: 8,
+    color: PALETTE.accent,
+    textAlign: 'right',
+    marginTop: 2,
+  },
   // Niveau 2: varerne under en post (antal + enhed + titel, ingen priser)
   rowWithItems: {
     borderBottomWidth: 0,
@@ -272,6 +279,13 @@ const styles = StyleSheet.create({
     color: PALETTE.ink,
     width: 100,
     textAlign: 'right',
+  },
+  totalNote: {
+    fontSize: 8,
+    color: PALETTE.muted,
+    width: 240,
+    textAlign: 'right',
+    marginTop: 3,
   },
   grandTotalSep: {
     width: 240,
@@ -458,16 +472,130 @@ interface QuotePDFProps {
   notes?: string | null;
   /** Vis varerne under hver post (project_quotes.pdf_show_items) */
   showItems?: boolean;
+  /** PDF'ens faste tekster (project_quotes.pdf_language) — tilbuddets egne tekster står på det sprog, de er skrevet på */
+  language?: PdfLanguage;
+  /** dk = 25 % dansk moms · reverse_charge = ingen dansk moms, køber afregner (project_quotes.vat_mode) */
+  vatMode?: VatMode;
+  /** DKK pr. EUR — sat = beløbene vises også i euro (project_quotes.eur_rate) */
+  eurRate?: number | null;
 }
 
-const fmt = (n: number) =>
-  new Intl.NumberFormat('da-DK', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(n) + ' kr.';
+export type PdfLanguage = 'da' | 'en';
+export type VatMode = 'dk' | 'reverse_charge';
 
-const fmtQty = (n: number) =>
-  new Intl.NumberFormat('da-DK', { maximumFractionDigits: 2 }).format(n);
+// PDF'ens faste tekster pr. sprog (Milot 26-10-2026, 26039 Sylt: tilbud til Tyskland på engelsk, i euro og uden dansk moms)
+const TEXT = {
+  da: {
+    tagline: 'Snedker · Inventar · Specialopgaver',
+    quote: 'Tilbud',
+    customer: 'Kunde',
+    sender: 'Afsender',
+    customerReg: 'CVR',
+    ourReg: `CVR ${COMPANY_INFO.cvr}`,
+    attn: 'Att.',
+    date: 'Dato',
+    validUntil: 'Gyldigt til',
+    defaultIntro: 'Hermed vores tilbud på de beskrevne poster. Tilbuddet er udarbejdet på baggrund af det modtagne projektmateriale og forudsætninger angivet under vilkår.',
+    lines: 'Tilbudslinjer',
+    itemsNote: 'Under hver post står, hvad posten omfatter.',
+    itemsLabel: 'Posten omfatter',
+    colNo: 'Nr.', colDesc: 'Beskrivelse', colQty: 'Antal', colUnit: 'Enh.', colUnitPrice: 'Enhedspris', colTotal: 'I alt',
+    subtotal: 'Subtotal ekskl. moms',
+    vat: 'Moms (25%)',
+    total: 'I alt inkl. moms',
+    vatReverse: 'Moms',
+    vatReverseValue: 'Omvendt betalingspligt',
+    totalReverse: 'I alt',
+    reverseNote: 'Der lægges ikke dansk moms på. Køber afregner momsen (omvendt betalingspligt).',
+    eurRow: (rate: string) => `Ca. i EUR (kurs ${rate})`,
+    eurNote: (rate: string) => `Beløb i euro er vejledende til kurs ${rate} DKK pr. EUR. Der faktureres i DKK.`,
+    options: 'Optioner',
+    optionsNote: 'Priserne er ekskl. moms og indgår ikke i tilbudssummen.',
+    paymentPlan: 'Betalingsplan',
+    when: 'Hvad',
+    excl: 'Ekskl. moms',
+    incl: 'Inkl. moms',
+    amount: 'Beløb',
+    onAccept: (pct: number) => `Ved accept af tilbuddet (${pct}%)`,
+    onDelivery: 'Ved levering',
+    perDelivery: 'Faktureres pr. delleverance — se leveranceplan.',
+    custom: 'Betalingsbetingelser aftales individuelt.',
+    terms: 'Vilkår',
+    payment: 'Betaling',
+    deliveryTime: 'Leveringstid',
+    deliveryNote: 'Leveringsnote',
+    comments: 'Kommentarer',
+    notes: 'Bemærkninger',
+    accept: (email: string) => `Tilbuddet accepteres ved mailbekræftelse til ${email} eller ved underskrift nedenfor.`,
+    placeDate: 'Sted og dato',
+    signature: 'Underskrift / navn',
+    page: 'Side',
+  },
+  en: {
+    tagline: 'Joinery · Furniture · Special projects',
+    quote: 'Quotation',
+    customer: 'Customer',
+    sender: 'From',
+    customerReg: 'Reg. no.',
+    ourReg: `VAT no. DK${COMPANY_INFO.cvr}`,
+    attn: 'Attn.',
+    date: 'Date',
+    validUntil: 'Valid until',
+    defaultIntro: 'Please find our quotation for the items described below. It is based on the project material we have received and the conditions stated under terms.',
+    lines: 'Items',
+    itemsNote: 'Each item lists what it includes.',
+    itemsLabel: 'Includes',
+    colNo: 'No.', colDesc: 'Description', colQty: 'Qty', colUnit: 'Unit', colUnitPrice: 'Unit price', colTotal: 'Total',
+    subtotal: 'Subtotal excl. VAT',
+    vat: 'VAT (25%)',
+    total: 'Total incl. VAT',
+    vatReverse: 'VAT',
+    vatReverseValue: 'Reverse charge',
+    totalReverse: 'Total',
+    reverseNote: 'No Danish VAT is added. VAT is accounted for by the customer (reverse charge).',
+    eurRow: (rate: string) => `Approx. in EUR (rate ${rate})`,
+    eurNote: (rate: string) => `EUR amounts are for guidance at ${rate} DKK per EUR. Invoices are issued in DKK.`,
+    options: 'Options',
+    optionsNote: 'Prices are excl. VAT and are not included in the total.',
+    paymentPlan: 'Payment schedule',
+    when: 'When',
+    excl: 'Excl. VAT',
+    incl: 'Incl. VAT',
+    amount: 'Amount',
+    onAccept: (pct: number) => `On acceptance of the quotation (${pct}%)`,
+    onDelivery: 'On delivery',
+    perDelivery: 'Invoiced per partial delivery, see the delivery plan.',
+    custom: 'Payment terms are agreed individually.',
+    terms: 'Terms',
+    payment: 'Payment',
+    deliveryTime: 'Delivery time',
+    deliveryNote: 'Delivery',
+    comments: 'Comments',
+    notes: 'Notes',
+    accept: (email: string) => `To accept the quotation, confirm by email to ${email} or sign below.`,
+    placeDate: 'Place and date',
+    signature: 'Signature / name',
+    page: 'Page',
+  },
+} as const;
+
+// Enheder, som de står i ERP'et, på engelsk (ukendte enheder vises som de er)
+const UNIT_EN: Record<string, string> = { stk: 'pcs', 'stk.': 'pcs', 'sæt': 'set', lbm: 'lin. m', time: 'hr', timer: 'hrs', 'm2': 'm²' };
+const unitText = (unit: string | null | undefined, language: PdfLanguage) =>
+  language === 'en' ? (UNIT_EN[(unit ?? '').trim().toLowerCase()] ?? unit ?? '') : (unit ?? '');
+
+const numberLocale = (language: PdfLanguage) => (language === 'en' ? 'en-GB' : 'da-DK');
+
+const makeFmt = (language: PdfLanguage) => (n: number) => {
+  const s = new Intl.NumberFormat(numberLocale(language), { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n);
+  return language === 'en' ? `DKK ${s}` : `${s} kr.`;
+};
+
+const makeFmtEur = (language: PdfLanguage, rate: number) => (dkk: number) =>
+  `EUR ${new Intl.NumberFormat(numberLocale(language), { maximumFractionDigits: 0 }).format(Math.round(dkk / rate))}`;
+
+const makeFmtQty = (language: PdfLanguage) => (n: number) =>
+  new Intl.NumberFormat(numberLocale(language), { maximumFractionDigits: 2 }).format(n);
 
 const formatCustomerAddress = (c?: PDFCustomer): string | null => {
   if (!c) return null;
@@ -493,28 +621,39 @@ export function QuotePDF({
   introText,
   notes,
   showItems = false,
+  language = 'da',
+  vatMode = 'dk',
+  eurRate = null,
 }: QuotePDFProps) {
+  const T = TEXT[language] ?? TEXT.da;
+  const fmt = makeFmt(language);
+  const fmtQty = makeFmtQty(language);
+  const reverseCharge = vatMode === 'reverse_charge';
+  // Euro vises kun med en gyldig kurs — vejledende, der faktureres i DKK
+  const showEur = typeof eurRate === 'number' && eurRate > 0;
+  const fmtEur = showEur ? makeFmtEur(language, eurRate as number) : null;
+  const rateText = showEur ? new Intl.NumberFormat(numberLocale(language), { maximumFractionDigits: 4 }).format(eurRate as number) : '';
+
   // Optioner står i egen tabel og tæller ikke med i summen (samme regel som cached_option_total)
   const mainLines = lines.filter(l => !l.isOption);
   const optionLines = lines.filter(l => l.isOption);
-  // Subtotal og moms beregnes kun ud fra prissatte linjer
+  // Subtotal og moms beregnes kun ud fra prissatte linjer. Omvendt betalingspligt: ingen dansk moms
   const subtotal = mainLines.reduce((sum, l) => sum + (l.totalSellingPrice || 0), 0);
-  const vat = Math.round(subtotal * 0.25);
+  const vat = reverseCharge ? 0 : Math.round(subtotal * 0.25);
   const grandTotal = subtotal + vat;
 
   const customerAddress = formatCustomerAddress(customer);
 
-  const intro = introText
-    || 'Hermed vores tilbud på de beskrevne poster. Tilbuddet er udarbejdet på baggrund af det modtagne projektmateriale og forudsætninger angivet under vilkår.';
+  const intro = introText || T.defaultIntro;
 
   const tableHeader = (
     <View style={styles.tableHeader}>
-      <Text style={[styles.tableHeaderText, styles.colNo]}>Nr.</Text>
-      <Text style={[styles.tableHeaderText, styles.colDesc]}>Beskrivelse</Text>
-      <Text style={[styles.tableHeaderText, styles.colQty]}>Antal</Text>
-      <Text style={[styles.tableHeaderText, styles.colUnit]}>Enh.</Text>
-      <Text style={[styles.tableHeaderText, styles.colUnitPrice]}>Enhedspris</Text>
-      <Text style={[styles.tableHeaderText, styles.colTotal]}>I alt</Text>
+      <Text style={[styles.tableHeaderText, styles.colNo]}>{T.colNo}</Text>
+      <Text style={[styles.tableHeaderText, styles.colDesc]}>{T.colDesc}</Text>
+      <Text style={[styles.tableHeaderText, styles.colQty]}>{T.colQty}</Text>
+      <Text style={[styles.tableHeaderText, styles.colUnit]}>{T.colUnit}</Text>
+      <Text style={[styles.tableHeaderText, styles.colUnitPrice]}>{T.colUnitPrice}</Text>
+      <Text style={[styles.tableHeaderText, styles.colTotal]}>{T.colTotal}</Text>
     </View>
   );
 
@@ -539,22 +678,25 @@ export function QuotePDF({
             ) : null}
           </View>
           <Text style={[styles.cell, styles.colQty]}>{fmtQty(line.quantity)}</Text>
-          <Text style={[styles.cellMuted, styles.colUnit]}>{line.unit}</Text>
+          <Text style={[styles.cellMuted, styles.colUnit]}>{unitText(line.unit, language)}</Text>
           <Text style={[hasPrice ? styles.cell : styles.cellMuted, styles.colUnitPrice]}>
             {hasPrice ? fmt(line.sellingPricePerUnit) : '—'}
           </Text>
-          <Text style={[hasPrice ? styles.cell : styles.cellMuted, styles.colTotal]}>
-            {hasPrice ? fmt(line.totalSellingPrice) : '—'}
-          </Text>
+          <View style={styles.colTotal}>
+            <Text style={[hasPrice ? styles.cell : styles.cellMuted, { textAlign: 'right' }]}>
+              {hasPrice ? fmt(line.totalSellingPrice) : '—'}
+            </Text>
+            {hasPrice && fmtEur ? <Text style={styles.eurCell}>{fmtEur(line.totalSellingPrice)}</Text> : null}
+          </View>
         </View>,
       ];
       if (items.length) {
         rows.push(
           <View key={`i${i}`} style={styles.itemsBlock}>
-            <Text style={styles.itemsLabel}>Posten omfatter</Text>
+            <Text style={styles.itemsLabel}>{T.itemsLabel}</Text>
             {items.map((it, j) => (
               <View key={j} style={styles.itemRow} wrap={false}>
-                <Text style={styles.itemQty}>{fmtQty(it.quantity)} {it.unit || 'stk'}</Text>
+                <Text style={styles.itemQty}>{fmtQty(it.quantity)} {unitText(it.unit || 'stk', language)}</Text>
                 <Text style={styles.itemTitle}>{it.title}</Text>
               </View>
             ))}
@@ -571,19 +713,19 @@ export function QuotePDF({
         <View style={styles.pageHeader} fixed>
           <Text style={styles.pageHeaderBrand}>NEM INVENTAR</Text>
           <Text style={styles.pageHeaderMeta}>
-            Tilbud {quoteNumber || ''}{quoteNumber && projectName ? ' · ' : ''}{projectName || ''}
+            {T.quote} {quoteNumber || ''}{quoteNumber && projectName ? ' · ' : ''}{projectName || ''}
           </Text>
         </View>
 
         {/* Brand-mark + tagline */}
         <View style={styles.brandBlock}>
           <Text style={styles.brand}>NEM INVENTAR</Text>
-          <Text style={styles.brandTagline}>Snedker · Inventar · Specialopgaver</Text>
+          <Text style={styles.brandTagline}>{T.tagline}</Text>
         </View>
 
         {/* Hero */}
         <View style={styles.hero}>
-          <Text style={styles.heroLabel}>Tilbud</Text>
+          <Text style={styles.heroLabel}>{T.quote}</Text>
           <Text style={styles.heroTitle}>{quoteTitle}</Text>
           <View style={styles.accentLine} />
         </View>
@@ -592,25 +734,25 @@ export function QuotePDF({
         <View style={styles.metaBlock}>
           {/* Kunde */}
           <View style={styles.metaCol}>
-            <Text style={styles.metaColLabel}>Kunde</Text>
+            <Text style={styles.metaColLabel}>{T.customer}</Text>
             {customer?.name ? <Text style={styles.metaColValueBold}>{customer.name}</Text> : <Text style={styles.metaColValue}>—</Text>}
-            {customer?.cvr ? <Text style={styles.metaColValue}>CVR {customer.cvr}</Text> : null}
+            {customer?.cvr ? <Text style={styles.metaColValue}>{T.customerReg} {customer.cvr}</Text> : null}
             {customerAddress ? <Text style={styles.metaColValue}>{customerAddress}</Text> : null}
-            {customer?.contactName ? <Text style={styles.metaColValue}>Att. {customer.contactName}</Text> : null}
+            {customer?.contactName ? <Text style={styles.metaColValue}>{T.attn} {customer.contactName}</Text> : null}
           </View>
           {/* Tilbud */}
           <View style={styles.metaCol}>
-            <Text style={styles.metaColLabel}>Tilbud</Text>
+            <Text style={styles.metaColLabel}>{T.quote}</Text>
             <Text style={styles.metaColValueBold}>{quoteNumber || '—'}</Text>
-            <Text style={styles.metaColValue}>Dato: {quoteDate}</Text>
-            {validUntil ? <Text style={styles.metaColValue}>Gyldigt til: {validUntil}</Text> : null}
+            <Text style={styles.metaColValue}>{T.date}: {quoteDate}</Text>
+            {validUntil ? <Text style={styles.metaColValue}>{T.validUntil}: {validUntil}</Text> : null}
           </View>
           {/* Afsender */}
           <View style={[styles.metaCol, { paddingRight: 0 }]}>
-            <Text style={styles.metaColLabel}>Afsender</Text>
+            <Text style={styles.metaColLabel}>{T.sender}</Text>
             <Text style={styles.metaColValueBold}>{COMPANY_INFO.name}</Text>
-            <Text style={styles.metaColValue}>CVR {COMPANY_INFO.cvr}</Text>
-            {createdBy?.name ? <Text style={styles.metaColValue}>Att. {createdBy.name}</Text> : null}
+            <Text style={styles.metaColValue}>{T.ourReg}</Text>
+            {createdBy?.name ? <Text style={styles.metaColValue}>{T.attn} {createdBy.name}</Text> : null}
             {createdBy?.email ? <Text style={styles.metaColValue}>{createdBy.email}</Text> : null}
             {createdBy?.phone ? <Text style={styles.metaColValue}>{createdBy.phone}</Text> : null}
           </View>
@@ -620,37 +762,45 @@ export function QuotePDF({
         <Text style={styles.intro}>{intro}</Text>
 
         {/* Tilbudslinje-tabel */}
-        <Text style={styles.sectionHeader}>Tilbudslinjer</Text>
+        <Text style={styles.sectionHeader}>{T.lines}</Text>
         {showItems ? (
-          <Text style={styles.tableNote}>Under hver post står, hvad posten omfatter.</Text>
+          <Text style={styles.tableNote}>{T.itemsNote}</Text>
         ) : null}
 
         {tableHeader}
         {renderLines(mainLines, showItems)}
 
-        {/* Total-blok */}
+        {/* Total-blok — omvendt betalingspligt: ingen dansk moms, køber afregner */}
         <View style={styles.totalBlock} wrap={false}>
           <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Subtotal ekskl. moms</Text>
+            <Text style={styles.totalLabel}>{T.subtotal}</Text>
             <Text style={styles.totalValue}>{fmt(subtotal)}</Text>
           </View>
           <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Moms (25%)</Text>
-            <Text style={styles.totalValue}>{fmt(vat)}</Text>
+            <Text style={styles.totalLabel}>{reverseCharge ? T.vatReverse : T.vat}</Text>
+            <Text style={styles.totalValue}>{reverseCharge ? T.vatReverseValue : fmt(vat)}</Text>
           </View>
           <View style={styles.grandTotalSep} />
           <View style={styles.grandTotalRow}>
-            <Text style={styles.grandTotalLabel}>I alt inkl. moms</Text>
+            <Text style={styles.grandTotalLabel}>{reverseCharge ? T.totalReverse : T.total}</Text>
             <Text style={styles.grandTotalValue}>{fmt(grandTotal)}</Text>
           </View>
+          {fmtEur ? (
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>{T.eurRow(rateText)}</Text>
+              <Text style={styles.totalValue}>{fmtEur(grandTotal)}</Text>
+            </View>
+          ) : null}
+          {reverseCharge ? <Text style={styles.totalNote}>{T.reverseNote}</Text> : null}
+          {fmtEur ? <Text style={styles.totalNote}>{T.eurNote(rateText)}</Text> : null}
         </View>
 
         {/* Optioner — egen tabel, indgår ikke i summen ovenfor */}
         {optionLines.length ? (
           <View style={styles.optionsBlock}>
             <View wrap={false} minPresenceAhead={60}>
-              <Text style={styles.sectionHeader}>Optioner</Text>
-              <Text style={styles.tableNote}>Priserne er ekskl. moms og indgår ikke i tilbudssummen.</Text>
+              <Text style={styles.sectionHeader}>{T.options}</Text>
+              <Text style={styles.tableNote}>{T.optionsNote}</Text>
             </View>
             {tableHeader}
             {renderLines(optionLines, false)}
@@ -660,40 +810,43 @@ export function QuotePDF({
         {/* Betalingsplan */}
         {(() => {
           const tmpl = paymentTermsTemplate ?? '50_50_levering';
+          // Omvendt betalingspligt: ingen "inkl. moms"-kolonne (der lægges ikke dansk moms på). EUR-kurs: egen kolonne i euro
           const splitRows = (firstPct: number, secondPct: number, secondLabel: string) => {
             const firstExcl = Math.round(subtotal * firstPct / 100);
             const secondExcl = subtotal - firstExcl;
             const firstIncl = Math.round(firstExcl * 1.25);
             const secondIncl = Math.round(secondExcl * 1.25);
             return [
-              { when: `Ved accept af tilbuddet (${firstPct}%)`, excl: firstExcl, incl: firstIncl },
+              { when: T.onAccept(firstPct), excl: firstExcl, incl: firstIncl },
               { when: `${secondLabel} (${secondPct}%)`, excl: secondExcl, incl: secondIncl },
             ];
           };
           let rows: Array<{ when: string; excl: number; incl: number }> | null = null;
           let fallback: string | null = null;
-          if (tmpl === '50_50_levering') rows = splitRows(50, 50, 'Ved levering');
-          else if (tmpl === '40_60') rows = splitRows(40, 60, 'Ved levering');
-          else if (tmpl === '30_70') rows = splitRows(30, 70, 'Ved levering');
-          else if (tmpl === '20_80') rows = splitRows(20, 80, 'Ved levering');
-          else if (tmpl === 'per_levering') fallback = 'Faktureres pr. delleverance — se leveranceplan.';
-          else if (tmpl === 'custom') fallback = 'Betalingsbetingelser aftales individuelt.';
+          if (tmpl === '50_50_levering') rows = splitRows(50, 50, T.onDelivery);
+          else if (tmpl === '40_60') rows = splitRows(40, 60, T.onDelivery);
+          else if (tmpl === '30_70') rows = splitRows(30, 70, T.onDelivery);
+          else if (tmpl === '20_80') rows = splitRows(20, 80, T.onDelivery);
+          else if (tmpl === 'per_levering') fallback = T.perDelivery;
+          else if (tmpl === 'custom') fallback = T.custom;
 
           return (
             <View style={styles.paymentPlanBlock} wrap={false}>
-              <Text style={styles.sectionHeader}>Betalingsplan</Text>
+              <Text style={styles.sectionHeader}>{T.paymentPlan}</Text>
               {rows ? (
                 <>
                   <View style={styles.paymentPlanHeader}>
-                    <Text style={[styles.paymentPlanHeaderText, { flex: 2.5 }]}>Hvad</Text>
-                    <Text style={[styles.paymentPlanHeaderText, { flex: 1.5, textAlign: 'right' }]}>Ekskl. moms</Text>
-                    <Text style={[styles.paymentPlanHeaderText, { flex: 1.5, textAlign: 'right' }]}>Inkl. moms</Text>
+                    <Text style={[styles.paymentPlanHeaderText, { flex: 2.5 }]}>{T.when}</Text>
+                    <Text style={[styles.paymentPlanHeaderText, { flex: 1.5, textAlign: 'right' }]}>{reverseCharge ? T.amount : T.excl}</Text>
+                    {reverseCharge ? null : <Text style={[styles.paymentPlanHeaderText, { flex: 1.5, textAlign: 'right' }]}>{T.incl}</Text>}
+                    {fmtEur ? <Text style={[styles.paymentPlanHeaderText, { flex: 1.5, textAlign: 'right' }]}>EUR</Text> : null}
                   </View>
                   {rows.map((r, i) => (
                     <View key={i} style={styles.paymentPlanRow}>
                       <Text style={styles.paymentPlanColWhen}>{r.when}</Text>
                       <Text style={styles.paymentPlanColAmount}>{fmt(r.excl)}</Text>
-                      <Text style={styles.paymentPlanColAmount}>{fmt(r.incl)}</Text>
+                      {reverseCharge ? null : <Text style={styles.paymentPlanColAmount}>{fmt(r.incl)}</Text>}
+                      {fmtEur ? <Text style={styles.paymentPlanColAmount}>{fmtEur(reverseCharge ? r.excl : r.incl)}</Text> : null}
                     </View>
                   ))}
                 </>
@@ -707,28 +860,28 @@ export function QuotePDF({
         {/* Vilkår */}
         {(paymentTerms || deliveryPeriod || deliveryNote || reservations) ? (
           <View style={styles.termsBlock} wrap={false}>
-            <Text style={styles.sectionHeader}>Vilkår</Text>
+            <Text style={styles.sectionHeader}>{T.terms}</Text>
             {paymentTerms ? (
               <View style={styles.termsRow}>
-                <Text style={styles.termsLabel}>Betaling</Text>
+                <Text style={styles.termsLabel}>{T.payment}</Text>
                 <Text style={styles.termsValue}>{paymentTerms}</Text>
               </View>
             ) : null}
             {deliveryPeriod ? (
               <View style={styles.termsRow}>
-                <Text style={styles.termsLabel}>Leveringstid</Text>
+                <Text style={styles.termsLabel}>{T.deliveryTime}</Text>
                 <Text style={styles.termsValue}>{deliveryPeriod}</Text>
               </View>
             ) : null}
             {deliveryNote ? (
               <View style={styles.termsRow}>
-                <Text style={styles.termsLabel}>Leveringsnote</Text>
+                <Text style={styles.termsLabel}>{T.deliveryNote}</Text>
                 <Text style={styles.termsValue}>{deliveryNote}</Text>
               </View>
             ) : null}
             {reservations ? (
               <View style={styles.termsRow}>
-                <Text style={styles.termsLabel}>Kommentarer</Text>
+                <Text style={styles.termsLabel}>{T.comments}</Text>
                 <Text style={styles.termsValue}>{reservations}</Text>
               </View>
             ) : null}
@@ -738,7 +891,7 @@ export function QuotePDF({
         {/* Bemærkninger */}
         {notes ? (
           <View style={styles.notesBlock} wrap={false}>
-            <Text style={styles.sectionHeader}>Bemærkninger</Text>
+            <Text style={styles.sectionHeader}>{T.notes}</Text>
             <Text style={styles.notesText}>{notes}</Text>
           </View>
         ) : null}
@@ -746,16 +899,16 @@ export function QuotePDF({
         {/* Accept */}
         <View style={styles.acceptBlock} wrap={false}>
           <Text style={styles.acceptIntro}>
-            Tilbuddet accepteres ved mailbekræftelse til {createdBy?.email || COMPANY_INFO.email} eller ved underskrift nedenfor.
+            {T.accept(createdBy?.email || COMPANY_INFO.email)}
           </Text>
           <View style={styles.signatureRow}>
             <View style={styles.signatureCol}>
               <View style={styles.signatureLine} />
-              <Text style={styles.signatureLabel}>Sted og dato</Text>
+              <Text style={styles.signatureLabel}>{T.placeDate}</Text>
             </View>
             <View style={styles.signatureCol}>
               <View style={styles.signatureLine} />
-              <Text style={styles.signatureLabel}>Underskrift / navn</Text>
+              <Text style={styles.signatureLabel}>{T.signature}</Text>
             </View>
           </View>
         </View>
@@ -766,7 +919,7 @@ export function QuotePDF({
           <Text style={styles.pageFooterCenter}>
             {COMPANY_INFO.name} · {COMPANY_INFO.email} · {COMPANY_INFO.phone}
           </Text>
-          <Text render={({ pageNumber }) => `Side ${pageNumber}`} />
+          <Text render={({ pageNumber }) => `${T.page} ${pageNumber}`} />
         </View>
       </Page>
     </Document>
