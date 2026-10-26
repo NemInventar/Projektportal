@@ -15,6 +15,10 @@ const PALETTE = {
 
 const MARGIN = 62; // 22mm
 
+// Billedets største højde på en postside (pt): med beskrivelse/spec under · alene på siden
+const IMAGE_MAX_H = 430;
+const IMAGE_MAX_H_ALONE = 560;
+
 // Bilagets faste tekster pr. sprog (project_quotes.pdf_language, Milot 26-10-2026). Disclaimeren står på alle bilag
 // (kunde-facing, Joachim 2026-06-16).
 const TEXT = {
@@ -210,10 +214,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // Højden følger billedets egne proportioner (bredden er sidens), så et højformat ikke skrumper til en smal stribe
+  // midt på siden (Milot 27-10-2026, 26039 Sylt). Loftet holder plads til titel, billedtekst og beskrivelse.
   imageImg: {
     width: '100%',
-    height: 280,
+    maxHeight: IMAGE_MAX_H,
     objectFit: 'contain',
+  },
+  // Uden beskrivelse og spec er resten af siden tom — så må billedet fylde mere
+  imageImgAlone: {
+    maxHeight: IMAGE_MAX_H_ALONE,
   },
   imageCaption: {
     fontSize: 8,
@@ -404,7 +414,10 @@ export function QuoteAppendixPDF({
             {/* Billede */}
             {line.imageUrl ? (
               <>
-                <Image src={line.imageUrl} style={styles.imageImg} />
+                <Image
+                  src={line.imageUrl}
+                  style={line.livingDescription || line.technicalSpec ? styles.imageImg : [styles.imageImg, styles.imageImgAlone]}
+                />
                 {line.imageCaption ? <Text style={styles.imageCaption}>{line.imageCaption}</Text> : null}
               </>
             ) : (
