@@ -351,8 +351,8 @@ const styles = StyleSheet.create({
     paddingTop: 4,
   },
   // Bemærkninger (notes)
-  notesBlock: {
-    marginTop: 22,
+  notesHeader: {
+    marginTop: 30, // 22 til blokken over + sectionHeaders egne 8
   },
   notesText: {
     fontSize: 10,
@@ -888,12 +888,13 @@ export function QuotePDF({
           </View>
         ) : null}
 
-        {/* Bemærkninger */}
+        {/* Bemærkninger — må bryde over sider: længere end én side fik den ellers hele siden til at falde sammen (Klosterstræde 30-10-2026).
+            Ingen omsluttende View: minPresenceAhead virker ikke på første barn, og overskriften skal følge teksten */}
         {notes ? (
-          <View style={styles.notesBlock} wrap={false}>
-            <Text style={styles.sectionHeader}>{T.notes}</Text>
+          <>
+            <Text style={[styles.sectionHeader, styles.notesHeader]} minPresenceAhead={60}>{T.notes}</Text>
             <Text style={styles.notesText}>{notes}</Text>
-          </View>
+          </>
         ) : null}
 
         {/* Accept */}
