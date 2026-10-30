@@ -214,6 +214,8 @@ interface QuoteLine {
   customImageUploadedAt?: string | null;
   customImageCaption?: string | null;
   activeImageSource?: ImageSource;
+  // Hvorfor posten ingen tegning har fra kundens materiale (selve tegningerne bor i quote_line_tegninger)
+  tegningNote?: string | null;
   // Levende beskrivelse
   livingDescription?: string | null;
   livingDescriptionGeneratedAt?: string | null;
@@ -224,6 +226,16 @@ interface QuoteLine {
   includeInAppendix?: boolean;
   // Option/tilvalg — tæller ikke med i tilbuddets hovedsum, opgøres særskilt
   isOption?: boolean;
+}
+
+// Kundens tegning bag en post (fanen Tegninger). Billedet ligger i den private bucket tilbud-tegninger.
+interface LineTegning {
+  id: string;
+  kildeFil: string;
+  side: number | null;
+  ark: string | null;
+  caption: string | null;
+  url: string | null; // signeret URL, gyldig 1 time
 }
 
 interface QuoteLineItem {
@@ -410,6 +422,9 @@ const ProjectQuoteDetail = () => {
   const [expandedItemIds, setExpandedItemIds] = useState<Set<string>>(new Set());
   // Hvilke linjer har billede- og levende-beskrivelse-sektioner foldet ud (default collapsed)
   const [expandedImageLines, setExpandedImageLines] = useState<Set<string>>(new Set());
+  // Kundens tegninger pr. linje (fanen Tegninger) og hvilken af dem der vises stort
+  const [lineTegninger, setLineTegninger] = useState<Record<string, LineTegning[]>>({});
+  const [valgtTegning, setValgtTegning] = useState<Record<string, number>>({});
   const [expandedDescLines, setExpandedDescLines] = useState<Set<string>>(new Set());
   const toggleSetItem = (s: Set<string>, id: string): Set<string> => {
     const next = new Set(s);
@@ -834,6 +849,7 @@ const ProjectQuoteDetail = () => {
           customImageUploadedAt: line.custom_image_uploaded_at ?? null,
           customImageCaption: line.custom_image_caption ?? null,
           activeImageSource: (line.active_image_source ?? 'render') as ImageSource,
+          tegningNote: line.tegning_note ?? null,
           // Levende beskrivelse
           livingDescription: line.living_description ?? null,
           livingDescriptionGeneratedAt: line.living_description_generated_at ?? null,
@@ -846,8 +862,9 @@ const ProjectQuoteDetail = () => {
           };
         });
         setLines(formattedLines);
+        loadLineTegninger(formattedLines.map(l => l.id));
       }
-      
+
       // Load related budgets
       await loadRelatedBudgets(id);
     } catch (error) {
@@ -876,6 +893,48 @@ const ProjectQuoteDetail = () => {
     } catch (error) {
       console.error('Error loading related budgets:', error);
       setRelatedBudgets([]);
+    }
+  };
+
+  // Kundens tegninger bag hver post. Bucket'en er privat, så billederne vises via signerede URL'er.
+  const loadLineTegninger = async (lineIds: string[]) => {
+    if (lineIds.length === 0) {
+      setLineTegninger({});
+      return;
+    }
+    try {
+      const { data, error } = await supabase
+        .from('quote_line_tegninger')
+        .select('id, quote_line_id, kilde_fil, side, ark, caption, storage_path, sort_order')
+        .in('quote_line_id', lineIds)
+        .order('sort_order');
+      if (error) throw error;
+      const rows = data ?? [];
+      const paths = [...new Set(rows.map((r: any) => r.storage_path as string))];
+      const urlByPath: Record<string, string> = {};
+      if (paths.length > 0) {
+        const { data: signed, error: signErr } = await supabase.storage.from('tilbud-tegninger').createSignedUrls(paths, 3600);
+        if (signErr) throw signErr;
+        (signed ?? []).forEach((s: any) => {
+          if (s.path && s.signedUrl) urlByPath[s.path] = s.signedUrl;
+        });
+      }
+      const byLine: Record<string, LineTegning[]> = {};
+      rows.forEach((r: any) => {
+        if (!byLine[r.quote_line_id]) byLine[r.quote_line_id] = [];
+        byLine[r.quote_line_id].push({
+          id: r.id,
+          kildeFil: r.kilde_fil,
+          side: r.side,
+          ark: r.ark,
+          caption: r.caption,
+          url: urlByPath[r.storage_path] ?? null,
+        });
+      });
+      setLineTegninger(byLine);
+    } catch (error) {
+      console.error('Error loading line drawings:', error);
+      setLineTegninger({});
     }
   };
 
@@ -4834,7 +4893,7 @@ const ProjectQuoteDetail = () => {
               { key: 'pricing' as const, label: 'Prisfastsættelse' },
               { key: 'lineItems' as const, label: 'Line Items' },
               { key: 'kalkulation' as const, label: 'Kalkulation' },
-              { key: 'image' as const, label: 'Billede' },
+              { key: 'image' as const, label: 'Tegninger og billede' },
               { key: 'living' as const, label: 'Levende beskrivelse' },
             ]).map(s => (
               <Badge
@@ -5470,6 +5529,11 @@ const ProjectQuoteDetail = () => {
                         const captionValue = captionLocal !== undefined ? captionLocal : (line.customImageCaption ?? '');
                         const isUploading = uploadingImageLineId === line.id;
                         const imageOpen = expandedImageLines.has(line.id);
+                        const tegninger = lineTegninger[line.id] ?? [];
+                        const valgt = Math.min(valgtTegning[line.id] ?? 0, Math.max(tegninger.length - 1, 0));
+                        const tegningSummary = tegninger.length > 0
+                          ? `${tegninger.length} ${tegninger.length === 1 ? 'tegning' : 'tegninger'}`
+                          : (line.tegningNote ? 'Ingen tegning (begrundet)' : 'Ingen tegning');
                         const imageSummary = (() => {
                           const parts = [];
                           if (line.activeImageSource === 'custom' && hasCustom) parts.push('Eget billede');
@@ -5489,15 +5553,69 @@ const ProjectQuoteDetail = () => {
                               <div className="mt-6 rounded-lg border bg-muted/20 px-4 py-3 cursor-pointer hover:bg-muted/30 flex items-center justify-between gap-3">
                                 <div className="flex items-center gap-2 min-w-0 flex-1">
                                   {imageOpen ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
-                                  <h4 className="font-semibold shrink-0">Billede</h4>
+                                  <h4 className="font-semibold shrink-0">Tegninger og billede</h4>
                                   {!imageOpen && (
-                                    <span className="text-sm text-muted-foreground truncate">▸ {imageSummary}</span>
+                                    <span className="text-sm text-muted-foreground truncate">▸ {tegningSummary} · Claude: {imageSummary}</span>
                                   )}
                                 </div>
                               </div>
                             </CollapsibleTrigger>
                             <CollapsibleContent>
-                          <div className="mt-2 rounded-lg border bg-muted/20 p-4 space-y-4">
+                          {/* To faner (Joachim 30-10-2026): kundens tegninger bag posten og Claudes eget billede — begge skal være der */}
+                          <Tabs defaultValue="tegninger" className="mt-2">
+                            <TabsList>
+                              <TabsTrigger value="tegninger">Tegninger{tegninger.length > 0 ? ` (${tegninger.length})` : ''}</TabsTrigger>
+                              <TabsTrigger value="claude">Claudes billede</TabsTrigger>
+                            </TabsList>
+                            <TabsContent value="tegninger" className="mt-2">
+                              <div className="rounded-lg border bg-muted/20 p-4 space-y-3">
+                                {tegninger.length === 0 ? (
+                                  <div className="text-sm text-muted-foreground">
+                                    {line.tegningNote
+                                      ? `Ingen tegning fra kundens materiale: ${line.tegningNote}`
+                                      : 'Ingen tegninger koblet til posten endnu. Dirigentens billeder-trin kræver kundens tegning eller en note om, hvorfor der ingen er.'}
+                                  </div>
+                                ) : (
+                                  <>
+                                    {tegninger.length > 1 && (
+                                      <div className="flex flex-wrap gap-1">
+                                        {tegninger.map((t, i) => (
+                                          <button
+                                            key={t.id}
+                                            type="button"
+                                            onClick={() => setValgtTegning(prev => ({ ...prev, [line.id]: i }))}
+                                            className={`px-2 py-1 rounded border text-xs ${i === valgt ? 'bg-primary text-primary-foreground' : 'bg-white hover:bg-gray-50'}`}
+                                          >
+                                            {t.caption || t.ark || `Side ${t.side ?? '?'}`}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    )}
+                                    {(() => {
+                                      const t = tegninger[valgt];
+                                      return (
+                                        <figure className="space-y-1">
+                                          <a href={t.url ?? undefined} target="_blank" rel="noopener noreferrer" title="Åbn i fuld størrelse">
+                                            <div className="rounded-md border bg-white overflow-hidden flex items-center justify-center">
+                                              {t.url ? (
+                                                <img src={t.url} alt={t.caption ?? t.kildeFil} className="w-full max-h-[70vh] object-contain" />
+                                              ) : (
+                                                <div className="p-8 text-sm text-muted-foreground">Tegningen kunne ikke hentes</div>
+                                              )}
+                                            </div>
+                                          </a>
+                                          <figcaption className="text-xs text-muted-foreground">
+                                            {t.caption ? `${t.caption} · ` : ''}{t.kildeFil}{t.side ? `, side ${t.side}` : ''} — klik for fuld størrelse
+                                          </figcaption>
+                                        </figure>
+                                      );
+                                    })()}
+                                  </>
+                                )}
+                              </div>
+                            </TabsContent>
+                            <TabsContent value="claude" className="mt-2">
+                          <div className="rounded-lg border bg-muted/20 p-4 space-y-4">
                             <div className="flex items-center justify-between flex-wrap gap-2">
                               <span className="text-xs uppercase tracking-wide text-muted-foreground">Vælg kilde</span>
                               <div className="flex rounded-md border overflow-hidden text-xs">
@@ -5645,6 +5763,8 @@ const ProjectQuoteDetail = () => {
                               </Collapsible>
                             </div>
                           </div>
+                            </TabsContent>
+                          </Tabs>
                             </CollapsibleContent>
                           </Collapsible>
                         );
