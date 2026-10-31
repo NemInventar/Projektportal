@@ -6,6 +6,7 @@ import { HashRouter, Routes, Route, Navigate, useParams } from "react-router-dom
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import Login from "./pages/Login";
+import VaelgAdgangskode from "./pages/VaelgAdgangskode";
 import FeedbackWidget from "@/components/FeedbackWidget";
 import { ProjectProvider } from "@/contexts/ProjectContext";
 import { StandardSuppliersProvider } from "@/contexts/StandardSuppliersContext";
@@ -115,6 +116,7 @@ const App = () => (
       <HashRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/vaelg-adgangskode" element={<VaelgAdgangskode />} />
           <Route
             path="/"
             element={

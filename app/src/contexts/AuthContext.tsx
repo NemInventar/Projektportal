@@ -5,6 +5,8 @@ import { supabase } from "@/integrations/supabase/client";
 interface AuthContextType {
   user: User | null;
   loading: boolean;
+  // Sat af en administrator sammen med en midlertidig adgangskode — brugeren skal vælge sin egen ved første login.
+  skalSkifteAdgangskode: boolean;
   signOut: () => Promise<void>;
 }
 
@@ -31,8 +33,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await supabase.auth.signOut();
   };
 
+  const skalSkifteAdgangskode = user?.user_metadata?.skal_skifte_adgangskode === true;
+
   return (
-    <AuthContext.Provider value={{ user, loading, signOut }}>
+    <AuthContext.Provider value={{ user, loading, skalSkifteAdgangskode, signOut }}>
       {children}
     </AuthContext.Provider>
   );
