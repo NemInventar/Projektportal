@@ -36,6 +36,7 @@ import {
   FileText,
   Calendar,
   Eye,
+  EyeOff,
   Edit,
   Trash2,
   Archive,
@@ -55,6 +56,7 @@ interface ProjectQuote {
   validUntil?: Date;
   customerRemarks?: string;
   includeInProjectTotal: boolean;
+  afklaringSpores: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -89,6 +91,9 @@ const ProjectQuotes = () => {
             <TableHead>Oprettet</TableHead>
             <TableHead className="w-10 text-center" title="Tæl med i projektsum">
               <BarChart2 className="h-4 w-4 mx-auto text-muted-foreground" />
+            </TableHead>
+            <TableHead className="w-10 text-center" title="Følges på /afklaringer (fanen Tilbud) — slå fra for varianter, ingen skal følge op på">
+              <Eye className="h-4 w-4 mx-auto text-muted-foreground" />
             </TableHead>
             <TableHead className="w-32">Handlinger</TableHead>
           </TableRow>
@@ -148,6 +153,17 @@ const ProjectQuotes = () => {
                         : 'border-gray-300 bg-white hover:border-green-400'}`}
                   >
                     {quote.includeInProjectTotal && <span className="text-xs leading-none">✓</span>}
+                  </button>
+                </TableCell>
+                <TableCell className="text-center">
+                  <button
+                    onClick={e => { e.stopPropagation(); handleToggleSpores(quote.id, quote.afklaringSpores); }}
+                    title={quote.afklaringSpores ? 'Følges på /afklaringer — klik for at skjule varianten' : 'Følges ikke på /afklaringer — klik for at følge'}
+                    className="mx-auto flex items-center justify-center"
+                  >
+                    {quote.afklaringSpores
+                      ? <Eye className="h-4 w-4 text-blue-600" />
+                      : <EyeOff className="h-4 w-4 text-gray-300 hover:text-gray-500" />}
                   </button>
                 </TableCell>
                 <TableCell>
@@ -389,6 +405,7 @@ const ProjectQuotes = () => {
           validUntil: q.valid_until ? new Date(q.valid_until) : undefined,
           customerRemarks: q.customer_remarks,
           includeInProjectTotal: q.include_in_project_total ?? true,
+          afklaringSpores: q.afklaring_spores ?? true,
           createdAt: new Date(q.created_at),
           updatedAt: new Date(q.updated_at)
         }));
@@ -670,6 +687,21 @@ const ProjectQuotes = () => {
       .from('project_quotes_2026_01_16_23_00')
       .update({ include_in_project_total: next })
       .eq('id', quoteId);
+  };
+
+  // Følges tilbuddet på /afklaringer (fanen Tilbud)? Samme kolonne som "følg ikke" dér:
+  // project_quotes.afklaring_spores (ni-apps sql/afklaringer-v3e.sql). Varianter slås fra.
+  const handleToggleSpores = async (quoteId: string, current: boolean) => {
+    const next = !current;
+    setQuotes(prev => prev.map(q => q.id === quoteId ? { ...q, afklaringSpores: next } : q));
+    const { error } = await supabase
+      .from('project_quotes_2026_01_16_23_00')
+      .update({ afklaring_spores: next })
+      .eq('id', quoteId);
+    if (error) {
+      setQuotes(prev => prev.map(q => q.id === quoteId ? { ...q, afklaringSpores: current } : q));
+      toast({ title: "Fejl", description: "Kunne ikke gemme om tilbuddet følges", variant: "destructive" });
+    }
   };
 
   const confirmArchiveInstead = async () => {
