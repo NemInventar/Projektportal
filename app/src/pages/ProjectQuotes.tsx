@@ -64,7 +64,36 @@ interface ProjectQuote {
 const ProjectQuotes = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { activeProject } = useProject();
+  const { activeProject, setActiveProject, setProjects } = useProject();
+
+  // Luk en sag vi ikke fik — i ét skridt i stedet for fase + hver kladde for sig (Joachim 01-11-2026).
+  // fn_afklaring_tabt (ni-apps sql/afklaringer-v3g.sql): alle åbne tilbud afvises, fasen sættes,
+  // CRM-dealen sættes til tabt, og årsagen skrives i sagens historik (context_log).
+  const [showTabt, setShowTabt] = useState(false);
+  const [tabtFase, setTabtFase] = useState<'Tabt' | 'Fravalgt'>('Tabt');
+  const [tabtAarsag, setTabtAarsag] = useState('');
+  const [tabtGemmer, setTabtGemmer] = useState(false);
+  const iTilbud = ['Ny - ikke regnet', 'Tilbud', 'Sendt'].includes(activeProject?.phase ?? '');
+
+  const handleTabt = async () => {
+    if (!activeProject || !tabtAarsag.trim()) return;
+    setTabtGemmer(true);
+    const { data, error } = await supabase.rpc('fn_afklaring_tabt', {
+      p_project_id: activeProject.id, p_aarsag: tabtAarsag.trim(), p_fase: tabtFase,
+    });
+    setTabtGemmer(false);
+    if (error) {
+      toast({ title: 'Fejl', description: `Sagen blev ikke lukket: ${error.message}`, variant: 'destructive' });
+      return;
+    }
+    const opdateret = { ...activeProject, phase: tabtFase };
+    setActiveProject(opdateret);
+    setProjects(prev => prev.map(p => (p.id === activeProject.id ? opdateret : p)));
+    setShowTabt(false);
+    setTabtAarsag('');
+    toast({ title: `Sagen er ${tabtFase.toLowerCase()}`, description: `${data?.tilbud_afvist ?? 0} åbne tilbud afvist, årsagen er skrevet i sagens historik.` });
+    loadQuotes();
+  };
   const { settings: companySettings } = useCompanySettings();
   
   // Render table for a specific status
@@ -758,11 +787,52 @@ const ProjectQuotes = () => {
             <h1 className="text-3xl font-bold">Tilbud</h1>
             <p className="text-muted-foreground">Projekt: {activeProject.name}</p>
           </div>
-          <Button onClick={handleCreate} className="gap-2">
-            <Plus className="h-4 w-4" />
-            Opret tilbud
-          </Button>
+          <div className="flex gap-2">
+            {iTilbud && (
+              <Button variant="outline" onClick={() => setShowTabt(true)} title="Luk sagen: alle åbne tilbud afvises, fasen sættes og årsagen gemmes">
+                Sagen er tabt …
+              </Button>
+            )}
+            <Button onClick={handleCreate} className="gap-2">
+              <Plus className="h-4 w-4" />
+              Opret tilbud
+            </Button>
+          </div>
         </div>
+
+        <Dialog open={showTabt} onOpenChange={setShowTabt}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Luk {activeProject.name}</DialogTitle>
+              <DialogDescription>
+                {quotes.filter(q => q.status === 'draft' || q.status === 'sent').length} åbne tilbud bliver afvist, sagen får fasen
+                {' '}{tabtFase}, CRM-dealen sættes til tabt, og årsagen skrives i sagens historik.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div>
+                <Label>Hvad skete der?</Label>
+                <Select value={tabtFase} onValueChange={v => setTabtFase(v as 'Tabt' | 'Fravalgt')}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Tabt">Tabt — vi fik den ikke</SelectItem>
+                    <SelectItem value="Fravalgt">Fravalgt — vi byder ikke</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Årsag (påkrævet)</Label>
+                <Textarea value={tabtAarsag} onChange={e => setTabtAarsag(e.target.value)} placeholder="Fx pris, tid, kunden valgte en anden" rows={3} />
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setShowTabt(false)}>Fortryd</Button>
+                <Button onClick={handleTabt} disabled={!tabtAarsag.trim() || tabtGemmer}>
+                  {tabtGemmer ? 'Lukker …' : 'Luk sagen'}
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         {/* Quotes List */}
         <Card>
