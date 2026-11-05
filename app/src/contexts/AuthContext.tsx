@@ -20,6 +20,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     supabase.auth.getSession().then(({ data: { session } }: { data: { session: Session | null } }) => {
       setUser(session?.user ?? null);
       setLoading(false);
+      // Efter Microsoft-login står ?code=… (eller ?error=…) i adressen. Supabase har brugt den nu.
+      if (window.location.search) {
+        window.history.replaceState(null, "", window.location.pathname + window.location.hash);
+      }
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event: string, session: Session | null) => {
@@ -33,7 +37,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await supabase.auth.signOut();
   };
 
-  const skalSkifteAdgangskode = user?.user_metadata?.skal_skifte_adgangskode === true;
+  // Logger man ind med Microsoft, er der ingen ERP-kode at skifte.
+  const harMicrosoft = user?.identities?.some((i) => i.provider === "azure") ?? false;
+  const skalSkifteAdgangskode = user?.user_metadata?.skal_skifte_adgangskode === true && !harMicrosoft;
 
   return (
     <AuthContext.Provider value={{ user, loading, skalSkifteAdgangskode, signOut }}>
