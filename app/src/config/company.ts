@@ -5,7 +5,7 @@ export const COMPANY_INFO = {
   name: 'Nem Inventar ApS',
   cvr: '45085473',
   address: {
-    line1: 'Mågevej 73, st. tv.',
+    line1: 'Mågevej 73, st.',
     line2: '',
     zip: '2400',
     city: 'København NV',
