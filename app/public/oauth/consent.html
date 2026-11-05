@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="da">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Giv Claude adgang — Nem Inventar</title>
+<link rel="icon" href="../favicon.ico">
+<!--
+  Godkendelsessiden for Supabase Auth's OAuth-server (05-11-2026).
+  Når Claude (Claude Code, claude.ai, telefon-appen) vil bruge ni-db, sender Supabase brugeren hertil med
+  ?authorization_id=…  Siden: 1) logger ind (Microsoft eller adgangskode, samme session som ERP'et),
+  2) viser hvem der beder om adgang og med hvilken rolle, 3) godkender eller afviser.
+  Indstillingen bag: Supabase Auth → OAuth Server → Authorization Path = /oauth/consent.html
+  (lægges oven i Site URL https://neminventar.github.io/Projektportal).
+  Rollerne bor i bruger_roller; ni-db (edge function mcp-db) læser dem igen ved hvert kald.
+-->
+<style>
+  :root { --bg:#f6f6f4; --kort:#fff; --tekst:#1d1d1b; --svag:#6b6b66; --kant:#e2e2dc; --groen:#2f6b3a; --groen-h:#265a30; --roed:#a3302a; --gul:#fff6dc; --gul-kant:#e8d48a; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--tekst); }
+  main { max-width:440px; margin:8vh auto; padding:0 16px; }
+  .kort { background:var(--kort); border:1px solid var(--kant); border-radius:10px; padding:28px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .firma { color:var(--svag); font-size:14px; margin:0 0 20px; }
+  p { margin:0 0 14px; }
+  .svag { color:var(--svag); font-size:14px; }
+  button, .knap { display:block; width:100%; padding:12px 14px; border-radius:8px; border:1px solid var(--kant); background:#fff; font:inherit; cursor:pointer; text-align:center; }
+  button.primaer { background:var(--groen); border-color:var(--groen); color:#fff; font-weight:600; }
+  button.primaer:hover { background:var(--groen-h); }
+  button:disabled { opacity:.5; cursor:default; }
+  .knapper { display:grid; gap:10px; margin-top:20px; }
+  .ms { display:flex; align-items:center; justify-content:center; gap:10px; font-weight:600; }
+  .ms svg { width:18px; height:18px; }
+  dl { margin:16px 0 0; display:grid; grid-template-columns:auto 1fr; gap:6px 14px; font-size:14px; }
+  dt { color:var(--svag); }
+  dd { margin:0; word-break:break-word; }
+  .advarsel { background:var(--gul); border:1px solid var(--gul-kant); border-radius:8px; padding:10px 12px; font-size:14px; margin-top:14px; }
+  .fejl { color:var(--roed); }
+  details { margin-top:16px; font-size:14px; }
+  summary { cursor:pointer; color:var(--svag); }
+  label { display:block; font-size:14px; margin:10px 0 4px; }
+  input { width:100%; padding:10px; border:1px solid var(--kant); border-radius:8px; font:inherit; }
+  .lille { font-size:13px; margin-top:18px; color:var(--svag); }
+  .lille a { color:var(--svag); }
+</style>
+</head>
+<body>
+<main>
+  <div class="kort" id="kort">
+    <h1>Giv Claude adgang</h1>
+    <p class="firma">Nem Inventar · databasen</p>
+    <p class="svag" id="status">Henter …</p>
+  </div>
+</main>
+<script type="module">
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/+esm";
+
+const SUPABASE_URL = "https://guhbrpektblabndqttgp.supabase.co";
+// Offentlig nøgle (samme som ERP'et bruger i src/integrations/supabase/client.ts). Ingen hemmelighed.
+const ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd1aGJycGVrdGJsYWJuZHF0dGdwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0MzgyOTEsImV4cCI6MjA4NDAxNDI5MX0.k2VbP5r3vCCJOsgefavapMFchC1fBerqoUKGDpe0E-M";
+
+// Roller med eget databaselogin i ni-db (mcp_<rolle>). Øvrige roller kan logge ind, men ni-db har intet til dem endnu.
+const ROLLER = {
+  tekst: "Tekst og hjemmeside: kataloget, landingssider, SEO og din egen huskeliste. Ingen tilbud, CRM, økonomi eller løn.",
+  saelger: "Sælger: projekter, tilbud (også kost og DB), CRM, leads og opkald. Ingen bank, bogføring, cashflow eller løn.",
+};
+const ROLLENAVN = { ejer: "ejer", oekonomi: "økonomi", disk: "disken", teknik: "teknik", korpus_leder: "Korpus-leder", tekst: "tekst", saelger: "sælger" };
+
+const sb = createClient(SUPABASE_URL, ANON, {
+  auth: { flowType: "pkce", detectSessionInUrl: true, persistSession: true, autoRefreshToken: true },
+});
+
+const kort = document.getElementById("kort");
+const params = new URLSearchParams(location.search);
+const aid = params.get("authorization_id");
+const herUrl = location.origin + location.pathname + (aid ? "?authorization_id=" + encodeURIComponent(aid) : "");
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function vis(html) {
+  kort.innerHTML = `<h1>Giv Claude adgang</h1><p class="firma">Nem Inventar · databasen</p>${html}`;
+}
+
+function modtager(uri) {
+  try {
+    const u = new URL(uri);
+    const h = u.hostname;
+    if (h === "localhost" || h === "127.0.0.1" || h === "[::1]") return { tekst: "Claude Code på din egen computer", kendt: true };
+    if (h === "claude.ai" || h.endsWith(".claude.ai") || h === "claude.com" || h.endsWith(".claude.com")) return { tekst: "Claude (claude.ai, Desktop og telefon-appen)", kendt: true };
+    return { tekst: u.host, kendt: false };
+  } catch { return { tekst: String(uri), kendt: false }; }
+}
+
+const MS_IKON = '<svg viewBox="0 0 21 21" aria-hidden="true"><rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/><rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/></svg>';
+
+function visLogin(fejl) {
+  vis(`
+    <p>Claude beder om adgang til Nem Inventars database. Log ind med din Microsoft-konto (din @neminventar.dk-mail).</p>
+    ${fejl ? `<p class="fejl">${esc(fejl)}</p>` : ""}
+    <div class="knapper"><button class="ms" id="ms">${MS_IKON}<span>Log ind med Microsoft</span></button></div>
+    <details><summary>Log ind med adgangskode i stedet</summary>
+      <form id="pw">
+        <label for="email">E-mail</label><input id="email" type="email" autocomplete="username" required>
+        <label for="kode">Adgangskode</label><input id="kode" type="password" autocomplete="current-password" required>
+        <div class="knapper"><button type="submit">Log ind</button></div>
+      </form>
+    </details>`);
+  document.getElementById("ms").onclick = async () => {
+    const { error } = await sb.auth.signInWithOAuth({ provider: "azure", options: { scopes: "email", redirectTo: herUrl } });
+    if (error) visLogin(oversaet(error.message));
+  };
+  document.getElementById("pw").onsubmit = async (e) => {
+    e.preventDefault();
+    const { error } = await sb.auth.signInWithPassword({
+      email: document.getElementById("email").value.trim(), password: document.getElementById("kode").value });
+    if (error) return visLogin(oversaet(error.message));
+    start();
+  };
+}
+
+function oversaet(m) {
+  const s = String(m || "");
+  if (/invalid login credentials/i.test(s)) return "Forkert e-mail eller adgangskode.";
+  if (/provider is not enabled/i.test(s)) return "Microsoft-login er ikke slået til endnu. Brug adgangskode, eller spørg Joachim.";
+  if (/expired|not found|invalid authorization/i.test(s)) return "Anmodningen er udløbet. Gå tilbage til Claude og start login'et igen.";
+  return s;
+}
+
+async function start() {
+  // Fejl sendt tilbage fra Microsoft eller fra vores egen vagt (hook_foer_ny_bruger).
+  const fejlTekst = params.get("error_description") || new URLSearchParams(location.hash.slice(1)).get("error_description");
+  if (!aid) {
+    vis(`<p>Denne side bruges, når Claude beder om adgang til databasen. Start fra Claude (fx <code>/mcp</code> i Claude Code eller Connect i claude.ai).</p>`);
+    return;
+  }
+  const { data: { session } } = await sb.auth.getSession();
+  // Fjern ?code=… fra adresselinjen efter Microsoft-login, så et genindlæs ikke prøver koden igen.
+  if (params.has("code") || params.has("error")) history.replaceState(null, "", herUrl);
+  if (!session) return visLogin(fejlTekst ? oversaet(fejlTekst) : "");
+
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user) return visLogin("");
+
+  const [{ data: rolle }, detaljer] = await Promise.all([sb.rpc("fn_rolle"), sb.auth.oauth.getAuthorizationDetails(aid)]);
+  if (detaljer.error) {
+    vis(`<p class="fejl">${esc(oversaet(detaljer.error.message))}</p><p class="lille">Logget ind som ${esc(user.email)} · <a href="#" id="ud">Log ud</a></p>`);
+    document.getElementById("ud").onclick = logUd;
+    return;
+  }
+  const d = detaljer.data;
+  if (!("authorization_id" in d)) { location.href = d.redirect_url; return; } // allerede godkendt tidligere
+
+  const m = modtager(d.redirect_uri);
+  const harNiDb = !!ROLLER[rolle];
+  const rolleLinje = rolle
+    ? (harNiDb ? `<strong>${esc(ROLLENAVN[rolle] || rolle)}</strong> — ${esc(ROLLER[rolle])}`
+               : `<strong>${esc(ROLLENAVN[rolle] || rolle)}</strong> — ni-db har ikke et login til denne rolle endnu. Du kan godkende, men databasen svarer ikke, før Joachim har sat rollen op.`)
+    : "";
+  if (!rolle) {
+    vis(`<p class="fejl">${esc(user.email)} har ingen rolle i databasen.</p><p>Bed Joachim om at give dig en rolle, og prøv så igen fra Claude.</p>
+      <div class="knapper"><button id="afvis">Luk og afvis</button></div>
+      <p class="lille">Ikke dig? <a href="#" id="ud">Log ud</a></p>`);
+    document.getElementById("afvis").onclick = () => beslut(false);
+    document.getElementById("ud").onclick = logUd;
+    return;
+  }
+  vis(`
+    <p><strong>${esc(d.client?.name || "Claude")}</strong> beder om adgang til databasen som <strong>${esc(user.email)}</strong>.</p>
+    <dl>
+      <dt>Din rolle</dt><dd>${rolleLinje}</dd>
+      <dt>Svaret går til</dt><dd>${esc(m.tekst)}</dd>
+    </dl>
+    ${m.kendt ? "" : `<div class="advarsel">Modtageren er ikke Claude. Godkend kun, hvis du selv lige har startet login'et.</div>`}
+    <p class="svag" style="margin-top:14px">Claude ser kun det, din rolle må se. Du kan altid trække adgangen tilbage ved at bede Joachim spærre den.</p>
+    <div class="knapper">
+      <button class="primaer" id="godkend">Godkend</button>
+      <button id="afvis">Afvis</button>
+    </div>
+    <p class="lille">Logget ind som ${esc(user.email)} · <a href="#" id="ud">Ikke dig? Log ud</a></p>`);
+  document.getElementById("godkend").onclick = () => beslut(true);
+  document.getElementById("afvis").onclick = () => beslut(false);
+  document.getElementById("ud").onclick = logUd;
+}
+
+async function beslut(ja) {
+  for (const b of kort.querySelectorAll("button")) b.disabled = true;
+  const { data, error } = ja ? await sb.auth.oauth.approveAuthorization(aid) : await sb.auth.oauth.denyAuthorization(aid);
+  if (error) {
+    vis(`<p class="fejl">${esc(oversaet(error.message))}</p>`);
+    return;
+  }
+  vis(`<p>${ja ? "Godkendt. Du sendes tilbage til Claude …" : "Afvist. Du sendes tilbage til Claude …"}</p>`);
+  location.href = data.redirect_url;
+}
+
+async function logUd(e) {
+  e?.preventDefault();
+  await sb.auth.signOut({ scope: "local" });
+  visLogin("");
+}
+
+start().catch((e) => vis(`<p class="fejl">Noget gik galt: ${esc(e?.message || e)}</p>`));
+</script>
+</body>
+</html>
