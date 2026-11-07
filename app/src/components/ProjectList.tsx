@@ -40,6 +40,7 @@ const ProjectForm: React.FC<{
     customer: project?.customer || '',
     projectNumber: project?.projectNumber || '',
     phase: project?.phase || 'Tilbud' as const,
+    kundetype: project?.kundetype || 'erhverv' as const,
   });
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -102,6 +103,22 @@ const ProjectForm: React.FC<{
             <SelectItem value="Tabt">Tabt</SelectItem>
             <SelectItem value="Fravalgt">Fravalgt</SelectItem>
             <SelectItem value="Arkiv">Arkiv</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div>
+        <Label htmlFor="kundetype">Kundetype</Label>
+        <Select
+          value={formData.kundetype}
+          onValueChange={(value: 'erhverv' | 'privat') => setFormData(prev => ({ ...prev, kundetype: value }))}
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="erhverv">Erhverv</SelectItem>
+            <SelectItem value="privat">Privat</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -179,13 +196,21 @@ const ProjectList = () => {
     return matchesSearch && matchesPhase;
   });
   
+  // Private kunder samles øverst — undtagen sager i afsluttede faser, de bliver i deres fase
+  const closedPhases = ['Arkiv', 'Tabt', 'Fravalgt', 'Afsluttet'];
+  const privateProjects = filteredProjects.filter(
+    project => project.kundetype === 'privat' && !closedPhases.includes(project.phase)
+  );
+
   // Group projects by phase in specific order
   const phaseOrder = ['Tilbud', 'Produktion', 'Garanti', 'Tabt', 'Arkiv'];
   const groupedProjects = phaseOrder.reduce((acc, phase) => {
-    acc[phase] = filteredProjects.filter(project => project.phase === phase);
+    acc[phase] = filteredProjects.filter(
+      project => project.phase === phase && !privateProjects.includes(project)
+    );
     return acc;
   }, {} as Record<string, Project[]>);
-  
+
   const phaseLabels = {
     'Tilbud': 'Tilbud',
     'Produktion': 'Produktion', 
@@ -504,6 +529,27 @@ const ProjectList = () => {
             </div>
           ) : filteredProjects.length > 0 ? (
             <div className="space-y-8 p-6">
+              {privateProjects.length > 0 && (
+                <div>
+                  <div
+                    className="flex justify-between items-center mb-4 cursor-pointer hover:bg-gray-50 p-2 rounded"
+                    onClick={() => toggleSection('Private kunder')}
+                  >
+                    <div className="flex items-center gap-2">
+                      <ChevronDown
+                        className={`h-4 w-4 transition-transform ${
+                          expandedSections['Private kunder'] !== false ? 'rotate-0' : '-rotate-90'
+                        }`}
+                      />
+                      <h3 className="text-lg font-semibold text-amber-700">Private kunder</h3>
+                    </div>
+                    <div className="text-base text-gray-600">
+                      <span>Antal: {privateProjects.length}</span>
+                    </div>
+                  </div>
+                  {expandedSections['Private kunder'] !== false && renderProjectTable(privateProjects, 'Private kunder')}
+                </div>
+              )}
               {phaseOrder.map((phase) => {
                 const phaseProjects = groupedProjects[phase];
                 if (phaseProjects.length === 0) return null;
