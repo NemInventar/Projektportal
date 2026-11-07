@@ -22,6 +22,8 @@ export interface Project {
     | 'Arkiv';
   isStarred?: boolean;
   sortOrder?: number;
+  // Privat kunde vises i sin egen sektion øverst i projektlisten
+  kundetype?: 'erhverv' | 'privat';
   // Projekt
   projectType?: string;
   contractType?: string;
@@ -194,6 +196,7 @@ export const ProjectProvider: React.FC<{ children: ReactNode }> = ({ children })
           phase: p.phase,
           isStarred: p.is_starred || false,
           sortOrder: p.sort_order ?? 0,
+          kundetype: p.kundetype === 'privat' ? 'privat' : 'erhverv',
           projectType: p.project_type,
           contractType: p.contract_type,
           description: p.description,
@@ -263,6 +266,7 @@ export const ProjectProvider: React.FC<{ children: ReactNode }> = ({ children })
           customer: projectData.customer,
           project_number: projectData.projectNumber,
           phase: projectData.phase,
+          kundetype: projectData.kundetype ?? 'erhverv',
           customer_company_id: projectData.customerCompanyId ?? null,
           customer_contact_id: projectData.customerContactId ?? null,
           customer_contact: projectData.customerContact,
@@ -299,6 +303,7 @@ export const ProjectProvider: React.FC<{ children: ReactNode }> = ({ children })
         customer: data.customer,
         projectNumber: data.project_number,
         phase: data.phase,
+        kundetype: data.kundetype === 'privat' ? 'privat' : 'erhverv',
         customerCompanyId: data.customer_company_id ?? null,
         customerContactId: data.customer_contact_id ?? null,
         createdAt: new Date(data.created_at),
@@ -322,6 +327,7 @@ export const ProjectProvider: React.FC<{ children: ReactNode }> = ({ children })
       if ('customer' in updates) patch.customer = updates.customer;
       if ('projectNumber' in updates) patch.project_number = updates.projectNumber;
       if ('phase' in updates) patch.phase = updates.phase;
+      if ('kundetype' in updates) patch.kundetype = updates.kundetype ?? 'erhverv';
       if ('projectType' in updates) patch.project_type = updates.projectType;
       if ('contractType' in updates) patch.contract_type = updates.contractType;
       if ('description' in updates) patch.description = updates.description;
