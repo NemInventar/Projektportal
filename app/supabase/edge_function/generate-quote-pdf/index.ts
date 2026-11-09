@@ -197,15 +197,46 @@ function formatDk(iso: string | null | undefined, language: 'da' | 'en' = 'da'):
 const pdfLanguageOf = (quote: QuoteRow): 'da' | 'en' => (quote.pdf_language === 'en' ? 'en' : 'da');
 
 // @react-pdf dekoder billeder i fuld opløsning — flere full-res renders (~2,3 MB/stk)
-// sprænger edge-funktionens compute (WORKER_RESOURCE_LIMIT). Nedskalér derfor Supabase-
-// storage-billeder via image-transform-endpointet før embed. Eksterne/allerede
-// transformerede URLs røres ikke.
+// sprænger edge-funktionens compute (WORKER_RESOURCE_LIMIT). Billederne hentes derfor som
+// 700 px-udgaver fra edge function miniature (ni-apps), der laver hver udgave ÉN gang og gemmer
+// den i bucket miniaturer — ALDRIG Supabase' render/image, der tæller i Pro-planens kvote på
+// 100 originaler pr. måned (Joachim 09-11-2026). Eksterne URLs (fx ni-apps /kunde/…) røres ikke.
+// MINIATURE_STI skal være den samme som STI_TILBUD i ni-apps supabase/functions/miniature/regler.js.
+const MINIATURE_STI = /^(quote-custom-images|quote-renders|quote-render-refs)\/[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*\.(jpe?g|png)$/;
 function toDownscaledUrl(url: string | null): string | null {
   if (!url) return null;
-  if (url.includes('/storage/v1/render/image/')) return url;
-  const transformed = url.replace('/storage/v1/object/public/', '/storage/v1/render/image/public/');
-  if (transformed === url) return url;
-  return `${transformed}${transformed.includes('?') ? '&' : '?'}width=700&quality=70`;
+  const m = url.match(/^(https:\/\/[^/]+)\/storage\/v1\/(?:object|render\/image)\/public\/([^?#]+)/);
+  if (!m) return url;
+  let sti: string;
+  try { sti = decodeURIComponent(m[2]); } catch { return url; }
+  if (!MINIATURE_STI.test(sti) || sti.includes('..')) return `${m[1]}/storage/v1/object/public/${m[2]}`;
+  return `${m[1]}/functions/v1/miniature?s=${encodeURIComponent(sti)}&w=700`;
+}
+
+// Gør miniaturerne klar, FØR @react-pdf henter dem: den henter alle billeder på én gang, og mange nye
+// miniaturer samtidig sprænger miniature-funktionens compute (546). Fire ad gangen og op til tre forsøg
+// pr. billede; @react-pdf får den gemte miniatures adresse. Lykkes det ikke, bruges originalen.
+async function klargoerBilleder(urls: (string | null)[]): Promise<Map<string, string>> {
+  const klar = new Map<string, string>();
+  const koe = [...new Set(urls.filter((u): u is string => !!u && u.includes('/functions/v1/miniature?')))];
+  const hent = async (u: string) => {
+    for (let forsoeg = 0; forsoeg < 3; forsoeg++) {
+      if (forsoeg) await new Promise((ok) => setTimeout(ok, 500 * forsoeg));
+      try {
+        const r = await fetch(u, { redirect: 'manual' });
+        const hvor = r.headers.get('location');
+        await r.body?.cancel();
+        if (r.status === 302 && hvor) { klar.set(u, hvor); return; }
+        if (r.status === 400 || r.status === 404) break; // afvist / originalen findes ikke: forsøg igen hjælper ikke
+        // 200 = lavet nu (næste kald giver 302) · 503/546 o.l. = forbigående, prøv igen
+      } catch { /* prøv igen */ }
+    }
+    const s = new URL(u).searchParams.get('s');
+    if (s) klar.set(u, `${new URL(u).origin}/storage/v1/object/public/${s.split('/').map(encodeURIComponent).join('/')}`);
+  };
+  let i = 0;
+  await Promise.all(Array.from({ length: 4 }, async () => { while (i < koe.length) await hent(koe[i++]); }));
+  return klar;
 }
 
 function lineEffectiveImageUrl(line: LineRow): string | null {
@@ -334,12 +365,14 @@ async function renderAppendixPdf(loaded: LoadedQuoteData): Promise<Uint8Array> {
       return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
     });
 
-  const appendixLines = sortedLines.map((line) => ({
+  const billeder = sortedLines.map(lineEffectiveImageUrl);
+  const klar = await klargoerBilleder(billeder);
+  const appendixLines = sortedLines.map((line, i) => ({
     title: line.title,
     description: line.description ?? null,
     livingDescription: line.living_description ?? null,
     technicalSpec: line.technical_spec ?? null,
-    imageUrl: lineEffectiveImageUrl(line),
+    imageUrl: billeder[i] ? klar.get(billeder[i]!) ?? billeder[i] : null,
     imageCaption:
       line.active_image_source === 'custom' ? line.custom_image_caption ?? null : null,
   }));
