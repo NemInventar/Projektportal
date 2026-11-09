@@ -23,10 +23,14 @@ export const CONTACT_TYPE = {
 
 export type ContactType = typeof CONTACT_TYPE[keyof typeof CONTACT_TYPE];
 
+// Samme værdier som CHECK-reglen crm_deals_2026_04_12_pipeline_stage_check (09-11-2026).
+// Har dealen et projekt, styrer projektets fase stadiet i v_pipeline.
 export const PIPELINE_STAGE = {
   LEAD:      'lead',
   QUALIFIED: 'qualified',
+  WON:       'won',
   CONVERTED: 'converted',
+  UDSKUDT:   'udskudt',
   LOST:      'lost',
   ARCHIVED:  'archived',
 } as const;
@@ -36,7 +40,9 @@ export type PipelineStage = typeof PIPELINE_STAGE[keyof typeof PIPELINE_STAGE];
 export const PIPELINE_STAGE_LABEL: Record<PipelineStage, string> = {
   lead:      'Åben',
   qualified: 'Kvalificeret',
+  won:       'Vundet',
   converted: 'Konverteret',
+  udskudt:   'Udskudt',
   lost:      'Tabt',
   archived:  'Arkiveret',
 };

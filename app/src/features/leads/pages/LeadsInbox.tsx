@@ -64,7 +64,9 @@ const stageColor = (stage: string | null | undefined) => {
   switch (stage) {
     case 'lead':      return 'bg-blue-100 text-blue-800 border-blue-200';
     case 'qualified': return 'bg-amber-100 text-amber-800 border-amber-200';
+    case 'won':       return 'bg-emerald-600 text-white border-emerald-700';
     case 'converted': return 'bg-green-100 text-green-800 border-green-200';
+    case 'udskudt':   return 'bg-violet-100 text-violet-800 border-violet-200';
     case 'lost':      return 'bg-gray-100 text-gray-700 border-gray-200';
     case 'archived':  return 'bg-gray-100 text-gray-700 border-gray-200';
     default:          return 'bg-gray-100 text-gray-800 border-gray-200';
